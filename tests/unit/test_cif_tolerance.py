@@ -102,6 +102,14 @@ O1 O 0.5 0.5 0.5 1.0
     ps = proj.params
     assert ps["mix:Al1:occ"].tie is not None
     assert ps["mix:O1:occ"].tie is None
+    # 座標(ここでは対称性で固定)と U_iso も先頭の種に揃う
+    assert ps["mix:Al1:x"].locked
+    assert ps["mix:Al1:uiso"].tie is not None
+    assert ps["mix:Al1:uiso"].tie.masters == ("mix:Fe1:uiso",)
+    ps["mix:Fe1:uiso"].value = 0.012
+    ps.evaluate_ties()
+    ps.apply_all()
+    assert proj.phases["mix"].structure.sites[1].u_iso == pytest.approx(0.012)
     ps["mix:Fe1:occ"].value = 0.75
     ps.evaluate_ties()
     ps.apply_all()

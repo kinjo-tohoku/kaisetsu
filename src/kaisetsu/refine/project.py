@@ -95,6 +95,22 @@ def _shared_position_groups(sites: Sequence[Any], tol: float = 1e-4) -> list[lis
     return groups
 
 
+def _mirror_parameter(ps: ParameterSet, master: str, dependent: str) -> None:
+    """dependent を master と常に同じ値に保つ。master が拘束・固定されていればそれを写す。"""
+    m = ps[master]
+    d = ps[dependent]
+    if m.locked:
+        d.locked = True
+        d.value = m.value
+        d.apply()
+        return
+    if m.tie is not None:
+        ps.tie(dependent, m.tie.masters, m.tie.coeffs, m.tie.offset)
+    else:
+        ps.tie(dependent, [master], [1.0], 0.0)
+    d.apply()
+
+
 def _item_setter(arr: Any, k: int) -> Callable[[float], None]:
     def _set(v: float) -> None:
         arr[k] = v
@@ -422,8 +438,18 @@ class Project:
                         rel.coeffs,
                         rel.offset,
                     )
-        # 混合サイト(同じ座標に複数の散乱種)は占有率の和を保つ: 最後の種を他に従属させる
+        # 混合サイト(同じ座標に複数の散乱種): 座標と変位パラメータは先頭の種と同じ値に保ち、
+        # 占有率は和を保つ(最後の種を他に従属させる)
         for group in _shared_position_groups(st.sites):
+            first = group[0]
+            for site in group[1:]:
+                mirrored: list[str] = [*_XYZ]
+                if first.u_aniso is None and site.u_aniso is None:
+                    mirrored.append("uiso")
+                elif first.u_aniso is not None and site.u_aniso is not None:
+                    mirrored.extend(_ADP_NAMES)
+                for nm in mirrored:
+                    _mirror_parameter(ps, f"{pre}:{first.label}:{nm}", f"{pre}:{site.label}:{nm}")
             total = sum(site.occupancy for site in group)
             ps.tie(
                 f"{pre}:{group[-1].label}:occ",
