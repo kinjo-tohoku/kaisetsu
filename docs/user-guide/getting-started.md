@@ -33,7 +33,7 @@ CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約が
 |---|---|---|---|
 | `fap/` | 蛍石燐灰石、実験室 Cu Kα(Bragg-Brentano) | 実験室 X 線 Cu Kα(モノクロメータ) | 最初に試す。Rwp 8〜9% |
 | `lab6/` | LaB6、Bruker D8 .raw、Cu Kα | 実験室 X 線 Cu Kα(Ni フィルタ)、半径 250 mm | 「表面粗さ」を付けると Rwp 4% |
-| `garnet/` | Y3(Fe,Al)5O12、D1A 中性子 1.909 Å | 中性子、波長 1.909、Debye-Scherrer | 混合サイトの占有率も動かす。Rwp 6〜7% |
+| `garnet/` | Y3(Fe,Al)5O12、D1A 中性子 1.909 Å | 中性子、波長 1.909、Debye-Scherrer | 混合サイトの占有率も動かす。Rwp 4%、約 2 分 |
 | `nac/` | NAC + CaF2、放射光 11-BM 0.4139 Å | その他、波長 0.413909、偏光 0.99、Debye-Scherrer | 2 相。点数が多いので時間がかかる |
 | `pbso4/` | PbSO4、Cu Kα と D1A 中性子 | 実験室 X 線 Cu Kα(モノクロメータ)/ 中性子 | GSAS-II との比較に使ったデータ |
 
