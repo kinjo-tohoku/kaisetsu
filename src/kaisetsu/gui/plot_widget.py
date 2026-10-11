@@ -123,3 +123,12 @@ class PatternPlot(QWidget):
         self._label.setText(text)
         rng = vb.viewRange()
         self._label.setPos(rng[0][0], rng[1][1])
+
+    def update_curves(self, x: np.ndarray, y_calc: np.ndarray, y_bkg: np.ndarray) -> None:
+        """精密化の途中経過: 計算・背景・差の曲線だけを差し替える(ティックはそのまま)。"""
+        self._ycalc = y_calc
+        self._calc.setData(x, y_calc)
+        self._bkg.setData(x, y_bkg)
+        if self._y.size == x.size:
+            ymax = float(np.nanmax(self._y)) if self._y.size else 1.0
+            self._diff.setData(x, self._y - y_calc - 0.12 * ymax)

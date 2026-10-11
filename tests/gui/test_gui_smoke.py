@@ -83,19 +83,28 @@ def test_main_window_loads_and_plots(qtbot, data_dir: Path, tmp_path: Path) -> N
     assert win.grab().save(str(out))
 
 
-def test_refine_worker_runs_in_thread(qtbot, data_dir: Path) -> None:
+def test_refine_worker_runs_in_thread(qtbot, data_dir: Path, tmp_path: Path) -> None:
     win = _window(qtbot, data_dir)
     win.project.vary("h0:bkg:*", "h0:PbSO4:scale")
     worker = RefineWorker(win.project, None, max_cycles=5)
     messages: list[str] = []
     worker.progress.connect(messages.append)
+    iters: list[int] = []
+    worker.iteration.connect(lambda i, _c, _curves: iters.append(i))
     with qtbot.waitSignal(worker.finished, timeout=120_000) as blocker:
         win._start_worker(worker)
+        assert win.progress_bar.isVisible() or not win.isVisible()
+        qtbot.wait(400)
+        shot = Path(os.environ.get("KAISETSU_SCREENSHOT_DIR", str(tmp_path))) / "refining.png"
+        win.grab().save(str(shot))
     ok, msg = blocker.args
     assert ok, msg
     assert "Rwp" in msg
     assert win.project.last_fit is not None
     qtbot.waitUntil(lambda: not win.act_stop.isEnabled(), timeout=5000)
+    assert win.progress_bar.isHidden()
+    assert iters, "反復ごとの進捗シグナルが届いていない"
+    assert "完了" in win.progress_label.text()
 
 
 def test_instrument_and_recipe_dialogs(qtbot) -> None:

@@ -50,6 +50,7 @@ class Recipe:
         *,
         reset: bool = True,
         progress: Callable[[Step, FitResult], None] | None = None,
+        iteration_progress: Callable[[int, float], None] | None = None,
     ) -> list[FitResult]:
         """レシピを順に実行する。reset=True なら最初に全パラメータを固定に戻す。"""
         if reset:
@@ -65,7 +66,7 @@ class Recipe:
                 project.vary(*available)
             if not project.params.free():
                 continue
-            res = project.refine(max_cycles=step.max_cycles)
+            res = project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
             project.log.append(
                 f"レシピ '{self.name}' 段階 '{step.name}': {project.rfactors()['total']}"
             )

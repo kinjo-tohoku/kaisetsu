@@ -19,6 +19,14 @@ from kaisetsu.refine.parameters import Parameter, ParameterSet
 
 COLUMNS = ("名前", "値", "精密化", "esd", "単位", "説明")
 COL_NAME, COL_VALUE, COL_VARY, COL_ESD, COL_UNIT, COL_DESC = range(6)
+COLUMN_TIPS = (
+    "パラメータの名前(相:サイト:量、h0:inst:量 など)",
+    "現在の値。ダブルクリックで書き換えられます(F5 で再計算)",
+    "チェックを付けた量を精密化(最小二乗で最適化)します",
+    "直近の精密化で求めた標準偏差(不確かさの目安)",
+    "単位",
+    "説明。拘束や対称性による固定もここに出ます",
+)
 
 _GROUP_LABELS = {
     "cell": "格子定数",
@@ -73,6 +81,8 @@ class ParameterModel(QAbstractTableModel):
     ) -> Any:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return COLUMNS[section]
+        if role == Qt.ItemDataRole.ToolTipRole and orientation == Qt.Orientation.Horizontal:
+            return COLUMN_TIPS[section]
         return None
 
     def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:

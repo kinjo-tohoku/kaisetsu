@@ -22,9 +22,12 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
+    QStyle,
     QTableView,
+    QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -135,10 +138,24 @@ class MainWindow(QMainWindow):
             COL_NAME, QHeaderView.ResizeMode.ResizeToContents
         )
         self.table.horizontalHeader().setSectionResizeMode(COL_DESC, QHeaderView.ResizeMode.Stretch)
+        hint = QLabel(
+            "「精密化」列にチェックを付けた量が、精密化(F9)で動きます。"
+            "赤字 = 動かす、灰色 = 対称性で固定または他の量に拘束。"
+            "値はダブルクリックで書き換えられます(F5 で再計算)。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #444;")
+        v.addWidget(hint)
         v.addWidget(self.table, 1)
         btns = QHBoxLayout()
-        self.btn_vary_shown = QPushButton("表示中を精密化する")
-        self.btn_fix_shown = QPushButton("表示中を固定する")
+        self.btn_vary_shown = QPushButton("表示中の項目に全部チェック")
+        self.btn_vary_shown.setToolTip(
+            "いま表に表示されている(絞り込み後の)パラメータの「精密化」をまとめてオンにします"
+        )
+        self.btn_fix_shown = QPushButton("表示中のチェックを全部外す")
+        self.btn_fix_shown.setToolTip(
+            "いま表に表示されているパラメータの「精密化」をまとめてオフにします"
+        )
         self.btn_vary_shown.clicked.connect(lambda: self._set_vary_shown(True))
         self.btn_fix_shown.clicked.connect(lambda: self._set_vary_shown(False))
         btns.addWidget(self.btn_vary_shown)
@@ -152,6 +169,15 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("データと相を読み込んでください")
         self.statusBar().addWidget(self.status_label, 1)
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #b02020; font-weight: bold;")
+        self.statusBar().addPermanentWidget(self.progress_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # 動いていることを示すビジー表示
+        self.progress_bar.setMaximumWidth(160)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+        self.statusBar().addPermanentWidget(self.progress_bar)
 
     def _build_menu(self) -> None:
         mb = self.menuBar()
@@ -160,10 +186,10 @@ class MainWindow(QMainWindow):
         self._add_action(
             m_file, "新規プロジェクト(&N)", self.new_project, QKeySequence.StandardKey.New
         )
-        self._add_action(
+        self.act_open = self._add_action(
             m_file, "プロジェクトを開く(&O)…", self.open_project, QKeySequence.StandardKey.Open
         )
-        self._add_action(
+        self.act_save = self._add_action(
             m_file, "プロジェクトを保存(&S)", self.save_project, QKeySequence.StandardKey.Save
         )
         self._add_action(
@@ -177,14 +203,22 @@ class MainWindow(QMainWindow):
         self._add_action(m_file, "終了(&X)", self.close, QKeySequence.StandardKey.Quit)
 
         m_data = mb.addMenu("データ(&D)")
-        self._add_action(m_data, "回折データを読み込む(&L)…", self.load_data, "Ctrl+L")
-        self._add_action(m_data, "CIF から相を追加(&P)…", self.add_phase_from_cif, "Ctrl+P")
-        self._add_action(m_data, "装置と試料の設定(&I)…", self.edit_instrument, "Ctrl+I")
+        self.act_load = self._add_action(
+            m_data, "回折データを読み込む(&L)…", self.load_data, "Ctrl+L"
+        )
+        self.act_add_phase = self._add_action(
+            m_data, "CIF から相を追加(&P)…", self.add_phase_from_cif, "Ctrl+P"
+        )
+        self.act_instrument = self._add_action(
+            m_data, "装置と試料の設定(&I)…", self.edit_instrument, "Ctrl+I"
+        )
         m_data.addSeparator()
-        self._add_action(m_data, "はじめての精密化(ウィザード)(&W)…", self.run_wizard)
+        self.act_wizard = self._add_action(
+            m_data, "はじめての精密化(ウィザード)(&W)…", self.run_wizard
+        )
 
         m_ref = mb.addMenu("精密化(&R)")
-        self._add_action(m_ref, "パターンを計算(&C)", self.recalculate, "F5")
+        self.act_calc = self._add_action(m_ref, "パターンを計算(&C)", self.recalculate, "F5")
         self.act_refine = self._add_action(m_ref, "精密化を実行(&R)", self.refine, "F9")
         self.act_recipe = self._add_action(
             m_ref, "標準の手順で精密化(&S)…", self.refine_recipe, "Shift+F9"
@@ -198,6 +232,34 @@ class MainWindow(QMainWindow):
         m_help = mb.addMenu("ヘルプ(&H)")
         self._add_action(m_help, "パラメータ名の規則", self.show_naming_help)
         self._add_action(m_help, "バージョン情報(&A)", self.show_about)
+
+        self._build_toolbar()
+
+    def _build_toolbar(self) -> None:
+        tb = QToolBar("メイン")
+        tb.setObjectName("mainToolbar")
+        tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(tb)
+        style = self.style()
+        sp = QStyle.StandardPixmap
+
+        def add(act: QAction, icon: QStyle.StandardPixmap, text: str) -> None:
+            act.setIcon(style.standardIcon(icon))
+            act.setIconText(text)
+            tb.addAction(act)
+
+        add(self.act_wizard, sp.SP_DialogHelpButton, "ウィザード")
+        add(self.act_load, sp.SP_DialogOpenButton, "データ読込")
+        add(self.act_add_phase, sp.SP_FileIcon, "CIF 追加")
+        add(self.act_instrument, sp.SP_FileDialogDetailedView, "装置設定")
+        tb.addSeparator()
+        add(self.act_calc, sp.SP_BrowserReload, "計算 (F5)")
+        add(self.act_refine, sp.SP_MediaPlay, "精密化 (F9)")
+        add(self.act_recipe, sp.SP_MediaSeekForward, "標準の手順で精密化")
+        add(self.act_stop, sp.SP_MediaStop, "中止")
+        tb.addSeparator()
+        add(self.act_save, sp.SP_DialogSaveButton, "保存")
 
     def _add_action(
         self,
@@ -543,17 +605,33 @@ class MainWindow(QMainWindow):
         self._worker = worker
         self._thread = RefineThread(worker, self)
         worker.progress.connect(self.log)
+        worker.iteration.connect(self._on_iteration)
         worker.finished.connect(self._on_refine_finished)
         self.act_refine.setEnabled(False)
         self.act_recipe.setEnabled(False)
         self.act_stop.setEnabled(True)
-        self.status_label.setText("精密化中…")
-        self.log(
-            "精密化を開始: "
-            + ", ".join(self.project.params.free_names()[:12])
-            + (" …" if len(self.project.params.free()) > 12 else "")
-        )
+        self.progress_label.setText("精密化中…")
+        self.progress_bar.show()
+        n_free = len(self.project.params.free())
+        if worker.recipe is None:
+            self.log(
+                f"精密化を開始({n_free} 変数): "
+                + ", ".join(self.project.params.free_names()[:12])
+                + (" …" if n_free > 12 else "")
+            )
+        else:
+            self.log(f"標準の手順で精密化を開始({len(worker.recipe.steps)} 段階)")
         self._thread.start()
+
+    def _on_iteration(self, iteration: int, chi2: float, curves: object) -> None:
+        self.progress_label.setText(f"精密化中: 反復 {iteration}  χ² = {chi2:.3f}")
+        try:
+            i = min(self.current_hist, len(self.project.histograms) - 1)
+            if isinstance(curves, list) and 0 <= i < len(curves):
+                x, yc, yb = curves[i]
+                self.plot.update_curves(x, yc, yb)
+        except Exception:
+            pass
 
     def stop_refine(self) -> None:
         if self._worker is not None:
@@ -565,6 +643,8 @@ class MainWindow(QMainWindow):
         self.act_refine.setEnabled(True)
         self.act_recipe.setEnabled(True)
         self.act_stop.setEnabled(False)
+        self.progress_bar.hide()
+        self.progress_label.setText(message.split("\n")[0])
         self.param_model.refresh()
         self._refresh_plot()
         if ok and self.project.last_fit is not None:
