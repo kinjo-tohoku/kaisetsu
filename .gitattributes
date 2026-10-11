@@ -1,0 +1,6 @@
+# 改行は LF に統一(Windows でも)
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.h5 binary
+*.gpx binary

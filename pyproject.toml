@@ -1,0 +1,91 @@
+[project]
+name = "kaisetsu"
+version = "0.1.0"
+description = "初心者向け・日本語対応の粉末回折解析プログラム(Rietveld / PDF / MEM)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gemmi>=0.7.5",
+    "h5py>=3.16.0",
+    "numba>=0.68.0",
+    "numpy>=2.5.4",
+    "scipy>=1.18.1",
+]
+
+[project.optional-dependencies]
+gui = [
+    "matplotlib>=3.11.2",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.12.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.168.5",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.0",
+]
+
+# ---------------------------------------------------------------------------
+# ツール設定
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "NPY",      # numpy
+    "RUF",      # ruff 固有
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # 日本語文中の全角記号を許す
+    "E741", "E743",                # 結晶学では l (エル) を変数名・属性名に使う
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+"src/kaisetsu/scattering/tables/*.py" = ["E501"]  # 自動生成テーブル
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/kaisetsu"]
+strict = true
+warn_unreachable = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["gemmi", "gemmi.*", "numba", "numba.*", "h5py", "h5py.*", "scipy", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "validation: GSAS-II など外部ソフトの参照値と突き合わせる(参照 JSON が必要)",
+    "slow: 時間のかかるテスト",
+]
+
+[tool.coverage.run]
+source = ["src/kaisetsu"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

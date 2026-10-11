@@ -1,0 +1,269 @@
+# Rietveld解析プログラム 開発ロードマップ
+
+作成日: 2026-10-11
+最終更新: 2026-10-11
+
+## 進捗
+
+| フェーズ | 状態 | 備考 |
+|---|---|---|
+| Phase 0 基盤 | 完了 (2026-10-11) | uv / ruff / mypy / pytest、GSAS-II 参照値スクリプト、PbSO4 公開データ |
+| Phase 1 結晶学コア | 完了 (2026-10-11) | 反射リスト完全一致、\|F\|^2 一致。記録: `docs/validation/phase1_structure_factors.md` |
+| Phase 2 パターン計算 | 未着手 | |
+| Phase 3 精密化エンジン | 未着手 | |
+| Phase 4 GUI | 未着手 | |
+| Phase 5 PDF | 未着手 | |
+| Phase 6 MEM | 未着手 | |
+
+---
+
+## 1. 目的
+
+初心者でも使える日本語対応の粉末回折解析プログラムを作る。
+GSAS-II / FullProf は強力だが、初心者には操作が難しく日本語にも対応していない。
+最終目標は Rietveld 解析だけでなく、**PDF(二体分布関数)解析**と **MEM(最大エントロピー法)電子/核密度解析**まで一貫して扱えること。
+
+### 差別化の方針
+
+- 日本語のGUIと、各パラメータの意味・推奨手順をその場で説明する「ガイド付き精密化」。
+- Rietveld・PDF・MEM が同じ結晶構造モデルと同じ精密化エンジンを共有する(将来は Rietveld + PDF の同時精密化も可能な設計)。
+- Python スクリプトからも同じ機能が使える(自動化・バッチ処理・教育用)。
+- 計算式はすべて文献を明記し、GSAS-II との突き合わせ検証を記録として残す。
+
+---
+
+## 2. 決定事項(2026-10-11 ヒアリング結果)
+
+| 項目 | 決定 |
+|---|---|
+| 対象データ | 実験室X線(CuKα 等、Kα1/Kα2二重線)、放射光X線、定波長中性子。**TOF中性子は将来対応** |
+| 技術スタック | Python + NumPy/SciPy(+numba で高速化)、GUI は PySide6 + pyqtgraph |
+| 計算エンジン | Rietveld 計算コア(構造因子・プロファイル・最小二乗)は自前実装。CIF・空間群・散乱因子などは商用利用可能なライブラリを利用 |
+| ライセンス方針 | 依存ライブラリは商用利用可能なもの(BSD/MIT/MPL/LGPL)に限定。GPL は使わない |
+| 品質水準 | 企業の研究所でも使えるレベル(検証記録・テスト・再現性・ドキュメント) |
+| 最初の目標 | エンジン先行。スクリプトで実データを精密化できる状態を先に作り、GSAS-II と結果を突き合わせてから GUI に進む |
+| 検証データ | 手元に実データなし。公開データ(GSAS-II 同梱の PbSO4 ラウンドロビンデータ等)と合成データで進める |
+| 比較ソフト | GSAS-II 5.7.4 が `C:\Users\KatsukiKinjo\gsas2main` に導入済み(Python 3.13)。`GSASIIscriptable` で同じデータ・同じモデルを精密化し、結果を突き合わせる |
+| 配布 | まず研究室・身内。将来の公開に備えて依存は寛容ライセンスに絞る |
+| OS | Windows 中心で開発・テスト。OS固有機能は使わず Mac/Linux でも動くよう書く |
+
+### まだ決めていないこと(必要になった時点で確認)
+
+- プログラム名・パッケージ名(本書では仮に `kaisetsu`(回折/解説)としている。変更可)
+- 研究室の回折装置のファイル形式(Rigaku .ras/.rasx、Bruker .raw/.brml、PANalytical .xrdml のどれを優先するか)
+- 自作コードのライセンス(MIT を推奨)
+- docstring の言語(提案: 識別子は英語、docstring・コメントは日本語可、GUI文字列は日本語+翻訳機構)
+
+---
+
+## 3. 全体アーキテクチャ
+
+```
++-----------------------------------------------------+
+|  GUI (PySide6 + pyqtgraph)              Phase 4-    |  日本語UI、ガイド付き精密化
++-----------------------------------------------------+
+|  Scripting API  (Project / Phase / Histogram)       |  Phase 3   スクリプト・バッチ・テスト
++----------------+----------------+-------------------+
+|  Rietveld      |  PDF           |  MEM / MPF        |  Phase 2-3 / 5 / 6
+|  パターン計算  |  G(r) 計算     |  密度再構成       |
++----------------+----------------+-------------------+
+|  Refinement Engine (パラメータ・拘束・最小二乗・R因子・esd)   Phase 3
++-----------------------------------------------------+
+|  Crystallography Core (格子・空間群・原子・構造因子・散乱因子)  Phase 1
++-----------------------------------------------------+
+|  I/O (回折データ各形式・CIF・プロジェクトファイル)            Phase 1-
++-----------------------------------------------------+
+```
+
+原則:
+
+- **コアは GUI に依存しない。** `gui/` 以外から Qt を import しない。すべての機能はスクリプトから呼べる。
+- **1つのパラメータモデルを全手法で共有する。** Rietveld / PDF / MEM が同じ `Structure` と `ParameterSet` を使う。
+- **数値計算は NumPy ベクトル化を基本とし、ホットループ(ピーク積算、PDF の原子対和、MEM の反復)のみ numba 化。**
+- **物理式は docstring に出典(文献・式番号)を書く。**
+
+### ディレクトリ構成(案)
+
+```
+RietveldProgram/
++- pyproject.toml / uv.lock / README.md / CLAUDE.md / LICENSE
++- src/kaisetsu/
+|   +- crystal/      lattice.py, spacegroup.py, atoms.py, structure.py, cif.py
+|   +- scattering/   xray.py (f0, f', f''), neutron.py (b), tables/
+|   +- reflections/  hkl.py (生成・消滅則・多重度), structure_factor.py
+|   +- profile/      pseudo_voigt.py, tchz.py, fcj.py (軸発散非対称), background.py
+|   +- pattern/      instrument.py, histogram.py, calculator.py (y_calc の組み立て)
+|   +- refine/       parameters.py, constraints.py, lsq.py, rfactors.py, recipe.py
+|   +- io/           readers/ (xy, xye, gsa/fxye, xrdml, ras, brml ...), writers/ (CIF, CSV), project.py
+|   +- pdf/          reduction.py (I(Q)→S(Q)→G(r)), calculator.py, fit.py
+|   +- mem/          mem.py, mpf.py, grid_io.py (VESTA用出力)
+|   +- api/          project.py (スクリプト用の窓口)
+|   +- gui/          app.py, widgets/, models/, i18n/
++- tests/            unit/, integration/, validation/
++- validation/gsas2/ GSAS-II 側で参照値を作るスクリプト(gsas2main の Python で実行)
++- data/public/      公開テストデータ(出典・ライセンスを README に明記)
++- docs/             ROADMAP.md, theory/ (式と出典), validation/ (突き合わせ記録), user-guide/
++- examples/         スクリプト例
+```
+
+---
+
+## 4. 技術スタックと依存ライブラリ
+
+| 用途 | ライブラリ | ライセンス | 備考 |
+|---|---|---|---|
+| 数値計算 | numpy, scipy | BSD-3 | 最小二乗は scipy.optimize.least_squares から始め、必要なら自前 LM に置換 |
+| 高速化 | numba | BSD-2 | Python 3.14 で 0.68 が解決済み |
+| CIF・空間群・異常分散 | gemmi | MPL-2.0 | `read_small_structure`, `SpaceGroup.operations()`, `cromer_liberman(z, energy)` を実機確認済み |
+| 対称性(補助) | spglib | BSD-3 | 対称性検出・標準化が必要になった場合 |
+| 原子散乱因子 f0 | 自前テーブル | - | Waasmaier-Kirfel (1995) / Cromer-Mann 係数を BSD 系ソース(cctbx 等)から出典明記で取り込む。gemmi 0.7.5 の Python API には IT92 テーブルが露出していないため |
+| 中性子散乱長 | 自前テーブル | - | Sears (1992) 表を取り込む(periodictable(BSD/PD)からの転載も可) |
+| GUI | PySide6 | LGPL-3 | 動的リンクなので商用利用可。必要なら商用ライセンスもある |
+| 高速プロット | pyqtgraph | MIT | 数万点のパターン描画・ズーム |
+| 静止画出力 | matplotlib | PSF系(BSD互換) | 論文用図 |
+| データ保存 | h5py / JSON | BSD-3 | プロジェクトファイル |
+| 検証(依存ではない) | GSAS-II 5.7.4 | 独自OSS | 別環境で実行し参照値を得るだけ。配布物には含めない |
+| PDF検証(任意) | diffpy.pdffit2 | BSD系(要確認) | Phase 5 の比較用 |
+| 2D画像積分(将来) | pyFAI | MIT | Phase 7 以降 |
+
+使わないもの: GPL ライブラリ全般、RIETAN-FP / Dysnomia(クローズド。比較対象としてのみ参照)。
+
+Python: `requires-python >= 3.12`。ローカル開発は 3.14(全依存が解決済み)。パッケージ管理は uv、ロックファイルで再現性を保証。
+
+---
+
+## 5. フェーズ別ロードマップ
+
+各フェーズに「成果物」と「受け入れ基準」を置く。基準を満たすまで次へ進まない。
+
+### Phase 0: 基盤整備
+
+- uv プロジェクト初期化(src レイアウト)、pyproject、ruff(lint/format)、mypy、pytest + coverage。
+- git 初期化、.gitignore、CLAUDE.md(規約)、LICENSE(仮)。
+- `data/public/` に GSAS-II 同梱の PbSO4 ラウンドロビンデータ(`PBSO4.XRA`, `PBSO4.CWN`, `INST_XRY.PRM`, `inst_d1a.prm`, `PbSO4-Wyckoff.cif`)と `diamond.cif` を出典付きでコピー。
+- `validation/gsas2/` に GSAS-II で参照値を書き出す仕組み(gsas2main の Python を subprocess で呼ぶ)。
+
+受け入れ基準: `uv run pytest` が通る。GSAS-II 側スクリプトが PbSO4 プロジェクトを作って反射リストを JSON で出せる。
+
+### Phase 1: 結晶学コア
+
+- 格子: 格子定数 → 計量テンソル・逆格子・d(hkl)・体積。晶系による格子定数拘束。
+- 空間群: gemmi の対称操作を利用。一般位置展開、多重度、**特殊位置の座標拘束の自動導出**(サイト対称から自由な座標成分を決める)、異方性 U_ij の対称拘束。
+- 原子: 元素/イオン種、分率座標、占有率、Uiso / Uaniso。
+- 反射生成: d_min 以上の全 hkl → ラウエ群で独立反射に縮約、消滅則判定、多重度。
+- 散乱因子: X線 f0(sinθ/λ)、f'/f''(波長依存、gemmi)、中性子 b。
+- 構造因子 F(hkl)(温度因子込み、ベクトル化)。
+- CIF 読み込み(gemmi)と簡易書き出し。
+
+受け入れ基準:
+- 独立反射の hkl・d・多重度が GSAS-II の反射リストと完全一致(PbSO4, diamond, 立方/六方/三斜の各1例)。
+- |F_calc|^2 が GSAS-II と相対誤差 1e-4 以内で一致(X線・中性子の両方)。
+- 特殊位置拘束のテスト(例: Fd-3m の 8a, 16d、P6_3/mmc の 2c)が通る。
+
+### Phase 2: 粉末パターン計算(フォワードモデル)
+
+- ピーク位置: Bragg 式 + ゼロ点 + 試料変位 + 透過補正。Kα1/Kα2 二重線(強度比はパラメータ)。
+- プロファイル: pseudo-Voigt → Thompson-Cox-Hastings 型(U,V,W,P / X,Y)→ Finger-Cox-Jephcoat 軸発散非対称(S/L, H/L)。
+- 強度補正: Lorentz-偏光(実験室: モノクロ偏光係数、放射光: 偏光度、中性子: Lorentz のみ)、March-Dollase 選択配向、円筒試料の吸収(中性子)、表面粗さ(Bragg-Brentano)。
+- バックグラウンド: Chebyshev 多項式、固定点補間、(将来)非晶質ハンプ。
+- 多相混合、スケール因子。ピークごとに ±N·FWHM の窓で積算(numba)。
+
+受け入れ基準:
+- 同じモデル・同じ装置パラメータで GSAS-II にシミュレーションさせたパターンと点ごとに比較し、ピーク窓内で相対差 1e-3 以内(非対称関数の実装差は別途記録)。
+- 理論検証: 積分強度が m·|F|^2·LP に比例、FWHM が Caglioti 式に一致、など単体テスト。
+
+### Phase 3: 精密化エンジンとスクリプト API
+
+- パラメータモデル: 名前・値・精密化フラグ・上下限・esd。相ごと/ヒストグラムごとのグループ。等値拘束・線形拘束。対称拘束は自動適用。占有率和の拘束。
+- 目的関数: 重み付き残差(w = 1/σ^2)。ヤコビアンは数値微分から始め、線形パラメータ(スケール・バックグラウンド)は解析的に。
+- ソルバー: Levenberg-Marquardt(scipy)。減衰・発散検出・収束判定。
+- 出力: Rp, Rwp, Rexp, χ^2, 相ごとの R_Bragg, R_F、esd、相関行列、相関が高い組の警告。
+- Le Bail / Pawley 法(格子・プロファイルの先行決定と、MEM 用の強度抽出に必要)。
+- 「レシピ」: 精密化手順を宣言的に書く仕組み(スケール+BG → 格子+ゼロ点 → プロファイル → 座標 → 温度因子 …)。初心者向け自動手順の基盤になる。
+- プロジェクトファイル(JSON + 数値配列はHDF5/npz、スキーマにバージョン)。
+- 回折データ読み込み: .xy/.xye/.dat、GSAS .gsa/.fxye、PANalytical .xrdml、Rigaku .ras(研究室の形式は確認後に優先)。
+
+受け入れ基準(GSAS-II 突き合わせ、`docs/validation/` に記録):
+- PbSO4 実験室X線、PbSO4 D1A中性子、両者の同時精密化の3ケースで、
+  Rwp の差が 0.5%(絶対値)以内、格子定数・原子座標・Uiso が互いの 3σ 以内。
+- 合成データのラウンドトリップ: 既知パラメータで生成+ノイズ → 初期値をずらして精密化 → 真値を 3σ 以内で回収。
+- 放射光データ1例(GSAS-II チュートリアル公開データから選定)でも同様に一致。
+
+### Phase 4: GUI v1(日本語)
+
+- 画面: プロジェクトツリー(相・ヒストグラム)、パターン図(観測/計算/差/BG/ティック、ズーム、カーソル位置の d 値表示)、パラメータ表(チェックで精密化ON/OFF)、R因子の推移、ログ。
+- 初心者モード: 「データを読む → 相を追加(CIF) → 装置を選ぶ(プリセット: CuKα Bragg-Brentano / 放射光 / 中性子) → 推奨手順で精密化」のウィザード。各パラメータに日本語の説明ツールチップ。発散・負値・高相関の警告を平易な日本語で表示。
+- 精密化はワーカースレッドで実行し、途中停止できる。
+- 出力: CIF(pdCIF)、図(PNG/SVG)、CSV、VESTA 用ファイル。
+- 配布: PyInstaller の one-folder で Windows 配布。`uv run` でも起動可。
+- 文字列は `tr()` で囲み、英語化できる構造にしておく(翻訳は後)。
+
+受け入れ基準: 初心者が標準試料(Si/LaB6 相当の公開データ)を 10 操作以内で精密化し、Rwp と格子定数を得られる。身内 2〜3 名の試用でつまずいた点を記録・修正。
+
+### Phase 5: PDF 解析
+
+**5a. 全散乱データ処理**(I(Q) → S(Q) → F(Q) → G(r))
+- 補正: 容器・空セル差し引き、コンプトン散乱(X線)、吸収、偏光、Faber-Ziman 規格化、PDFgetX3 型の多項式アドホック補正、Q_max 打ち切り、Lorch 窓(任意)、正弦フーリエ変換。
+- 検証: 同じ I(Q) に対して GSAS-II の PDF 機能(GSASIIpwd)または PDFgetX3 の出力と G(r) を比較。
+
+**5b. 実空間フィット**(PDFfit2 / PDFgui と同じ定式化)
+- G_calc(r): 原子対和(スーパーセル近傍探索、numba)、ADP 由来のガウス幅、相関運動補正 δ1/δ2、Q_damp・Q_broad、球状粒子形状因子、スケール。
+- Rietveld と同じ `Structure` / `ParameterSet` / 精密化エンジンを使う。
+- 検証: diffpy.pdffit2 の公開 Ni データで、G_calc と精密化後パラメータを比較。
+
+受け入れ基準: Ni(fcc)の格子定数・Uiso・Q_damp が pdffit2 の結果と 3σ 以内。G(r) の計算値の残差が数値精度レベル。
+
+### Phase 6: MEM 解析と MPF
+
+- 入力: Rietveld から得た F_obs(hkl)(重なり反射はモデルで分配)と σ、または Pawley/Le Bail 抽出強度 + モデル位相。グリッド(例 128^3)、空間群で対称化、F000。
+- アルゴリズム: Sakata-Sato / Collins の 0次単一ピクセル近似(ZSPA)を実装して正しさを確認 → L-BFGS 型(Dysnomia 相当)で高速化。F 拘束(χ^2 = 1)、重なり反射の G 拘束、不確かさ重み。中性子の負の散乱長に対応する二チャンネル MEM。
+- 出力: VESTA で読める 3D グリッド(.ccp4 / .xplor / .pgrid 相当)、GUI での 2D 断面図。
+- MPF(MEM-based pattern fitting): Rietveld → MEM → MEM 密度から F を再計算 → 重なり反射を再分配 → 再 MEM、を収束まで繰り返すレシピ。
+- 検証: 既知構造から計算した F にノイズを加えた合成データで密度ピーク位置・積分電荷を回収。Dysnomia(無償配布)の例題があれば密度分布を比較。
+
+受け入れ基準: 合成データで原子位置に密度極大が再現され、残差 χ^2 が 1 に収束する。実データ(PbSO4 等)で化学的に妥当な密度図が得られ、MPF で Rwp が Rietveld 単独より改善する。
+
+### Phase 7 以降(将来)
+
+- TOF 中性子(J-PARC: back-to-back exponential 畳み込みプロファイル、d 空間ベース)。
+- 磁気構造(中性子)。
+- 微細構造: 結晶子サイズ・歪みの異方性(Stephens 型)、Williamson-Hall。
+- 定量相分析、非晶質量。
+- 球面調和関数による集合組織。
+- 逐次精密化(温度・時間系列)。
+- 2D 検出器画像の積分(pyFAI)。
+- 英語 UI、インストーラ、コード署名。
+
+---
+
+## 6. 検証戦略
+
+1. **単体テスト**: 純粋関数(d 値、多重度、f0、プロファイル関数の積分=1 など)。
+2. **性質テスト**: 対称操作で F が不変、Friedel 対、格子定数を変えたときの d の単調性。
+3. **回帰テスト**: 固定入力に対する数値を固定し、意図しない変化を検出。
+4. **ラウンドトリップ**: 合成パターンから真値を回収。
+5. **外部突き合わせ**: GSAS-II(Rietveld)、pdffit2(PDF)、Dysnomia(MEM)。比較スクリプトとその結果(バージョン・日付・差分表)を `docs/validation/` に残す。
+6. **公開実データ**: GSAS-II 同梱 PbSO4(実験室X線・D1A中性子)、GSAS-II チュートリアル公開データ(放射光・中性子)、diffpy の Ni PDF データ。出典とライセンスを `data/public/README.md` に明記する。
+
+---
+
+## 7. 品質基準(企業の研究所で使えるレベル)
+
+- 物理式には必ず出典を書く(Young『The Rietveld Method』、Pecharsky & Zavalij、GSAS-II マニュアル、FullProf マニュアル、Finger-Cox-Jephcoat 1994、Thompson-Cox-Hastings 1987、Dollase 1986、Sakata & Sato 1990、Takata 2008、Juhás 2013、Proffen & Billinge 1999、Farrow 2007 など)。
+- 型ヒント必須、ruff + mypy をクリーン、コアのテストカバレッジ 80% 以上。
+- 再現性: uv.lock で依存固定、乱数シード固定、numba は fastmath を既定で無効。
+- 数値: 倍精度、微分は有限差分との突き合わせテスト、桁落ちしやすい式(TCH の η・Γ)は安定形で実装。
+- ユーザー向けメッセージ(エラー・警告・ログ)は日本語。内部ログは構造化(logging)。
+- プロジェクトファイルにスキーマバージョンを持ち、旧バージョンを読めるようにする。
+- 変更は必ず git 管理。検証記録は結果と一緒にコミット。
+
+---
+
+## 8. 次の一歩
+
+Phase 0 から着手する。最初のセッションでやること:
+
+1. uv プロジェクト初期化、ディレクトリ骨組み、ツール設定、git 初期化。
+2. PbSO4 公開データを `data/public/` にコピーし出典を記録。
+3. GSAS-II で PbSO4 の反射リスト(hkl, d, 多重度, |F|^2)を JSON 出力する参照スクリプト。
+4. Phase 1 の格子・空間群・構造因子を実装し、参照値と突き合わせる。
