@@ -1,12 +1,16 @@
 """プロジェクトファイル(JSON)の保存と読み込み。
 
-スキーマ(schema_version 1):
+スキーマ(schema_version 2。1 との違いは pdf_datasets の追加):
     {
       "schema_version": 1, "name": ..., "program": "kaisetsu", "version": ...,
       "phases": [{name, le_bail, structure: {...}, f2_tables: {hist_index: {"h k l": F2}}}],
       "histograms": [{name, data: {x, y, weight, name, metadata}, instrument, sample, background,
                       contributions: {phase: {...}}, x_min, x_max, excluded, weight_factor,
                       kalpha2_mode, d_min, d_min_margin_deg}],
+      "pdf_datasets": [{name, data: {r, g, dg, name, metadata}, radiation, qmax, qmin, qdamp,
+                        qbroad, scale, r_min, r_max, weight_factor, dr_fine,
+                        phases: {phase: {scale, delta1, delta2, sratio, rcut, spdiameter,
+                                         stepcut}}}],
       "params": {name: {value, vary, min, max, step, esd, tie}},
       "log": [...]
     }
@@ -31,11 +35,12 @@ from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.calculator import PhaseContribution
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
+from kaisetsu.pdf.data import PDFData
 from kaisetsu.profile.background import ChebyshevBackground
 from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.scattering.radiation import Radiation, RadiationType
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _f(v: float) -> float | None:
@@ -186,6 +191,46 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
                 "d_min_margin_deg": h.d_min_margin_deg,
             }
         )
+    pdfs = []
+    for g in proj.pdf_datasets:
+        pdfs.append(
+            {
+                "name": g.name,
+                "data": {
+                    "name": g.data.name,
+                    "r": g.data.r.tolist(),
+                    "g": g.data.g.tolist(),
+                    "dg": None if g.data.dg is None else g.data.dg.tolist(),
+                    "metadata": {
+                        k: v
+                        for k, v in g.data.metadata.items()
+                        if isinstance(v, str | int | float | bool)
+                    },
+                },
+                "radiation": g.radiation,
+                "qmax": g.qmax,
+                "qmin": g.qmin,
+                "qdamp": g.qdamp,
+                "qbroad": g.qbroad,
+                "scale": g.scale,
+                "r_min": g.r_min,
+                "r_max": g.r_max,
+                "weight_factor": g.weight_factor,
+                "dr_fine": g.dr_fine,
+                "phases": {
+                    n: {
+                        "scale": pp.scale,
+                        "delta1": pp.delta1,
+                        "delta2": pp.delta2,
+                        "sratio": pp.sratio,
+                        "rcut": pp.rcut,
+                        "spdiameter": pp.spdiameter,
+                        "stepcut": pp.stepcut,
+                    }
+                    for n, pp in g.phases.items()
+                },
+            }
+        )
     params = {}
     for p in proj.params:
         params[p.name] = {
@@ -210,6 +255,7 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
         "name": proj.name,
         "phases": phases,
         "histograms": hists,
+        "pdf_datasets": pdfs,
         "params": params,
         "log": list(proj.log),
     }
@@ -270,6 +316,35 @@ def project_from_dict(d: dict[str, Any]) -> Project:
             pc.strain_e6 = cd.get("strain_e6", 0.0)
             pc.size_lorentz_fraction = cd.get("size_lorentz_fraction", 1.0)
             pc.strain_lorentz_fraction = cd.get("strain_lorentz_fraction", 1.0)
+    for gd in d.get("pdf_datasets", []):
+        dd = gd["data"]
+        pdata = PDFData(
+            np.asarray(dd["r"], dtype=float),
+            np.asarray(dd["g"], dtype=float),
+            None if dd.get("dg") is None else np.asarray(dd["dg"], dtype=float),
+            name=dd.get("name", ""),
+            metadata=dict(dd.get("metadata", {})),
+        )
+        g = proj.add_pdf(
+            pdata,
+            gd.get("radiation", "xray"),
+            qmax=gd.get("qmax", 0.0),
+            qmin=gd.get("qmin", 0.0),
+            qdamp=gd.get("qdamp", 0.0),
+            qbroad=gd.get("qbroad", 0.0),
+            name=gd.get("name"),
+            phases=list(gd.get("phases", {})),
+            r_min=gd.get("r_min"),
+            r_max=gd.get("r_max"),
+            weight_factor=gd.get("weight_factor", 1.0),
+        )
+        g.scale = gd.get("scale", 1.0)
+        g.dr_fine = gd.get("dr_fine", 0.01)
+        for n, pd in gd.get("phases", {}).items():
+            pp = g.phases[n]
+            for key in ("scale", "delta1", "delta2", "sratio", "rcut", "spdiameter", "stepcut"):
+                if key in pd:
+                    setattr(pp, key, float(pd[key]))
     proj.build_parameters()
     for name, pd in d.get("params", {}).items():
         if name not in proj.params:

@@ -201,3 +201,64 @@ def standard_recipe(
         )
     r.add("最終(全パラメータ)", [], 30)
     return r
+
+
+def pdf_recipe(
+    phase: str = "*",
+    dataset: str = "g*",
+    *,
+    coordinates: bool = True,
+    adp: bool = True,
+    delta2: bool = True,
+    delta1: bool = False,
+    qdamp: bool = True,
+    qbroad: bool = False,
+    spdiameter: bool = False,
+    occupancy: bool = False,
+) -> Recipe:
+    """PDF(実空間)フィットの標準手順(PDFgui のチュートリアルの順序に準拠)。
+
+    1. スケール因子
+    2. 格子定数
+    3. 変位パラメータと相関運動補正 δ2(ピーク幅)
+    4. 装置分解能 Q_damp(遠距離の減衰)
+    5. 原子座標
+    6. 最終(全パラメータ)
+
+    Args:
+        phase: 相の名前(glob 可)
+        dataset: PDF データセットの接頭辞(例 'g0', 'g*')
+        delta1, delta2: 相関運動補正を動かすか(通常は室温以下なら δ2 だけ)
+        qdamp, qbroad: 装置分解能を動かすか(標準試料で決めた値があれば固定する)
+        spdiameter: 球状ナノ粒子の直径を動かすか
+    """
+    r = Recipe("PDF 標準")
+    r.add("スケール", [f"{dataset}:pdf:scale"], 10)
+    r.add("格子定数", [f"{phase}:cell:*"], 10)
+    width = [
+        f"{phase}:*:uiso", f"{phase}:*:u11", f"{phase}:*:u22", f"{phase}:*:u33",
+        f"{phase}:*:u12", f"{phase}:*:u13", f"{phase}:*:u23",
+    ]  # fmt: skip
+    if not adp:
+        width = []
+    if delta2:
+        width.append(f"{dataset}:{phase}:delta2")
+    if delta1:
+        width.append(f"{dataset}:{phase}:delta1")
+    if width:
+        r.add("ピーク幅(変位パラメータ、δ)", width, 15)
+    inst = []
+    if qdamp:
+        inst.append(f"{dataset}:pdf:qdamp")
+    if qbroad:
+        inst.append(f"{dataset}:pdf:qbroad")
+    if inst:
+        r.add("装置分解能", inst, 10)
+    if spdiameter:
+        r.add("粒子径", [f"{dataset}:{phase}:spdiameter"], 10)
+    if coordinates:
+        r.add("原子座標", [f"{phase}:*:x", f"{phase}:*:y", f"{phase}:*:z"], 15)
+    if occupancy:
+        r.add("占有率", [f"{phase}:*:occ"], 10, filter=_occupancy_is_refinable)
+    r.add("最終(全パラメータ)", [], 30)
+    return r

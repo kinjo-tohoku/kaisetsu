@@ -4,6 +4,8 @@
     uv run python examples/refine_sample_data.py lab6    # LaB6、Bruker .raw、Cu Kα
     uv run python examples/refine_sample_data.py garnet  # Y3(Fe,Al)5O12、ILL D1A 中性子 1.909 Å
     uv run python examples/refine_sample_data.py nac     # Na2Ca3Al2F14 + CaF2、放射光 11-BM
+    uv run python examples/refine_sample_data.py ni_pdf  # Ni の PDF(X 線 G(r)、PDFfit2 相当の実空間フィット)
+    uv run python examples/refine_sample_data.py ni_pdf_neutron  # 同、中性子
     uv run python examples/refine_sample_data.py all
 
 GUI のウィザードで同じデータを選んだときと同じ初期値(プリセット相当)から始める。
@@ -22,6 +24,8 @@ from kaisetsu.api import (
     Radiation,
     SampleGeometry,
     Structure,
+    pdf_recipe,
+    read_pdf_data,
     read_powder_data,
 )
 from kaisetsu.io.project import save_project
@@ -110,7 +114,31 @@ def setup_nac(x_max: float = 30.0) -> tuple[Project, Recipe]:
     return project, standard_recipe("*", "h0")
 
 
-SETUPS = {"fap": setup_fap, "lab6": setup_lab6, "garnet": setup_garnet, "nac": setup_nac}
+def setup_ni_pdf(radiation: str = "xray") -> tuple[Project, Recipe]:
+    d = DATA / "pdf"
+    project = Project(f"Ni PDF ({radiation})")
+    st = Structure.from_cif(str(d / "Ni.cif"))
+    st.sites[0].u_iso = 0.005
+    project.add_phase(st, name="Ni")
+    fname = "Ni-xray.gr" if radiation == "xray" else "Ni-neutron.gr"
+    data = read_pdf_data(d / fname)
+    # Q_max は .gr のヘッダから(X 線 40、中性子 27 Å⁻¹)。Q_damp の初期値は装置の目安
+    project.add_pdf(
+        data, radiation, qdamp=0.06 if radiation == "xray" else 0.02, r_min=1.5, r_max=20.0
+    )
+    project.pdf_phase(0, "Ni").delta2 = 2.0
+    project.build_parameters()
+    return project, pdf_recipe("Ni", "g0")
+
+
+SETUPS = {
+    "fap": setup_fap,
+    "lab6": setup_lab6,
+    "garnet": setup_garnet,
+    "nac": setup_nac,
+    "ni_pdf": setup_ni_pdf,
+    "ni_pdf_neutron": lambda: setup_ni_pdf("neutron"),
+}
 
 
 def run(key: str) -> None:
@@ -122,13 +150,14 @@ def run(key: str) -> None:
         rf = project.rfactors()["total"]
         name = getattr(step, "name", "")
         n = getattr(fit, "n_params", 0)
-        print(f"  [{name}] 変数 {n:2d}  Rwp = {100 * rf.rwp:6.3f}%  χ²_red = {rf.chi2:7.3f}")
+        label = "Rw" if project.pdf_datasets and not project.histograms else "Rwp"
+        print(f"  [{name}] 変数 {n:2d}  {label} = {100 * rf.rwp:6.3f}%  χ²_red = {rf.chi2:7.3f}")
 
     print(f"=== {key}: {project.name} ===")
     recipe.run(project, progress=report)
     print(f"  所要時間 {time.perf_counter() - t0:.1f} s")
     print(project.summary())
-    for name in project.phases:
+    for name in project.phases if project.histograms else []:
         rep = project.reflection_report(0, name)
         print(
             f"  {name}: R_Bragg = {100 * rep.r_bragg:.2f}%  R_F = {100 * rep.r_f:.2f}%"

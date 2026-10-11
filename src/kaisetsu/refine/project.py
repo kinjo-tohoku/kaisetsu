@@ -19,6 +19,8 @@
     h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
     h{i}:bkg:{k}                           バックグラウンド係数
     h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
+    g{i}:pdf:{scale|qdamp|qbroad}          PDF データセット(G(r))
+    g{i}:{相}:{scale|delta1|delta2|sratio|spdiameter}  相-PDF
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.calculator import PatternResult, PhaseContribution, calculate_pattern
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
+from kaisetsu.pdf.calculator import PairList, PDFPhase, PDFResult, calculate_pdf, pair_distribution
+from kaisetsu.pdf.data import PDFData
 from kaisetsu.profile.background import ChebyshevBackground, estimate_chebyshev_background
 from kaisetsu.refine.constraints import (
     SymmetryConstraint,
@@ -194,6 +198,61 @@ class HistogramEntry:
         return lam / (2.0 * math.sin(math.radians(tt / 2.0)))
 
 
+def _structure_key(st: Structure) -> bytes:
+    """原子対リストの再利用判定用: 格子・座標・占有率・変位パラメータのバイト列。"""
+    parts = [np.ascontiguousarray(st.lattice.parameters, dtype=np.float64).tobytes()]
+    for site in st.sites:
+        parts.append(np.ascontiguousarray(site.position, dtype=np.float64).tobytes())
+        parts.append(np.array([site.occupancy, site.u_iso], dtype=np.float64).tobytes())
+        if site.u_aniso is not None:
+            parts.append(np.ascontiguousarray(site.u_aniso, dtype=np.float64).tobytes())
+    return b"".join(parts)
+
+
+@dataclass
+class PDFEntry:
+    """プロジェクト内の 1 つの PDF データセット(観測 G(r) + 変換条件 + 相の寄与)。
+
+    Attributes:
+        radiation: 'xray' または 'neutron'
+        qmax, qmin: 変換に使った Q の範囲 [Å^-1](終端効果の計算に使う)
+        qdamp, qbroad: 装置分解能のパラメータ
+        scale: データセットのスケール因子(PDFfit2 の dscale)
+        phases: 相の名前 → PDF 用パラメータ
+        r_min, r_max: フィットに使う r の範囲 [Å]
+    """
+
+    name: str
+    data: PDFData
+    radiation: str
+    qmax: float
+    phases: dict[str, PDFPhase]
+    r_min: float
+    r_max: float
+    qmin: float = 0.0
+    qdamp: float = 0.0
+    qbroad: float = 0.0
+    scale: float = 1.0
+    weight_factor: float = 1.0
+    dr_fine: float = 0.01
+    result: PDFResult | None = None
+    _pair_cache: dict[str, tuple[bytes, float, PairList]] = field(default_factory=dict, repr=False)
+
+    def mask(self) -> BoolArray:
+        r = self.data.r
+        return (r >= self.r_min) & (r <= self.r_max) & (r > 0.0) & (self.data.weight > 0.0)
+
+    def pairs_for(self, name: str, structure: Structure, r_max: float) -> PairList:
+        """構造が変わっていなければ前回の原子対リストを使い回す。"""
+        key = _structure_key(structure)
+        hit = self._pair_cache.get(name)
+        if hit is not None and hit[0] == key and hit[1] >= r_max:
+            return hit[2]
+        pl = pair_distribution(structure, r_max, self.radiation)
+        self._pair_cache[name] = (key, r_max, pl)
+        return pl
+
+
 @dataclass
 class ReflectionReport:
     """反射ごとの計算・観測量。"""
@@ -218,6 +277,7 @@ class Project:
         self.name = name
         self.phases: dict[str, PhaseEntry] = {}
         self.histograms: list[HistogramEntry] = []
+        self.pdf_datasets: list[PDFEntry] = []
         self.params = ParameterSet()
         self.last_fit: FitResult | None = None
         self.log: list[str] = []
@@ -238,6 +298,8 @@ class Project:
         self.phases[name] = entry
         for h in self.histograms:
             h.contributions[name] = PhaseContribution(structure)
+        for g in self.pdf_datasets:
+            g.phases[name] = PDFPhase(structure)
         self.build_parameters()
         return entry
 
@@ -289,6 +351,55 @@ class Project:
     def phase_contribution(self, hist: int, phase: str) -> PhaseContribution:
         return self.histograms[hist].contributions[phase]
 
+    def add_pdf(
+        self,
+        data: PDFData,
+        radiation: str = "xray",
+        *,
+        qmax: float | None = None,
+        qmin: float = 0.0,
+        qdamp: float = 0.0,
+        qbroad: float = 0.0,
+        name: str | None = None,
+        phases: Iterable[str] | None = None,
+        r_min: float | None = None,
+        r_max: float | None = None,
+        weight_factor: float = 1.0,
+    ) -> PDFEntry:
+        """PDF データセット G(r) を追加する。
+
+        qmax を省略するとデータのメタデータ(.gr ヘッダ)から取り、無ければ 0(終端効果なし)。
+        r_min の既定は 1.0 Å(それより内側は終端リップルだけで情報が無い)。
+        """
+        if radiation not in ("xray", "neutron"):
+            raise ValueError("radiation は xray か neutron です")
+        names = list(phases) if phases is not None else list(self.phases)
+        for n in names:
+            if n not in self.phases:
+                raise KeyError(f"相 {n!r} はプロジェクトにありません")
+        if qmax is None:
+            q = data.metadata.get("qmax", 0.0)
+            qmax = float(q) if isinstance(q, int | float) else 0.0
+        g = PDFEntry(
+            name=name or data.name or f"g{len(self.pdf_datasets)}",
+            data=data,
+            radiation=radiation,
+            qmax=qmax,
+            qmin=qmin,
+            qdamp=qdamp,
+            qbroad=qbroad,
+            phases={n: PDFPhase(self.phases[n].structure) for n in names},
+            r_min=max(float(data.r[0]), 1.0) if r_min is None else r_min,
+            r_max=float(data.r[-1]) if r_max is None else r_max,
+            weight_factor=weight_factor,
+        )
+        self.pdf_datasets.append(g)
+        self.build_parameters()
+        return g
+
+    def pdf_phase(self, dataset: int, phase: str) -> PDFPhase:
+        return self.pdf_datasets[dataset].phases[phase]
+
     def reset_background(
         self, hist: int, n_terms: int | None = None, estimate: bool = True
     ) -> None:
@@ -315,6 +426,8 @@ class Project:
             self._build_phase_params(ps, ph)
         for i, h in enumerate(self.histograms):
             self._build_hist_params(ps, i, h)
+        for i, g in enumerate(self.pdf_datasets):
+            self._build_pdf_params(ps, i, g)
         for p in ps:
             if p.name in old:
                 op = old[p.name]
@@ -571,6 +684,65 @@ class Project:
                 )
             )
 
+    def _build_pdf_params(self, ps: ParameterSet, i: int, g: PDFEntry) -> None:
+        pre = f"g{i}"
+        ps.add(
+            Parameter(
+                f"{pre}:pdf:scale",
+                g.scale,
+                min=0.0,
+                step=max(1e-3 * abs(g.scale), 1e-6),
+                setter=_attr_setter(g, "scale"),
+                description="PDF データセットのスケール因子",
+            )
+        )
+        ps.add(
+            Parameter(
+                f"{pre}:pdf:qdamp",
+                g.qdamp,
+                min=0.0,
+                max=1.0,
+                step=1e-4,
+                setter=_attr_setter(g, "qdamp"),
+                unit="Å⁻¹",
+                description="装置分解能による G(r) の減衰 Q_damp",
+            )
+        )
+        ps.add(
+            Parameter(
+                f"{pre}:pdf:qbroad",
+                g.qbroad,
+                min=0.0,
+                max=1.0,
+                step=1e-4,
+                setter=_attr_setter(g, "qbroad"),
+                unit="Å⁻¹",
+                description="装置分解能によるピーク幅の広がり Q_broad",
+            )
+        )
+        for pname, pp in g.phases.items():
+            ppre = f"{pre}:{pname}"
+            spec: list[tuple[str, str, float, float, float, str, str]] = [
+                ("scale", "scale", 1e-3, 0.0, 1e6, "", f"{pname} の PDF スケール因子(pscale)"),
+                ("delta1", "delta1", 1e-3, 0.0, 10.0, "Å", f"{pname} の相関運動補正 δ1 (1/r)"),
+                ("delta2", "delta2", 1e-3, 0.0, 50.0, "Å²", f"{pname} の相関運動補正 δ2 (1/r²)"),
+                ("sratio", "sratio", 1e-3, 0.1, 2.0, "", f"{pname} の近距離ピーク幅比(r < rcut)"),
+                ("spdiameter", "spdiameter", 1e-2, 0.0, 1e4, "Å", f"{pname} の粒子直径(0=バルク)"),
+            ]  # fmt: skip
+            for nm, attr, step, lo, hi, unit, desc in spec:
+                ps.add(
+                    Parameter(
+                        f"{ppre}:{nm}",
+                        float(getattr(pp, attr)),
+                        step=step,
+                        min=lo,
+                        max=hi,
+                        setter=_attr_setter(pp, attr),
+                        unit=unit,
+                        description=desc,
+                    )
+                )
+
     def vary(self, *patterns: str) -> list[str]:
         return self.params.vary(*patterns)
 
@@ -627,6 +799,33 @@ class Project:
     def calculate_all(self) -> list[PatternResult]:
         return [self.calculate(i) for i in range(len(self.histograms))]
 
+    def calculate_pdf(self, dataset: int = 0) -> PDFResult:
+        """PDF データセットの G(r) を現在のモデルで計算する。"""
+        g = self.pdf_datasets[dataset]
+        phases: list[PDFPhase] = []
+        pairs: list[PairList] = []
+        r_pair = float(g.data.r[-1]) + 6.0
+        for pname, pp in g.phases.items():
+            ph = self.phases[pname]
+            ph.sync()
+            pp.structure = ph.structure
+            phases.append(pp)
+            pairs.append(g.pairs_for(pname, ph.structure, r_pair))
+        res = calculate_pdf(
+            g.data.r,
+            phases,
+            g.radiation,
+            qmax=g.qmax,
+            qmin=g.qmin,
+            qdamp=g.qdamp,
+            qbroad=g.qbroad,
+            scale=g.scale,
+            dr_fine=g.dr_fine,
+            pairs=pairs,
+        )
+        g.result = res
+        return res
+
     def residuals(self) -> FloatArray:
         parts = []
         for i, h in enumerate(self.histograms):
@@ -635,8 +834,13 @@ class Project:
             assert h.data.weight is not None
             w = h.data.weight[m] * h.weight_factor
             parts.append(np.sqrt(w) * (h.data.y[m] - res.y_calc[m]))
+        for i, g in enumerate(self.pdf_datasets):
+            pres = self.calculate_pdf(i)
+            m = g.mask()
+            w = g.data.weight[m] * g.weight_factor
+            parts.append(np.sqrt(w) * (g.data.g[m] - pres.g_calc[m]))
         if not parts:
-            raise ValueError("ヒストグラムがありません")
+            raise ValueError("ヒストグラムも PDF データもありません")
         return np.concatenate(parts)
 
     # ------------------------------------------------------------------
@@ -656,8 +860,8 @@ class Project:
 
         le_bail_cycles > 0 なら、Le Bail 相の強度を更新しながらその回数だけ繰り返す。
         """
-        if not self.histograms:
-            raise ValueError("ヒストグラムがありません")
+        if not self.histograms and not self.pdf_datasets:
+            raise ValueError("ヒストグラムも PDF データもありません")
         self.params.evaluate_ties()
         self.params.apply_all()
         n_outer = max(le_bail_cycles, 1) if any(ph.le_bail for ph in self.phases.values()) else 1
@@ -770,6 +974,16 @@ class Project:
             all_c.append(res.y_calc[m])
             all_w.append(h.data.weight[m] * h.weight_factor)
             all_b.append(res.y_background[m])
+        for i, g in enumerate(self.pdf_datasets):
+            pres = g.result if g.result is not None else self.calculate_pdf(i)
+            m = g.mask()
+            out[f"g{i}"] = powder_rfactors(g.data.g[m], pres.g_calc[m], g.data.weight[m], n_par)
+            all_o.append(g.data.g[m])
+            all_c.append(pres.g_calc[m])
+            all_w.append(g.data.weight[m] * g.weight_factor)
+            all_b.append(np.zeros(int(np.count_nonzero(m))))
+        if not all_o:
+            return out
         out["total"] = powder_rfactors(
             np.concatenate(all_o),
             np.concatenate(all_c),
@@ -847,7 +1061,7 @@ class Project:
                 )
         if self.histograms and self.phases:
             rf = self.rfactors()["total"]
-            if rf.chi2 > 10.0:
+            if rf.chi2 > 10.0 and not self.pdf_datasets:
                 notes.append(
                     f"χ² = {rf.chi2:.1f} と大きめです。計数が多いデータでは普通ですが、"
                     "差のプロットに系統的な残差があれば、ピーク形状(U, V, W, X, Y)・背景の項数・"
@@ -890,7 +1104,7 @@ class Project:
         lines = [f"プロジェクト {self.name or '(無名)'}"]
         for ph in self.phases.values():
             lines.append(f"相 {ph.name}: {ph.structure.spacegroup.symbol}, {ph.structure.lattice}")
-        rf = self.rfactors() if self.histograms else {}
+        rf = self.rfactors() if (self.histograms or self.pdf_datasets) else {}
         for i, h in enumerate(self.histograms):
             lines.append(f"ヒストグラム h{i} ({h.name}): {len(h.data)} 点, {rf[h.name]}")
             for pname in h.contributions:
@@ -906,7 +1120,13 @@ class Project:
                         f"{n} {100 * w:.2f} ± {100 * e:.2f} wt%" for n, (w, e) in fractions.items()
                     )
                 )
-        if "total" in rf and len(self.histograms) > 1:
+        for i, g in enumerate(self.pdf_datasets):
+            r = rf[f"g{i}"]
+            lines.append(
+                f"PDF g{i} ({g.name}): {int(np.count_nonzero(g.mask()))} 点 "
+                f"(r = {g.r_min:.2f}〜{g.r_max:.2f} Å), Rw = {100 * r.rwp:.3f}%  χ² = {r.chi2:.3f}"
+            )
+        if "total" in rf and len(self.histograms) + len(self.pdf_datasets) > 1:
             lines.append(f"全体: {rf['total']}")
         lines.append("パラメータ(* 精密化中, = 拘束):")
         lines.append(self.params.summary())

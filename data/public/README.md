@@ -11,7 +11,7 @@ GUI の「はじめての精密化」ウィザードでそのまま選べる。
 | `pbso4/` | PbSO4 | 実験室 Cu Kα と ILL D1A 中性子 | ★★ | GSAS-II との突き合わせ(X 線+中性子の同時精密化) |
 | `garnet/` | Y3(Fe,Al)5O12 ガーネット | ILL D1A 中性子 1.909 Å | ★★ | 中性子、混合サイトの占有率 |
 | `nac/` | Na2Ca3Al2F14 + CaF2 | APS 11-BM 放射光 0.4139 Å | ★★★ | 放射光、2 相、異方性変位パラメータ |
-| `pdf/` | Ni | X 線・中性子の G(r) | — | Phase 5(PDF)用。まだ使わない |
+| `pdf/` | Ni | X 線・中性子の G(r) | ★ | PDF(実空間フィット)の最初の練習。pdffit2 との突き合わせにも使う |
 | `kaolinite/` | カオリナイト | Bruker .raw(2 レンジ) | — | 複数スキャンの .raw 読み込みテスト用(積層不整のため Rietveld には不向き) |
 
 ## 出典とライセンス
@@ -89,9 +89,23 @@ GSAS-II チュートリアル "TOF-CW Joint Refinement" の 11-BM データ。λ
 点数が多く反射も多いので、まず 2θ の上限を 30° にして試す(スクリプト例は `x_max=30`)。
 参考結果(0.5–30°、標準の手順、2 相): Rwp = 8.2%、χ² = 8.3、NAC R_Bragg = 7.7%、CaF2 R_Bragg = 28.5%(少量相)、重量分率 NAC 98.8 / CaF2 1.2 wt%。55 変数で約 50 秒。
 
-## pdf/ — Ni の PDF データ(Phase 5 用)
+## pdf/ — Ni の PDF データ
 
-GSAS-II チュートリアル "PDFfit-I" の Ni の G(r)(X 線は APS 11-ID-B、中性子は NOMAD)と、fullrmc チュートリアルの Ni.cif。実空間フィット(PDFfit2 相当)を実装するときの検証に使う。
+GSAS-II チュートリアル "PDFfit-I" の Ni の G(r)(X 線は APS 11-ID-B、Q_max = 40 Å⁻¹。中性子は SNS NOMAD、Q_max = 27 Å⁻¹)と、fullrmc チュートリアルの Ni.cif。
+
+| ファイル | 内容 |
+|---|---|
+| `Ni-xray.gr` | X 線 PDF(PDFgetX2 形式、r = 0〜20 Å、0.01 Å 刻み、dG 付き) |
+| `Ni-neutron.gr` | 中性子 PDF(PDFgetN 形式、同) |
+| `Ni.cif` | 出発構造(Fm-3m、a = 3.5239 Å) |
+
+GUI では「PDF データを読み込む」で .gr を選び、放射線と Q_max(ヘッダから自動)、
+Q_damp の初期値(X 線 0.06、中性子 0.02 程度)を入れて「PDF の標準手順」を実行する。
+参考結果(`examples/refine_sample_data.py ni_pdf`、r = 1.5〜20 Å、5 変数、約 2 秒):
+X 線 Rw = 7.1%、a = 3.5316 Å、U_iso = 0.0055 Å²、δ2 = 2.2 Å²、Q_damp = 0.063 Å⁻¹。
+中性子 Rw = 6.5%、a = 3.5291 Å、U_iso = 0.0049 Å²、δ2 = 2.3 Å²、Q_damp = 0.034 Å⁻¹。
+diffpy.pdffit2 1.6.0 と全パラメータが 0.2σ 以内で一致する(`docs/validation/phase5_pdf.md`)。
+X 線と中性子で a が 0.0025 Å 違うのは、それぞれの装置の Q 校正の差(PDFgui チュートリアルでも同じ)。
 
 ## cif/
 

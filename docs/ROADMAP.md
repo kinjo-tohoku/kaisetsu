@@ -12,7 +12,7 @@
 | Phase 2 パターン計算 | 完了 (2026-10-11) | 5 ケースで GSAS-II の ycalc と相対差 1e-4 以下。記録: `docs/validation/phase2_pattern.md` |
 | Phase 3 精密化エンジン | 完了 (2026-10-11) | PbSO4 X線・中性子・同時で GSAS-II と Rwp 差 0.2% 以内、構造パラメータ 3σ 以内。記録: `docs/validation/phase3_refinement.md`。ピーク計算は numba 並列の一括カーネル + 特異点除去した FCJ 積分(1 パターン 10〜20 ms)。残課題: ヤコビアンの並列化・解析微分、Pawley 法 |
 | Phase 4 GUI | v1 完了 (2026-10-11) | PySide6: プロジェクトツリー・パターン図・パラメータ表・ログ、装置プリセット、精密化スレッド(中止可)、標準レシピ、ウィザード、保存・CSV/CIF 出力。`docs/user-guide/getting-started.md`。残課題: 構造の 3D 表示、複数相の相分率表示、英語化、PyInstaller 配布、身内での試用 |
-| Phase 5 PDF | 未着手 | |
+| Phase 5 PDF | 完了 (2026-10-11) | 5b 実空間フィット(PDFfit2 の定式化: δ1/δ2、Q_damp/Q_broad、球状粒子、Q_max 終端効果、異方性 U)は diffpy.pdffit2 1.6.0 と Ni の X 線・中性子で全パラメータ 0.2σ 以内、Rw 一致。5a I(Q)→G(r) は PDFgetX3 型のアドホック多項式補正(容器差引・偏光・吸収・Lorch 窓)。Rietveld と同じ `Project` / `ParameterSet` に `g{i}:` のデータセットとして入り、粉末との同時精密化も可。記録: `docs/validation/phase5_pdf.md`。残課題: Compton 散乱の明示的な補正(表が必要)、GSAS-II の PDF 出力との比較 |
 | Phase 6 MEM | 未着手 | |
 
 ---
