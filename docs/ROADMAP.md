@@ -226,7 +226,7 @@ Python: `requires-python >= 3.12`。ローカル開発は 3.14(全依存が解�
 
 ### Phase 7 以降(将来)
 
-- TOF 中性子: 実装済み(`pattern/tof.py`、`profile/tof_profile.py`。GSAS type 3 相当の閉形式、GSAS-II の POWGEN データで積分強度 1% 一致。記録: `docs/validation/phase7_tof.md`)。波長依存の円筒吸収(μR ∝ λ)と Sabine 消衰(CW でも使える、GSAS-II の `GetPwdrExt` と一致)も実装済み。複数バンクの一括読み込みは未実装。
+- TOF 中性子: 実装済み(`pattern/tof.py`、`profile/tof_profile.py`。GSAS type 3 相当の閉形式、GSAS-II の POWGEN データで積分強度 1% 一致。記録: `docs/validation/phase7_tof.md`)。波長依存の円筒吸収(μR ∝ λ)と Sabine 消衰(CW でも使える、GSAS-II の `GetPwdrExt` と一致)も実装済み。複数バンクの一括読み込み(GUI の「すべてのバンク」)も可能。
 - 磁気構造(中性子)。
 - 微細構造: 歪みの異方性(Stephens 型)は実装済み(`profile/stephens.py`、ラウエ群の拘束は射影で自動)。
   結晶子サイズの一軸異方性も実装済み(`PhaseContribution.size_axis` / `size_axial_um`、
@@ -270,7 +270,7 @@ Phase 0〜6 は完了(進捗表参照)。この先の優先順位:
 
 1. 身内 2〜3 名での試用と、つまずいた点の修正(入門ガイドの改訂)。研究室の回折装置のファイルを 1 つ受け取って
    リーダーを確認する(Bruker RAW4.00 は合成テストのみ)。
-2. TOF 中性子は実装済み(吸収・消衰も)。残りは複数バンクの一括読み込み、GSAS-II との精密化結果の比較。
+2. TOF 中性子は実装済み(吸収・消衰・複数バンクも)。残りは GSAS-II との精密化結果の比較。
 3. Dysnomia との MEM の数値比較(例題データが要る)。磁気構造。結晶子サイズの楕円体モデル。
 4. 説明文・ダイアログ本文の英語化(主要メニューは `--lang en` で済んでいる)、PyInstaller 配布物の実機確認、
    コード署名。

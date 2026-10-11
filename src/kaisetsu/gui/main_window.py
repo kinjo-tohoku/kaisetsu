@@ -658,28 +658,55 @@ class MainWindow(QMainWindow):
         sample: SampleGeometry | None = None,
         n_background: int = 8,
         bank: int | None = None,
+        all_banks: bool = False,
     ) -> None:
-        kwargs: dict[str, object] = {}
-        if bank is not None:
-            kwargs["bank"] = bank
-        elif instrument is None:
+        """回折データを読み込んでヒストグラムを追加する。
+
+        複数 BANK の GSAS ファイルは、bank で番号を指定するか、all_banks=True でバンクごとに
+        ヒストグラムを追加する(装置・試料は複製する。TOF ならバンクごとに装置ダイアログを出す)。
+        どちらも無く instrument も無いときは選択ダイアログを出す。
+        """
+        if all_banks or (bank is None and instrument is None):
             from kaisetsu.io.readers import bank_count
 
             n_banks = bank_count(path)
             if n_banks > 1:
-                from PySide6.QtWidgets import QInputDialog
+                if not all_banks:
+                    from PySide6.QtWidgets import QInputDialog
 
-                chosen, ok = QInputDialog.getInt(
-                    self,
-                    "バンクの選択",
-                    f"このファイルには {n_banks} 個の BANK があります。読み込む番号:",
-                    1,
-                    1,
-                    n_banks,
-                )
-                if not ok:
+                    items = [f"バンク {k}" for k in range(1, n_banks + 1)] + [
+                        "すべてのバンク(バンクごとにヒストグラムを追加)"
+                    ]
+                    item, ok = QInputDialog.getItem(
+                        self,
+                        "バンクの選択",
+                        f"このファイルには {n_banks} 個の BANK があります:",
+                        items,
+                        0,
+                        False,
+                    )
+                    if not ok:
+                        return
+                    idx = items.index(item)
+                    if idx < n_banks:
+                        bank = idx + 1
+                    else:
+                        all_banks = True
+                if all_banks:
+                    from dataclasses import replace
+
+                    for k in range(1, n_banks + 1):
+                        self.load_data_file(
+                            path,
+                            replace(instrument) if instrument is not None else None,
+                            replace(sample) if sample is not None else None,
+                            n_background,
+                            bank=k,
+                        )
                     return
-                kwargs["bank"] = chosen
+        kwargs: dict[str, object] = {}
+        if bank is not None:
+            kwargs["bank"] = bank
         try:
             data = read_powder_data(path, **kwargs)
         except Exception as exc:
@@ -691,6 +718,8 @@ class MainWindow(QMainWindow):
 
             guess = _guess_tof_instrument(data.metadata)
             tdlg = TOFInstrumentDialog(guess, self, sample)
+            if bank is not None:
+                tdlg.setWindowTitle(f"TOF 装置パラメータ(バンク {bank})")
             if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
                 return
             instrument = tdlg.result_instrument()
@@ -713,8 +742,11 @@ class MainWindow(QMainWindow):
         for pc in h.contributions.values():
             pc.scale = self._initial_scale(h)
         self.project.build_parameters()
+        unit = " μs" if data.metadata.get("xunit") == "tof_us" else "°"
+        where = f" バンク {bank}" if bank is not None else ""
         self.log(
-            f"データを読み込みました: {path} ({len(data)} 点, {data.x[0]:.3f}–{data.x[-1]:.3f}°)"
+            f"データを読み込みました: {path}{where} "
+            f"({len(data)} 点, {data.x[0]:.3f}–{data.x[-1]:.3f}{unit})"
         )
         self._refresh_all()
 

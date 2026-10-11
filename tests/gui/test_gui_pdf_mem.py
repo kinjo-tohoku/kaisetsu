@@ -196,6 +196,56 @@ def test_phase_dialog_modes_and_aniso(qtbot, data_dir: Path) -> None:
     assert "h0:PbSO4:sh2_1" not in win.project.params.names()
 
 
+def test_load_all_banks(qtbot, tmp_path: Path, monkeypatch) -> None:
+    """複数 BANK の GSAS ファイルを「すべてのバンク」で読むとバンクごとにヒストグラムが増える。"""
+    text = (
+        "two banks\n"
+        "BANK 1 4 1 CONST 2400 5 0 0\n"
+        " 1   100 1   200 1   300 1   400\n"
+        "BANK 2 4 1 CONST 3000 5 0 0\n"
+        " 1   150 1   250 1   350 1   450\n"
+    )
+    path = tmp_path / "two.gsa"
+    path.write_text(text, encoding="latin-1")
+    win = MainWindow()
+    qtbot.addWidget(win)
+    # 読み込みエラーのモーダルで止まらないように、エラーは例外にする
+    from PySide6.QtWidgets import QMessageBox
+
+    def _raise(*a: object, **k: object) -> None:
+        raise AssertionError(f"QMessageBox: {a[2:]}")
+
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(_raise))
+    inst = CWInstrument(Radiation.xray(1.5406), w=0.004)
+    # 装置を渡した場合: all_banks でバンクごとに複製される
+    win.load_data_file(str(path), inst, SampleGeometry(), all_banks=True)
+    assert len(win.project.histograms) == 2
+    h0, h1 = win.project.histograms
+    assert h0.instrument is not h1.instrument
+    assert h0.data.x[0] == pytest.approx(24.0) and h1.data.x[0] == pytest.approx(30.0)
+    assert "h1:inst:w" in win.project.params.names()
+    # 対話の場合: 選択ダイアログで「すべてのバンク」を選ぶと装置ダイアログがバンクごとに出る
+    from PySide6.QtWidgets import QInputDialog
+
+    from kaisetsu.gui import main_window as mw
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        staticmethod(lambda *a, **k: ("すべてのバンク(バンクごとにヒストグラムを追加)", True)),
+    )
+    monkeypatch.setattr(
+        mw.InstrumentDialog, "exec", lambda self: mw.InstrumentDialog.DialogCode.Accepted
+    )
+    win.load_data_file(str(path))
+    assert len(win.project.histograms) == 4
+    # 番号を選んだ場合は 1 つだけ
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("バンク 2", True)))
+    win.load_data_file(str(path))
+    assert len(win.project.histograms) == 5
+    assert win.project.histograms[-1].data.x[0] == pytest.approx(30.0)
+
+
 def test_mem_dialog_runs_small_grid(qtbot, data_dir: Path, tmp_path: Path) -> None:
     win = _pbso4_window(qtbot, data_dir)
     # 粗い精密化(背景・スケール・格子・ゼロ点・幅)で MEM の入力を作る
