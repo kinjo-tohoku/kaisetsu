@@ -57,6 +57,17 @@ def main() -> int:
     ap.add_argument("--simulate", nargs=3, type=float, metavar=("TMIN", "TMAX", "TSTEP"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--phase-name", default="phase")
+    ap.add_argument(
+        "--set-inst", action="append", default=[], metavar="KEY=VAL",
+        help="装置パラメータの上書き(例 SH/L=0.05, X=1.0, Zero=0.02)",
+    )  # fmt: skip
+    ap.add_argument(
+        "--set-sample", action="append", default=[], metavar="KEY=VAL",
+        help="試料パラメータの上書き(例 Shift=100, Absorption=0.5)",
+    )  # fmt: skip
+    ap.add_argument("--md", nargs=4, type=float, metavar=("R", "H", "K", "L"), help="March-Dollase")
+    ap.add_argument("--size", type=float, help="等方的結晶子サイズ [μm]")
+    ap.add_argument("--mustrain", type=float, help="等方的微小歪み")
     args = ap.parse_args()
     if not args.data and not args.simulate:
         ap.error("--data か --simulate のどちらかが必要です")
@@ -84,6 +95,32 @@ def main() -> int:
             "sim", os.path.abspath(args.instprm), tmin, tmax, Tstep=tstep
         )
     phase = gpx.add_phase(os.path.abspath(args.cif), phasename=args.phase_name, histograms=[hist])
+
+    # ---- パラメータの上書き ---------------------------------------------
+    inst_params = hist.data["Instrument Parameters"][0]
+    for item in args.set_inst:
+        key, val = item.split("=", 1)
+        if key not in inst_params:
+            raise SystemExit(f"装置パラメータ {key!r} がありません: {list(inst_params)}")
+        inst_params[key][1] = float(val)
+    sample_params = hist.data["Sample Parameters"]
+    for item in args.set_sample:
+        key, val = item.split("=", 1)
+        if key not in sample_params:
+            raise SystemExit(f"試料パラメータ {key!r} がありません: {list(sample_params)}")
+        if isinstance(sample_params[key], list):
+            sample_params[key][0] = float(val)
+        else:
+            sample_params[key] = float(val)
+    hap = phase.data["Histograms"][hist.name]
+    if args.md:
+        hap["Pref.Ori."][1] = float(args.md[0])
+        hap["Pref.Ori."][3] = [int(v) for v in args.md[1:]]
+    if args.size is not None:
+        hap["Size"][1][0] = float(args.size)
+    if args.mustrain is not None:
+        hap["Mustrain"][1][0] = float(args.mustrain)
+
     # 0 サイクル: 計算パターンと反射リストを得るだけ。何か 1 つ精密化フラグが必要。
     hist.set_refinements({"Sample Parameters": ["Scale"]})
     gpx.set_Controls("cycles", 0)

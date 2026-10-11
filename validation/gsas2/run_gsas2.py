@@ -40,6 +40,57 @@ CASES: dict[str, dict[str, object]] = {
         "instprm": DATA / "pbso4" / "INST_XRY.PRM",
         "phase_name": "diamond",
     },
+    # 非対称・ローレンツ幅・試料変位・選択配向・偏光を効かせたケース(Phase 2 の検証用)
+    "pbso4_xray_asym": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": DATA / "pbso4" / "PBSO4.XRA",
+        "instprm": DATA / "pbso4" / "INST_XRY.PRM",
+        "phase_name": "PbSO4",
+        "extra": [
+            "--set-inst",
+            "SH/L=0.05",
+            "--set-inst",
+            "X=1.0",
+            "--set-inst",
+            "Y=3.0",
+            "--set-inst",
+            "Zero=0.02",
+            "--set-inst",
+            "Polariz.=0.5",
+            "--set-sample",
+            "Shift=100",
+            "--md",
+            "0.8",
+            "0",
+            "0",
+            "1",
+            "--size",
+            "0.3",
+            "--mustrain",
+            "2000",
+        ],
+    },
+    # 中性子: 円筒試料の吸収と Debye-Scherrer の試料変位
+    "pbso4_neutron_abs": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": DATA / "pbso4" / "PBSO4.CWN",
+        "instprm": DATA / "pbso4" / "inst_d1a.prm",
+        "phase_name": "PbSO4",
+        "extra": [
+            "--set-inst",
+            "X=2.0",
+            "--set-inst",
+            "Y=4.0",
+            "--set-inst",
+            "SH/L=0.03",
+            "--set-sample",
+            "Absorption=0.5",
+            "--set-sample",
+            "DisplaceX=100",
+            "--set-sample",
+            "DisplaceY=-50",
+        ],
+    },
 }
 
 
@@ -74,6 +125,7 @@ def run_case(name: str) -> Path:
         cmd += ["--data", str(case["data"])]
     else:
         cmd += ["--simulate", *(str(v) for v in case["simulate"])]  # type: ignore[union-attr]
+    cmd += [str(v) for v in case.get("extra", [])]  # type: ignore[union-attr]
     env = dict(os.environ)
     # conda 環境の DLL を見つけられるように
     env["PATH"] = os.pathsep.join(

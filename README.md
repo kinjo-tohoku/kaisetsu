@@ -7,8 +7,11 @@
 
 ## 現在の状態
 
-- Phase 0(基盤)完了、Phase 1(結晶学コア: 格子・空間群・CIF・散乱因子・反射生成・構造因子)完了。
-- GSAS-II 5.7.4 との突き合わせ結果: [docs/validation/phase1_structure_factors.md](docs/validation/phase1_structure_factors.md)
+- Phase 0(基盤)、Phase 1(結晶学コア: 格子・空間群・CIF・散乱因子・反射生成・構造因子)、
+  Phase 2(パターン計算: TCH pseudo-Voigt、FCJ 非対称、Kα 二重線、LP・選択配向・吸収・試料変位、
+  Chebyshev 背景、GSAS 形式リーダー)が完了。
+- GSAS-II 5.7.4 との突き合わせ結果:
+  [Phase 1](docs/validation/phase1_structure_factors.md)、[Phase 2](docs/validation/phase2_pattern.md)
 
 ## 使い方(開発者向け)
 
@@ -24,15 +27,19 @@ Windows のコンソールで日本語が化ける場合は `$env:PYTHONUTF8 = "
 ### スクリプト例
 
 ```python
+import numpy as np
 from kaisetsu.crystal import Structure
-from kaisetsu.reflections import generate_reflections, structure_factors
+from kaisetsu.io import read_powder_data
+from kaisetsu.pattern import CWInstrument, PhaseContribution, SampleGeometry, calculate_pattern
+from kaisetsu.profile import ChebyshevBackground
 from kaisetsu.scattering import Radiation
 
 st = Structure.from_cif("data/public/pbso4/PbSO4-Wyckoff.cif")
-refl = generate_reflections(st.lattice, st.spacegroup, d_min=1.0)
-f = structure_factors(st, refl.hkl, Radiation.characteristic("Cu"))
-for hkl, d, m, f2 in zip(refl.hkl, refl.d, refl.multiplicity, abs(f) ** 2):
-    print(hkl, f"d={d:.4f}", f"m={m}", f"|F|^2={f2:.1f}")
+data = read_powder_data("data/public/pbso4/PBSO4.XRA")  # GSAS 形式 / xy / xye
+inst = CWInstrument(Radiation.characteristic("Cu"), w=0.003, s_l=0.02, h_l=0.02, polarization=0.7)
+bkg = ChebyshevBackground([150.0], data.x[0], data.x[-1])
+res = calculate_pattern(data.x, [PhaseContribution(st, scale=2.0)], inst, SampleGeometry(), bkg)
+print(res.y_calc[:5], res.peaks[0].two_theta[:3])
 ```
 
 ## ライセンス
