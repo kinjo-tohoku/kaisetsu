@@ -9,12 +9,16 @@
 
 - Phase 0(基盤)、Phase 1(結晶学コア: 格子・空間群・CIF・散乱因子・反射生成・構造因子)、
   Phase 2(パターン計算: TCH pseudo-Voigt、FCJ 非対称、Kα 二重線、LP・選択配向・吸収・試料変位、
-  Chebyshev 背景、GSAS 形式リーダー)、Phase 3(精密化エンジン: パラメータと対称拘束、
-  最小二乗、R 因子、Le Bail、レシピ、プロジェクトファイル、スクリプト API)が完了。
-- GSAS-II 5.7.4 との突き合わせ結果:
+  Chebyshev 背景、GSAS/Bruker/Rigaku/PANalytical リーダー)、Phase 3(精密化エンジン: パラメータと対称拘束、
+  最小二乗、R 因子、Le Bail、Pawley、レシピ、プロジェクトファイル、スクリプト API)、
+  Phase 4(日本語 GUI)、Phase 5(PDF: I(Q)→G(r) 変換と PDFfit2 相当の実空間フィット)、
+  Phase 6(MEM 電子密度・核密度、MPF、VESTA 出力)が完了。
+- 外部ソフトとの突き合わせ: GSAS-II 5.7.4(Rietveld)
   [Phase 1](docs/validation/phase1_structure_factors.md)、[Phase 2](docs/validation/phase2_pattern.md)、
-  [Phase 3](docs/validation/phase3_refinement.md)
-- 実行例: `uv run python examples/refine_pbso4.py`(PbSO4 の X 線データを標準レシピで精密化)
+  [Phase 3](docs/validation/phase3_refinement.md)、diffpy.pdffit2 1.6.0(PDF)
+  [Phase 5](docs/validation/phase5_pdf.md)、MEM の合成・実データ検証 [Phase 6](docs/validation/phase6_mem.md)
+- 実行例: `uv run python examples/refine_sample_data.py fap|lab6|garnet|nac|ni_pdf`、
+  `uv run python examples/mem_pbso4.py --mpf 2`
 
 ## 使い方(開発者向け)
 
@@ -61,6 +65,25 @@ proj.refine()
 `h0:bkg:0..`、`h0:相:scale|md_r|size|strain` の形で、glob(`*`)で選べる。
 特殊位置の座標拘束(例 y = x、y = 1/4 固定)と晶系による格子定数拘束は自動で付く。
 
+### スクリプト例(PDF フィットと MEM)
+
+```python
+from kaisetsu.api import Project, Structure, mem_from_project, pdf_recipe, read_pdf_data
+from kaisetsu.mem import write_ccp4
+
+# PDF: Ni の G(r) を PDFfit2 と同じ定式化でフィット
+proj = Project("Ni PDF")
+proj.add_phase(Structure.from_cif("data/public/pdf/Ni.cif"), name="Ni")
+proj.add_pdf(read_pdf_data("data/public/pdf/Ni-xray.gr"), "xray", qdamp=0.06, r_min=1.5, r_max=20)
+pdf_recipe("Ni", "g0").run(proj)      # スケール → 格子 → U と δ2 → Q_damp → 座標 → 最終
+print(proj.summary())                 # Rw ≈ 7.1%、a = 3.5316 Å
+
+# MEM: Rietveld 済みのプロジェクト(上の PbSO4)から電子密度
+mem = mem_from_project(proj_rietveld, hist=0, phase="PbSO4", grid=(64, 40, 54))
+print(mem.chi2, mem.maxima(5))        # C ≈ 1、極大は Pb の位置
+write_ccp4(mem.density, mem.lattice, mem.spacegroup, "pbso4_mem.ccp4")  # VESTA で開く
+```
+
 ## ライセンス
 
 未定(研究室内利用の段階)。依存ライブラリはすべて商用利用可能なライセンス(BSD / MIT / MPL / LGPL / PSF)のものに限定している。散乱因子テーブルは cctbx(BSD-3)から出典を明記して取り込んだ(`tools/gen_scattering_tables.py`)。
@@ -75,4 +98,6 @@ uv run kaisetsu-gui        # または uv run python -m kaisetsu.gui
 「データ → はじめての精密化(ウィザード)」で、回折データ・CIF・装置プリセットを選ぶだけで
 標準の手順(スケールと背景 → 格子定数 → ピーク幅 → 原子座標 → 変位パラメータ)を実行できる。
 パラメータ表では精密化する量をチェックで選び、F9 で精密化、F5 で再計算、Esc で中止。
+PDF データの読み込みと標準手順、I(Q) → G(r) の変換、MEM(断面表示、VESTA への書き出し、MPF)、
+相の設定(Le Bail / Pawley、選択配向軸、異方性 U)、構造の 3D 表示、χ² の推移、図の PNG/SVG 保存も GUI から使える。
 使い方の詳細は [docs/user-guide/getting-started.md](docs/user-guide/getting-started.md)。

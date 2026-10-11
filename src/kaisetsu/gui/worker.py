@@ -21,12 +21,15 @@ class RefineWorker(QObject):
 
     Signals:
         progress(str): ログに出す 1 行
-        iteration(int, float, object): 反復番号、χ²、ヒストグラムごとの (x, y_calc, y_bkg) のリスト
+        iteration(int, float, object): 反復番号、χ²、曲線
+            {"hist": [(x, y_calc, y_bkg), ...], "pdf": [(r, g_calc), ...]}
+        step_started(str): レシピの段階が始まった(χ² 推移の区切り用)
         finished(bool, str): 成否とメッセージ
     """
 
     progress = Signal(str)
     iteration = Signal(int, float, object)
+    step_started = Signal(str)
     finished = Signal(bool, str)
 
     def __init__(
@@ -42,14 +45,20 @@ class RefineWorker(QObject):
     def cancel(self) -> None:
         self._cancel = True
 
-    def _curves(self) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        out = []
+    def _curves(self) -> dict[str, list[tuple[np.ndarray, ...]]]:
+        hist: list[tuple[np.ndarray, ...]] = []
         for h in self.project.histograms:
             r = h.result
             if r is None:
                 continue
-            out.append((r.x, r.y_calc.copy(), r.y_background.copy()))
-        return out
+            hist.append((r.x, r.y_calc.copy(), r.y_background.copy()))
+        pdf: list[tuple[np.ndarray, ...]] = []
+        for g in self.project.pdf_datasets:
+            pr = g.result
+            if pr is None:
+                continue
+            pdf.append((pr.r, pr.g_calc.copy()))
+        return {"hist": hist, "pdf": pdf}
 
     def _on_iteration(self, iteration: int, chi2: float) -> None:
         prefix = f"[{self._step_name}] " if self._step_name else ""
@@ -60,8 +69,9 @@ class RefineWorker(QObject):
 
     def _on_step_done(self, step: Any, fit: Any) -> None:
         rf = self.project.rfactors()["total"]
+        label = "Rw" if self.project.pdf_datasets and not self.project.histograms else "Rwp"
         self.progress.emit(
-            f"[{step.name}] 完了: 変数 {fit.n_params}  Rwp = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}"
+            f"[{step.name}] 完了: 変数 {fit.n_params}  {label} = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}"
         )
         if self._cancel:
             raise RefinementCancelled()
@@ -74,6 +84,7 @@ class RefineWorker(QObject):
                 for step in self.recipe.steps:
                     self._step_name = step.name
                     self.progress.emit(f"[{step.name}] 開始")
+                    self.step_started.emit(step.name)
                     Recipe(self.recipe.name, [step]).run(
                         self.project,
                         reset=False,
@@ -86,7 +97,8 @@ class RefineWorker(QObject):
             else:
                 self.project.refine(max_cycles=self.max_cycles, progress=self._on_iteration)
             rf = self.project.rfactors()["total"]
-            self.finished.emit(True, f"完了: Rwp = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}")
+            label = "Rw" if self.project.pdf_datasets and not self.project.histograms else "Rwp"
+            self.finished.emit(True, f"完了: {label} = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}")
         except RefinementCancelled:
             self.finished.emit(False, "中止しました(途中までの値が入っています)")
         except Exception as exc:

@@ -11,9 +11,9 @@
 | Phase 1 結晶学コア | 完了 (2026-10-11) | 反射リスト完全一致、\|F\|^2 一致。記録: `docs/validation/phase1_structure_factors.md` |
 | Phase 2 パターン計算 | 完了 (2026-10-11) | 5 ケースで GSAS-II の ycalc と相対差 1e-4 以下。記録: `docs/validation/phase2_pattern.md` |
 | Phase 3 精密化エンジン | 完了 (2026-10-11) | PbSO4 X線・中性子・同時で GSAS-II と Rwp 差 0.2% 以内、構造パラメータ 3σ 以内。記録: `docs/validation/phase3_refinement.md`。ピーク計算は numba 並列の一括カーネル + 特異点除去した FCJ 積分(1 パターン 10〜20 ms)。残課題: ヤコビアンの並列化・解析微分、Pawley 法 |
-| Phase 4 GUI | v1 完了 (2026-10-11) | PySide6: プロジェクトツリー・パターン図・パラメータ表・ログ、装置プリセット、精密化スレッド(中止可)、標準レシピ、ウィザード、保存・CSV/CIF 出力。`docs/user-guide/getting-started.md`。残課題: 構造の 3D 表示、複数相の相分率表示、英語化、PyInstaller 配布、身内での試用 |
+| Phase 4 GUI | v2 (2026-10-11) | PySide6: プロジェクトツリー・パターン図・パラメータ表・ログ、装置プリセット、精密化スレッド(中止可)、標準レシピ、ウィザード、保存・CSV/CIF 出力。v2 で追加: PDF 表示と読み込み/変換/標準手順、MEM ダイアログ(断面、VESTA 出力、MPF)、相の設定(Le Bail/Pawley、選択配向軸、異方性 U、Brindley)、構造 3D 表示(QPainter)、χ² 推移、図の PNG/SVG 保存、背景の種類(Chebyshev/固定点)とハンプ、Kβ。PyInstaller の spec と build スクリプト(`packaging/`)。`docs/user-guide/getting-started.md`。残課題: 英語化(tr() 未使用)、身内での試用、逐次精密化の GUI |
 | Phase 5 PDF | 完了 (2026-10-11) | 5b 実空間フィット(PDFfit2 の定式化: δ1/δ2、Q_damp/Q_broad、球状粒子、Q_max 終端効果、異方性 U)は diffpy.pdffit2 1.6.0 と Ni の X 線・中性子で全パラメータ 0.2σ 以内、Rw 一致。5a I(Q)→G(r) は PDFgetX3 型のアドホック多項式補正(容器差引・偏光・吸収・Lorch 窓)。Rietveld と同じ `Project` / `ParameterSet` に `g{i}:` のデータセットとして入り、粉末との同時精密化も可。記録: `docs/validation/phase5_pdf.md`。残課題: Compton 散乱の明示的な補正(表が必要)、GSAS-II の PDF 出力との比較 |
-| Phase 6 MEM | 未着手 | |
+| Phase 6 MEM | 完了 (2026-10-11) | `kaisetsu.mem`: FFT で F を計算する MEM(L-BFGS、変数 v = 2√m、λ は割線法で C = 1 に合わせる)、Sakata-Sato の ZSPA(検算用)、負の散乱長の 2 チャンネル(正負エントロピーで 1 変数に還元)、対称操作で反射を展開、CCP4/XPLOR/VESTA grd 書き出し、断面・線分。Rietveld 分配の F_obs と σ から MEM を作る `mem_from_project`、MPF(`run_mpf`: MEM の |F| を固定した表でパターンフィッティング→再分配→再 MEM)。Pawley 法(`start_pawley`: 残差評価ごとに強度を非負線形最小二乗で解く、完全重なりは現在比で分配、σ と相関)。検証: NaCl・ルチルの合成 F で原子位置の極大と電子数を回収、PbSO4 実データで Pb に最大密度。記録: `docs/validation/phase6_mem.md`。残課題: 重なり反射の G 拘束、Dysnomia との数値比較 |
 
 ---
 

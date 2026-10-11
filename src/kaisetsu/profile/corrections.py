@@ -166,3 +166,28 @@ def debye_scherrer_shift(
     return np.asarray(
         np.degrees(-(displace_x_mm * np.cos(tt) + displace_y_mm * np.sin(tt)) / radius_mm)
     )
+
+
+def brindley_factor(x: npt.ArrayLike, n_points: int = 200) -> FloatArray:
+    """Brindley の微小吸収因子 τ(x)、x = (μ_p - μ̄) R(無次元)。
+
+    球状粒子を仮定し、散乱点を通るビーム方向の弦長 ℓ(ρ) = 2R sqrt(1 - (ρ/R)²) に沿った
+    吸収差 exp(-(μ_p - μ̄) ℓ) を粒子体積で平均する:
+
+        τ(x) = 3 ∫_0^1 u sqrt(1 - u²) exp(-2 x sqrt(1 - u²)) du
+
+    x > 0(周囲より吸収が強い相)で τ < 1 となり、その相の見かけの強度が下がる。
+    Brindley の表(2θ 依存を含む)との差は数 % 以内。
+
+    出典: G. W. Brindley, Phil. Mag. 36, 347-369 (1945);
+          J. C. Taylor & C. E. Matulis, J. Appl. Cryst. 24, 14-17 (1991)。
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=np.float64))
+    # u = sin t と置換して端点の特異性を無くす: 3 ∫_0^{π/2} sin t cos²t exp(-2 x cos t) dt
+    nodes, weights = np.polynomial.legendre.leggauss(min(max(n_points // 4, 16), 128))
+    t = 0.25 * math.pi * (nodes + 1.0)  # [0, π/2]
+    wt = 0.25 * math.pi * weights
+    ct = np.cos(t)
+    integrand = np.sin(t)[None, :] * ct[None, :] ** 2 * np.exp(-2.0 * xa[:, None] * ct[None, :])
+    tau = 3.0 * (integrand @ wt)
+    return np.asarray(tau.reshape(np.shape(x)))

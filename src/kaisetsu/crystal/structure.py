@@ -125,6 +125,25 @@ class Structure:
         v = self.lattice.volume
         return self.cell_mass() / (AVOGADRO * v * 1e-24) if v > 0 else 0.0
 
+    def linear_absorption_coefficient(self, wavelength: float) -> float:
+        """X 線の線吸収係数 μ [1/cm](光電吸収のみ。Cromer-Liberman の f'' から)。
+
+        原子 1 個の光電吸収断面積 σ_a = 2 r_e λ f''(λ) を単位胞内で足し、体積で割る。
+        コンプトン散乱・弾性散乱の寄与(軽元素で数 %〜1 割)は含まない。
+
+        出典: International Tables Vol. C, Section 4.2.6(f'' と吸収の関係)。
+        """
+        from kaisetsu.scattering.xray import XrayScatteringFactors
+
+        xt = XrayScatteringFactors()
+        r_e = 2.8179403262e-5  # 古典電子半径 [Å]
+        total = 0.0
+        for s, m in zip(self.sites, self.multiplicities(), strict=True):
+            fpp = xt.anomalous(s.species, wavelength).imag
+            total += s.occupancy * float(m) * 2.0 * r_e * wavelength * fpp
+        v = self.lattice.volume
+        return (total / v) * 1.0e8 if v > 0 else 0.0  # 1/Å → 1/cm
+
     def formula_units(self) -> float:
         """最小公約の式単位数 Z の推定値(整数とは限らない)。"""
         counts = list(self.composition().values())

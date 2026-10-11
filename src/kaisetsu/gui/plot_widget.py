@@ -1,8 +1,9 @@
-"""パターン図(pyqtgraph)。観測・計算・差・背景・Bragg 位置のティック。"""
+"""パターン図(pyqtgraph)。観測・計算・差・背景・Bragg 位置のティック。PDF の G(r) 図。"""
 
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -11,10 +12,76 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from kaisetsu.pattern.calculator import PatternResult
 from kaisetsu.pattern.histogram import PowderData
+from kaisetsu.pdf.calculator import PDFResult
+from kaisetsu.pdf.data import PDFData
 
 pg.setConfigOptions(antialias=False, background="w", foreground="k")
 
 _TICK_COLORS = ["#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b"]
+
+
+def export_plot_image(plot: pg.PlotWidget, path: str | Path, width: int = 1600) -> Path:
+    """図を PNG / SVG / PDF に書き出す(拡張子で判定)。
+
+    PNG は pyqtgraph の ImageExporter(画面と同じ見た目)。SVG / PDF は曲線データを matplotlib で
+    描き直す(pyqtgraph の SVGExporter は記号付きの曲線で失敗することがあるため)。
+    """
+    p = Path(path)
+    item = plot.getPlotItem()
+    if p.suffix.lower() in (".svg", ".pdf"):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+
+        # 日本語の軸ラベル用に、入っている日本語フォントを優先する
+        available = {f.name for f in font_manager.fontManager.ttflist}
+        for name in ("Yu Gothic", "Meiryo", "MS Gothic", "Noto Sans CJK JP", "IPAexGothic"):
+            if name in available:
+                plt.rcParams["font.family"] = [name, "DejaVu Sans"]
+                break
+        plt.rcParams["axes.unicode_minus"] = False
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for curve in item.listDataItems():
+            x, y = curve.getData()
+            if x is None or len(x) == 0:
+                continue
+            opts = curve.opts
+            name = opts.get("name") or None
+            pen = opts.get("pen")
+            symbol = opts.get("symbol")
+            color = "k"
+            if pen is not None:
+                qc = pg.mkPen(pen).color()
+                color = (qc.redF(), qc.greenF(), qc.blueF())
+            elif opts.get("symbolPen") is not None:
+                qc = pg.mkPen(opts["symbolPen"]).color()
+                color = (qc.redF(), qc.greenF(), qc.blueF())
+            if pen is None and symbol is not None:
+                marker = {"+": "+", "o": "o", "|": "|", "x": "x"}.get(str(symbol), ".")
+                ax.plot(
+                    x, y, linestyle="none", marker=marker, markersize=3, color=color, label=name
+                )
+            else:
+                ax.plot(x, y, linewidth=0.8, color=color, label=name)
+        ax.set_xlabel(item.getAxis("bottom").labelText or "")
+        ax.set_ylabel(item.getAxis("left").labelText or "")
+        (x0, x1), (y0, y1) = item.vb.viewRange()
+        ax.set_xlim(x0, x1)
+        ax.set_ylim(y0, y1)
+        if any(c.opts.get("name") for c in item.listDataItems()):
+            ax.legend(loc="upper right", fontsize=8)
+        fig.tight_layout()
+        fig.savefig(str(p))
+        plt.close(fig)
+        return p
+    from pyqtgraph.exporters import ImageExporter
+
+    exporter = ImageExporter(item)
+    exporter.parameters()["width"] = width
+    exporter.export(str(p))
+    return p
 
 
 class PatternPlot(QWidget):
@@ -132,3 +199,144 @@ class PatternPlot(QWidget):
         if self._y.size == x.size:
             ymax = float(np.nanmax(self._y)) if self._y.size else 1.0
             self._diff.setData(x, self._y - y_calc - 0.12 * ymax)
+
+    def export_image(self, path: str | Path) -> Path:
+        return export_plot_image(self.plot, path)
+
+
+class PDFPlot(QWidget):
+    """G(r) の観測/計算/差を描くウィジェット。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.plot = pg.PlotWidget()
+        layout.addWidget(self.plot)
+        self.plot.setLabel("bottom", "r (Å)")
+        self.plot.setLabel("left", "G(r) (Å⁻²)")
+        self.plot.showGrid(x=True, y=True, alpha=0.2)
+        self.plot.addLegend(offset=(-10, 10))
+        self._obs = self.plot.plot(
+            [], [], pen=None, symbol="o", symbolSize=4, symbolPen=pg.mkPen("k"),
+            symbolBrush=None, name="観測 G(r)",
+        )  # fmt: skip
+        self._calc = self.plot.plot([], [], pen=pg.mkPen("r", width=1.3), name="計算")
+        self._diff = self.plot.plot([], [], pen=pg.mkPen("b", width=1), name="差")
+        self._range = pg.LinearRegionItem(brush=pg.mkBrush(0, 120, 255, 20), movable=False)
+        self._range.hide()
+        self.plot.addItem(self._range)
+        self._label = pg.TextItem(anchor=(0, 1), color="k")
+        self.plot.addItem(self._label, ignoreBounds=True)
+        self._proxy = pg.SignalProxy(
+            self.plot.scene().sigMouseMoved, rateLimit=30, slot=self._on_mouse
+        )
+        self._r = np.zeros(0)
+        self._g = np.zeros(0)
+        self._gcalc: np.ndarray | None = None
+
+    def set_data(self, data: PDFData | None, r_range: tuple[float, float] | None = None) -> None:
+        if data is None:
+            self._r = np.zeros(0)
+            self._g = np.zeros(0)
+            self._obs.setData([], [])
+            self.clear_calc()
+            self._range.hide()
+            return
+        self._r = data.r
+        self._g = data.g
+        self._obs.setData(data.r, data.g)
+        self.clear_calc()
+        if r_range is not None:
+            self._range.setRegion(r_range)
+            self._range.show()
+        self.plot.autoRange()
+
+    def clear_calc(self) -> None:
+        self._gcalc = None
+        self._calc.setData([], [])
+        self._diff.setData([], [])
+
+    def set_result(self, result: PDFResult, mask: np.ndarray | None = None) -> None:
+        self._gcalc = result.g_calc
+        self._calc.setData(result.r, result.g_calc)
+        if self._g.size == result.r.size:
+            span = float(np.nanmax(self._g) - np.nanmin(self._g)) if self._g.size else 1.0
+            diff = self._g - result.g_calc
+            if mask is not None:
+                diff = np.where(mask, diff, np.nan)
+            self._diff.setData(result.r, diff - 0.6 * span)
+
+    def update_curves(self, r: np.ndarray, g_calc: np.ndarray) -> None:
+        self._gcalc = g_calc
+        self._calc.setData(r, g_calc)
+        if self._g.size == r.size:
+            span = float(np.nanmax(self._g) - np.nanmin(self._g)) if self._g.size else 1.0
+            self._diff.setData(r, self._g - g_calc - 0.6 * span)
+
+    def _on_mouse(self, evt: tuple) -> None:  # type: ignore[type-arg]
+        pos = evt[0]
+        vb = self.plot.getPlotItem().vb
+        if not self.plot.sceneBoundingRect().contains(pos):
+            return
+        p = vb.mapSceneToView(pos)
+        x = float(p.x())
+        text = f"r = {x:.3f} Å"
+        if self._r.size:
+            i = int(np.clip(np.searchsorted(self._r, x), 0, len(self._r) - 1))
+            text += f"  観測 = {self._g[i]:.3f}"
+            if self._gcalc is not None and i < len(self._gcalc):
+                text += f"  計算 = {self._gcalc[i]:.3f}"
+        self._label.setText(text)
+        rng = vb.viewRange()
+        self._label.setPos(rng[0][0], rng[1][1])
+
+    def export_image(self, path: str | Path) -> Path:
+        return export_plot_image(self.plot, path)
+
+
+class HistoryPlot(QWidget):
+    """精密化の χ² の推移(反復ごと)。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.plot = pg.PlotWidget()
+        layout.addWidget(self.plot)
+        self.plot.setLabel("bottom", "反復")
+        self.plot.setLabel("left", "χ²")
+        self.plot.setLogMode(y=True)
+        self.plot.showGrid(x=True, y=True, alpha=0.2)
+        self._curve = self.plot.plot(
+            [], [], pen=pg.mkPen("#1f77b4", width=1.5), symbol="o", symbolSize=5,
+            symbolBrush="#1f77b4",
+        )  # fmt: skip
+        self._marks: list[pg.InfiniteLine] = []
+        self._values: list[float] = []
+
+    def clear(self) -> None:
+        self._values = []
+        self._curve.setData([], [])
+        for m in self._marks:
+            self.plot.removeItem(m)
+        self._marks.clear()
+
+    def append(self, chi2: float) -> None:
+        if chi2 > 0 and np.isfinite(chi2):
+            self._values.append(float(chi2))
+            self._curve.setData(np.arange(1, len(self._values) + 1), np.array(self._values))
+
+    def mark_step(self, label: str) -> None:
+        """レシピの段階の切れ目に縦線を入れる。"""
+        x = len(self._values) + 0.5
+        line = pg.InfiniteLine(
+            pos=x, angle=90, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine),
+            label=label, labelOpts={"position": 0.9, "color": "#444", "rotateAxis": (1, 0)},
+        )  # fmt: skip
+        self.plot.addItem(line)
+        self._marks.append(line)
+
+    @property
+    def values(self) -> list[float]:
+        return list(self._values)

@@ -101,6 +101,7 @@ def refine_least_squares(
     xtol: float = 1e-8,
     verbose: int = 0,
     progress: Callable[[int, float], None] | None = None,
+    jacobian_fn: Callable[[FloatArray], FloatArray] | None = None,
 ) -> FitResult:
     """ParameterSet の精密化変数を最小二乗で最適化する。
 
@@ -111,6 +112,8 @@ def refine_least_squares(
         ftol, xtol: 収束判定(scipy.optimize.least_squares に渡す)
         verbose: 0, 1, 2
         progress: 各反復後に (反復回数, χ²) で呼ばれる関数
+        jacobian_fn: 直近の残差(residual_fn の返り値)を受け取り、現在のパラメータでの
+            ヤコビアン (N_resid, N_free) を返す関数。None なら前進差分
     """
     free = params.free()
     if not free:
@@ -142,6 +145,10 @@ def refine_least_squares(
 
     def jac(x: FloatArray) -> FloatArray:
         base = fun(x)
+        if jacobian_fn is not None:
+            j = jacobian_fn(base)
+            params.set_vector(x)
+            return j
         j = numerical_jacobian(fun, x, steps, lower, upper, base)
         params.set_vector(x)  # fun の副作用でずれた値を戻す
         return j

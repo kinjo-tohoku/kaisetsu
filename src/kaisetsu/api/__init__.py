@@ -5,6 +5,7 @@ from kaisetsu.api import *
 
 from kaisetsu.crystal import AtomSite, Lattice, SpaceGroup, Structure
 from kaisetsu.io import read_powder_data
+from kaisetsu.mem import MEMInput, MEMResult, mem_from_project, run_mem, run_mpf
 from kaisetsu.pattern import (
     CWInstrument,
     PhaseContribution,
@@ -39,6 +40,8 @@ __all__ = [
     "GeometryKind",
     "HistogramEntry",
     "Lattice",
+    "MEMInput",
+    "MEMResult",
     "PDFData",
     "PDFEntry",
     "PDFPhase",
@@ -55,9 +58,12 @@ __all__ = [
     "TransformSettings",
     "calculate_pattern",
     "calculate_pdf",
+    "mem_from_project",
     "pdf_recipe",
     "read_pdf_data",
     "read_powder_data",
+    "run_mem",
+    "run_mpf",
     "standard_recipe",
     "transform",
 ]

@@ -1,13 +1,38 @@
-"""バックグラウンド関数。"""
+"""バックグラウンド関数。
+
+- Chebyshev 多項式(既定)
+- 固定点の線形補間(ユーザーが置いた点の高さを係数にする。急な立ち上がりや複雑な形に向く)
+- 非晶質ハンプ(ガウス関数)の追加項: 位置・幅・高さの 3 パラメータ
+
+どのモデルも `coefficients`(線形係数)、`order`、`basis(x)`(係数ごとの基底関数)、
+`__call__(x)` を持ち、精密化では係数が `h{i}:bkg:{k}` になる。
+"""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
 
 FloatArray = npt.NDArray[np.float64]
+
+
+class BackgroundModel(Protocol):
+    """線形係数で表せる背景モデル。"""
+
+    coefficients: FloatArray
+    x_min: float
+    x_max: float
+
+    @property
+    def order(self) -> int: ...
+
+    def __call__(self, x: npt.ArrayLike) -> FloatArray: ...
+
+    def basis(self, x: npt.ArrayLike) -> FloatArray: ...
 
 
 @dataclass
@@ -32,6 +57,10 @@ class ChebyshevBackground:
     def order(self) -> int:
         return len(self.coefficients)
 
+    @property
+    def kind(self) -> str:
+        return "chebyshev"
+
     def __call__(self, x: npt.ArrayLike) -> FloatArray:
         xa = np.asarray(x, dtype=np.float64)
         t = -1.0 + 2.0 * (xa - self.x_min) / (self.x_max - self.x_min)
@@ -44,40 +73,106 @@ class ChebyshevBackground:
         return np.asarray(np.polynomial.chebyshev.chebvander(t, self.order - 1))
 
 
-def snip_background(y: npt.ArrayLike, window: int, decreasing: bool = True) -> FloatArray:
-    """SNIP 法(Statistics-sensitive Non-linear Iterative Peak-clipping)による点ごとの背景。
+@dataclass
+class InterpolatedBackground:
+    """固定点 (x_k, c_k) の線形補間によるバックグラウンド。係数 c_k が各点の高さ。
 
-    LLS 変換 v = log(log(sqrt(y + 1) + 1) + 1) の上で、幅 m を 1 から window まで(または逆順に)
-    変えながら v_i ← min(v_i, (v_{i-m} + v_{i+m}) / 2) を繰り返し、逆変換して返す。
-    端から m 点以内はそのまま残すので、低角の立ち上がりのような端の構造を潰さない。
-
-    出典: C. G. Ryan et al., Nucl. Instrum. Methods B 34, 396-402 (1988);
-          M. Morháč et al., Nucl. Instrum. Methods A 401, 113-132 (1997)(減少窓の変種)
-
-    Args:
-        y: 観測強度(非負)
-        window: 最大の半幅(点数)。ピーク(または重なった束)の半幅より大きく取る。
-        decreasing: 真なら幅を window から 1 に減らしていく(端や谷の歪みが小さい)
+    端の外側は端の値で延長する。基底関数は帽子関数(三角形)。
     """
-    ya = np.maximum(np.asarray(y, dtype=np.float64), 0.0)
-    v = np.log(np.log(np.sqrt(ya + 1.0) + 1.0) + 1.0)
+
+    points_x: FloatArray = field(default_factory=lambda: np.array([0.0, 1.0]))
+    coefficients: FloatArray = field(default_factory=lambda: np.zeros(2))
+    x_min: float = 0.0
+    x_max: float = 1.0
+
+    def __post_init__(self) -> None:
+        self.points_x = np.asarray(self.points_x, dtype=np.float64).ravel()
+        self.coefficients = np.asarray(self.coefficients, dtype=np.float64).ravel()
+        if len(self.points_x) < 2 or np.any(np.diff(self.points_x) <= 0):
+            raise ValueError("固定点は昇順に 2 点以上必要です")
+        if len(self.coefficients) != len(self.points_x):
+            raise ValueError("固定点の数と係数の数が一致しません")
+        if self.x_max <= self.x_min:
+            self.x_min, self.x_max = float(self.points_x[0]), float(self.points_x[-1])
+
+    @property
+    def order(self) -> int:
+        return len(self.coefficients)
+
+    @property
+    def kind(self) -> str:
+        return "points"
+
+    def __call__(self, x: npt.ArrayLike) -> FloatArray:
+        xa = np.asarray(x, dtype=np.float64)
+        return np.asarray(np.interp(xa, self.points_x, self.coefficients))
+
+    def basis(self, x: npt.ArrayLike) -> FloatArray:
+        xa = np.asarray(x, dtype=np.float64).ravel()
+        n = self.order
+        out = np.zeros((len(xa), n))
+        for k in range(n):
+            e = np.zeros(n)
+            e[k] = 1.0
+            out[:, k] = np.interp(xa, self.points_x, e)
+        return out
+
+    @classmethod
+    def from_pattern(
+        cls, x: npt.ArrayLike, y: npt.ArrayLike, n_points: int = 10, window_deg: float = 2.0
+    ) -> InterpolatedBackground:
+        """観測から等間隔の固定点を置き、SNIP 包絡線の値を初期値にする。"""
+        xa = np.asarray(x, dtype=np.float64)
+        ya = np.asarray(y, dtype=np.float64)
+        n_points = max(int(n_points), 2)
+        step = float(np.median(np.diff(xa)))
+        window = int(max(3, min(round(window_deg / step), (len(xa) - 1) // 2)))
+        env = snip_background(_boxcar(ya, max(round(0.25 / step), 1)), window)
+        px = np.linspace(float(xa[0]), float(xa[-1]), n_points)
+        return cls(px, np.interp(px, xa, env), float(xa[0]), float(xa[-1]))
+
+
+@dataclass
+class GaussianHump:
+    """非晶質ハンプ: 高さ h、中心 c [deg]、半値全幅 w [deg] のガウス関数。"""
+
+    center: float
+    fwhm: float
+    height: float
+
+    def __call__(self, x: npt.ArrayLike) -> FloatArray:
+        xa = np.asarray(x, dtype=np.float64)
+        sigma = max(self.fwhm, 1e-6) / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+        return np.asarray(self.height * np.exp(-0.5 * ((xa - self.center) / sigma) ** 2))
+
+
+def snip_background(y: npt.ArrayLike, window: int, decreasing: bool = True) -> FloatArray:
+    """SNIP 法(Ryan et al. 1988)による下側包絡線。
+
+    対数変換(LLS)した上で、半幅 m を window から 1 まで減らしながら
+    y_i ← min(y_i, (y_{i-m} + y_{i+m}) / 2) を繰り返す。
+    """
+    ya = np.asarray(y, dtype=np.float64)
+    v = np.log(np.log(np.sqrt(np.maximum(ya, 0.0) + 1.0) + 1.0) + 1.0)
     n = len(v)
     widths = range(window, 0, -1) if decreasing else range(1, window + 1)
     for m in widths:
         if 2 * m >= n:
             continue
-        mid = v[m:-m]
         avg = 0.5 * (v[: n - 2 * m] + v[2 * m :])
-        v[m:-m] = np.minimum(mid, avg)
+        mid = v[m : n - m]
+        v[m : n - m] = np.minimum(mid, avg)
     return np.asarray((np.exp(np.exp(v) - 1.0) - 1.0) ** 2 - 1.0)
 
 
 def _boxcar(a: FloatArray, n_points: int) -> FloatArray:
-    k = max(int(n_points) | 1, 1)
-    if k <= 1:
+    n = max(int(n_points), 1)
+    if n <= 1:
         return a
-    ker = np.ones(k) / k
-    return np.asarray(np.convolve(np.pad(a, k // 2, mode="edge"), ker, mode="valid"))
+    kernel = np.ones(n) / n
+    pad = n // 2
+    padded = np.pad(a, (pad, n - 1 - pad), mode="edge")
+    return np.asarray(np.convolve(padded, kernel, mode="valid"))
 
 
 def estimate_chebyshev_background(

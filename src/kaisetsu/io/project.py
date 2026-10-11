@@ -36,7 +36,12 @@ from kaisetsu.pattern.calculator import PhaseContribution
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.pdf.data import PDFData
-from kaisetsu.profile.background import ChebyshevBackground
+from kaisetsu.profile.background import (
+    BackgroundModel,
+    ChebyshevBackground,
+    GaussianHump,
+    InterpolatedBackground,
+)
 from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.scattering.radiation import Radiation, RadiationType
 
@@ -99,6 +104,8 @@ def _instrument_to_dict(inst: CWInstrument) -> dict[str, Any]:
         "wavelength": inst.radiation.wavelength,
         "wavelength2": inst.radiation.wavelength2,
         "ratio2": inst.radiation.ratio2,
+        "wavelength3": inst.radiation.wavelength3,
+        "ratio3": inst.radiation.ratio3,
     }
     return d
 
@@ -106,7 +113,12 @@ def _instrument_to_dict(inst: CWInstrument) -> dict[str, Any]:
 def _instrument_from_dict(d: dict[str, Any]) -> CWInstrument:
     r = d["radiation"]
     rad = Radiation(
-        RadiationType(r["kind"]), r["wavelength"], r.get("wavelength2"), r.get("ratio2", 0.0)
+        RadiationType(r["kind"]),
+        r["wavelength"],
+        r.get("wavelength2"),
+        r.get("ratio2", 0.0),
+        r.get("wavelength3"),
+        r.get("ratio3", 0.0),
     )
     kw = {k: v for k, v in d.items() if k != "radiation"}
     return CWInstrument(radiation=rad, **kw)
@@ -125,6 +137,27 @@ def _sample_from_dict(d: dict[str, Any]) -> SampleGeometry:
         mu = float(kw.pop("mu_eff_inv_mm"))
         kw["transparency_mm"] = 1.0 / mu if mu > 0 else 0.0
     return SampleGeometry(**kw)
+
+
+def _background_to_dict(bk: BackgroundModel) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "kind": getattr(bk, "kind", "chebyshev"),
+        "coefficients": bk.coefficients.tolist(),
+        "x_min": bk.x_min,
+        "x_max": bk.x_max,
+    }
+    if isinstance(bk, InterpolatedBackground):
+        d["points_x"] = bk.points_x.tolist()
+    return d
+
+
+def _background_from_dict(d: dict[str, Any]) -> BackgroundModel:
+    coeffs = np.asarray(d["coefficients"], dtype=float)
+    if d.get("kind") == "points":
+        return InterpolatedBackground(
+            np.asarray(d["points_x"], dtype=float), coeffs, d["x_min"], d["x_max"]
+        )
+    return ChebyshevBackground(coeffs, d["x_min"], d["x_max"])
 
 
 def _contribution_to_dict(pc: PhaseContribution) -> dict[str, Any]:
@@ -147,6 +180,9 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
             {
                 "name": ph.name,
                 "le_bail": ph.le_bail,
+                "f2_update": ph.f2_update,
+                "pawley": ph.pawley,
+                "brindley_radius_um": ph.brindley_radius_um,
                 "structure": structure_to_dict(ph.structure),
                 "f2_tables": {
                     str(i): {" ".join(str(v) for v in k): val for k, val in tbl.items()}
@@ -173,11 +209,10 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
                 },
                 "instrument": _instrument_to_dict(h.instrument),
                 "sample": _sample_to_dict(h.sample),
-                "background": {
-                    "coefficients": h.background.coefficients.tolist(),
-                    "x_min": h.background.x_min,
-                    "x_max": h.background.x_max,
-                },
+                "background": _background_to_dict(h.background),
+                "humps": [
+                    {"center": hm.center, "fwhm": hm.fwhm, "height": hm.height} for hm in h.humps
+                ],
                 "contributions": {
                     n: _contribution_to_dict(pc) for n, pc in h.contributions.items()
                 },
@@ -274,6 +309,9 @@ def project_from_dict(d: dict[str, Any]) -> Project:
             name=phd["name"],
             le_bail=phd.get("le_bail", False),
         )
+        entry.f2_update = bool(phd.get("f2_update", True))
+        entry.pawley = bool(phd.get("pawley", False))
+        entry.brindley_radius_um = float(phd.get("brindley_radius_um", 0.0))
         for i, tbl in phd.get("f2_tables", {}).items():
             entry.f2_tables[int(i)] = {
                 tuple(int(v) for v in k.split()): float(val)  # type: ignore[misc]
@@ -293,9 +331,7 @@ def project_from_dict(d: dict[str, Any]) -> Project:
             data,
             _instrument_from_dict(hd["instrument"]),
             _sample_from_dict(hd["sample"]),
-            ChebyshevBackground(
-                np.asarray(bk["coefficients"], dtype=float), bk["x_min"], bk["x_max"]
-            ),
+            _background_from_dict(bk),
             name=hd["name"],
             phases=list(hd["contributions"]),
             x_min=hd["x_min"],
@@ -306,6 +342,10 @@ def project_from_dict(d: dict[str, Any]) -> Project:
         )
         h.d_min = hd.get("d_min")
         h.d_min_margin_deg = hd.get("d_min_margin_deg", 2.0)
+        for hm in hd.get("humps", []):
+            h.humps.append(
+                GaussianHump(float(hm["center"]), float(hm["fwhm"]), float(hm["height"]))
+            )
         h.fcj_method = hd.get("fcj_method", "accurate")
         for n, cd in hd["contributions"].items():
             pc = h.contributions[n]

@@ -15,9 +15,10 @@
 パラメータ名の規則:
     {相}:cell:{a|b|c|alpha|beta|gamma}      格子定数
     {相}:{サイト}:{x|y|z|occ|uiso|u11..u23}  原子
-    h{i}:inst:{zero|u|v|w|p|x|y|z|s_l|h_l|pol}  装置
+    h{i}:inst:{zero|u|v|w|p|x|y|z|s_l|h_l|pol|kb_ratio}  装置(kb_ratio は Kβ の強度比)
     h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
-    h{i}:bkg:{k}                           バックグラウンド係数
+    h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
+    h{i}:hump{k}:{center|fwhm|height}      非晶質ハンプ(ガウス関数)
     h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
     g{i}:pdf:{scale|qdamp|qbroad}          PDF データセット(G(r))
     g{i}:{相}:{scale|delta1|delta2|sratio|spdiameter}  相-PDF
@@ -41,7 +42,14 @@ from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
 from kaisetsu.pdf.calculator import PairList, PDFPhase, PDFResult, calculate_pdf, pair_distribution
 from kaisetsu.pdf.data import PDFData
-from kaisetsu.profile.background import ChebyshevBackground, estimate_chebyshev_background
+from kaisetsu.profile.background import (
+    BackgroundModel,
+    ChebyshevBackground,
+    GaussianHump,
+    InterpolatedBackground,
+    estimate_chebyshev_background,
+)
+from kaisetsu.profile.corrections import brindley_factor
 from kaisetsu.refine.constraints import (
     SymmetryConstraint,
     adp_constraint,
@@ -51,6 +59,7 @@ from kaisetsu.refine.constraints import (
 )
 from kaisetsu.refine.lsq import FitResult, refine_least_squares
 from kaisetsu.refine.parameters import Parameter, ParameterSet
+from kaisetsu.refine.pawley import PawleySolution, solve_pawley
 from kaisetsu.refine.rfactors import (
     RFactors,
     bragg_rfactor,
@@ -129,6 +138,19 @@ def _cell_setter(ph: PhaseEntry, k: int) -> Callable[[float], None]:
     return _set
 
 
+def _kbeta_setter(inst: CWInstrument) -> Callable[[float], None]:
+    """Kβ の強度比を書き込む(Radiation は不変なので差し替える)。"""
+
+    def _set(v: float) -> None:
+        from dataclasses import replace
+
+        rad = inst.radiation
+        if rad.wavelength3 is not None:
+            inst.radiation = replace(rad, ratio3=max(v, 0.0))
+
+    return _set
+
+
 def _size_setter(pc: PhaseContribution) -> Callable[[float], None]:
     def _set(v: float) -> None:
         pc.size_um = v if v > 0 else None
@@ -145,6 +167,19 @@ class PhaseEntry:
     le_bail: bool = False
     #: Le Bail 用の抽出強度(ヒストグラム添字 → 代表 hkl → |F|^2)
     f2_tables: dict[int, dict[tuple[int, int, int], float]] = field(default_factory=dict)
+    #: 偽なら f2_tables を Le Bail で更新せず固定の |F|² 表として使う(MPF 用)
+    f2_update: bool = True
+    #: Pawley 法(残差評価のたびに反射強度を線形最小二乗で解く)。le_bail と排他
+    pawley: bool = False
+    #: Pawley 法の直近の解(ヒストグラム添字 → 解)
+    pawley_solutions: dict[int, PawleySolution] = field(default_factory=dict)
+    #: Brindley 微小吸収補正の粒子半径 [μm](0 で補正なし)
+    brindley_radius_um: float = 0.0
+
+    @property
+    def uses_f2_table(self) -> bool:
+        return self.le_bail or self.pawley
+
     position_constraints: dict[str, SymmetryConstraint] = field(default_factory=dict)
     adp_constraints: dict[str, SymmetryConstraint] = field(default_factory=dict)
     _cell: FloatArray = field(default_factory=lambda: np.zeros(6), repr=False)
@@ -168,7 +203,7 @@ class HistogramEntry:
     data: PowderData
     instrument: CWInstrument
     sample: SampleGeometry
-    background: ChebyshevBackground
+    background: BackgroundModel
     contributions: dict[str, PhaseContribution]
     x_min: float
     x_max: float
@@ -181,6 +216,15 @@ class HistogramEntry:
     anomalous: dict[str, complex] | None = None
     scattering_override: dict[str, complex] | None = None
     result: PatternResult | None = None
+    #: 非晶質ハンプ(背景に加える)
+    humps: list[GaussianHump] = field(default_factory=list)
+
+    def background_total(self, x: npt.ArrayLike) -> FloatArray:
+        """背景関数 + ハンプ。"""
+        y = np.asarray(self.background(x), dtype=np.float64)
+        for hmp in self.humps:
+            y = y + hmp(x)
+        return y
 
     def mask(self) -> BoolArray:
         x = self.data.x
@@ -308,7 +352,7 @@ class Project:
         data: PowderData,
         instrument: CWInstrument,
         sample: SampleGeometry | None = None,
-        background: ChebyshevBackground | None = None,
+        background: BackgroundModel | None = None,
         *,
         n_background: int = 8,
         name: str | None = None,
@@ -401,18 +445,48 @@ class Project:
         return self.pdf_datasets[dataset].phases[phase]
 
     def reset_background(
-        self, hist: int, n_terms: int | None = None, estimate: bool = True
+        self,
+        hist: int,
+        n_terms: int | None = None,
+        estimate: bool = True,
+        kind: str | None = None,
     ) -> None:
-        """背景の項数を変える、または観測から推定し直す。パラメータ集合も作り直す。"""
+        """背景の項数(固定点の数)を変える、種類を変える、または観測から推定し直す。
+
+        kind は 'chebyshev' か 'points'(None なら今のまま)。種類を変えるときは必ず推定し直す。
+        """
         h = self.histograms[hist]
-        n = max(n_terms if n_terms is not None else h.background.order, 1)
-        if estimate:
-            h.background = _initial_background(h.data, n)
+        current = getattr(h.background, "kind", "chebyshev")
+        kind = kind or current
+        n = max(
+            n_terms if n_terms is not None else h.background.order, 1 if kind == "chebyshev" else 2
+        )
+        if estimate or kind != current:
+            if kind == "points":
+                h.background = InterpolatedBackground.from_pattern(h.data.x, h.data.y, n)
+            else:
+                h.background = _initial_background(h.data, n)
+        elif kind == "points":
+            old_b = h.background
+            assert isinstance(old_b, InterpolatedBackground)
+            px = np.linspace(old_b.x_min, old_b.x_max, n)
+            h.background = InterpolatedBackground(px, old_b(px), old_b.x_min, old_b.x_max)
         else:
             old = h.background.coefficients
             coeffs = np.zeros(n)
             coeffs[: min(n, len(old))] = old[: min(n, len(old))]
             h.background = ChebyshevBackground(coeffs, h.background.x_min, h.background.x_max)
+        self.build_parameters()
+
+    def add_hump(self, hist: int, center: float, fwhm: float, height: float) -> GaussianHump:
+        """非晶質ハンプを背景に加える(パラメータ h{i}:hump{k}:center|fwhm|height)。"""
+        hmp = GaussianHump(center, fwhm, height)
+        self.histograms[hist].humps.append(hmp)
+        self.build_parameters()
+        return hmp
+
+    def clear_humps(self, hist: int) -> None:
+        self.histograms[hist].humps.clear()
         self.build_parameters()
 
     # ------------------------------------------------------------------
@@ -601,6 +675,18 @@ class Project:
                     description=desc,
                 )
             )
+        if inst.radiation.wavelength3 is not None:
+            ps.add(
+                Parameter(
+                    f"{pre}:inst:kb_ratio",
+                    float(inst.radiation.ratio3),
+                    step=1e-4,
+                    min=0.0,
+                    max=0.5,
+                    setter=_kbeta_setter(inst),
+                    description="Kβ 線の強度比 I(Kβ)/I(Kα1)(フィルタ漏れ)",
+                )
+            )
         smp = h.sample
         sspec: list[tuple[str, str, float, float, float, str, str]] = [
             ("displacement", "displacement_mm", 1e-4, -5.0, 5.0, "mm", "試料高さずれ (BB)"),
@@ -626,14 +712,57 @@ class Project:
             )
         scale_y = float(np.mean(np.abs(h.data.y))) + 1e-6
         bk = h.background
+        is_points = getattr(bk, "kind", "chebyshev") == "points"
         for k in range(bk.order):
+            if is_points:
+                px = bk.points_x[k]  # type: ignore[attr-defined]
+                desc = f"背景 固定点 {k} の高さ(2θ = {px:.2f}°)"
+            else:
+                desc = f"背景 Chebyshev 係数 {k}"
             ps.add(
                 Parameter(
                     f"{pre}:bkg:{k}",
                     float(bk.coefficients[k]),
                     step=1e-3 * scale_y,
                     setter=_item_setter(bk.coefficients, k),
-                    description=f"背景 Chebyshev 係数 {k}",
+                    description=desc,
+                )
+            )
+        span = float(h.data.x[-1] - h.data.x[0])
+        for k, hmp in enumerate(h.humps):
+            hpre = f"{pre}:hump{k}"
+            ps.add(
+                Parameter(
+                    f"{hpre}:center",
+                    hmp.center,
+                    min=float(h.data.x[0]) - span,
+                    max=float(h.data.x[-1]) + span,
+                    step=1e-2,
+                    setter=_attr_setter(hmp, "center"),
+                    unit="deg",
+                    description=f"非晶質ハンプ {k} の中心",
+                )
+            )
+            ps.add(
+                Parameter(
+                    f"{hpre}:fwhm",
+                    hmp.fwhm,
+                    min=0.1,
+                    max=4.0 * span,
+                    step=1e-2,
+                    setter=_attr_setter(hmp, "fwhm"),
+                    unit="deg",
+                    description=f"非晶質ハンプ {k} の半値全幅",
+                )
+            )
+            ps.add(
+                Parameter(
+                    f"{hpre}:height",
+                    hmp.height,
+                    min=0.0,
+                    step=1e-3 * scale_y,
+                    setter=_attr_setter(hmp, "height"),
+                    description=f"非晶質ハンプ {k} の高さ",
                 )
             )
         for pname, pc in h.contributions.items():
@@ -770,31 +899,110 @@ class Project:
             ph = self.phases[pname]
             ph.sync()
             pc.structure = ph.structure
-            if ph.le_bail:
+            if ph.uses_f2_table:
                 if i not in ph.f2_tables:
-                    self.start_le_bail(pname, i)
+                    self._init_f2_table(pname, i)
                 pc.f2_table = ph.f2_tables[i]
             else:
                 pc.f2_table = None
             out.append(pc)
         return out
 
-    def calculate(self, hist: int = 0) -> PatternResult:
+    def calculate(self, hist: int = 0, *, pawley: bool = True) -> PatternResult:
+        """パターンを計算する。Pawley 相があれば反射強度を線形最小二乗で解いて反映する。"""
         h = self.histograms[hist]
         res = calculate_pattern(
             h.data.x,
             self._contributions_for(hist, h),
             h.instrument,
             h.sample,
-            h.background,
+            h.background_total,
             d_min=h.effective_d_min(),
             kalpha2_mode=h.kalpha2_mode,
             fcj_method=h.fcj_method,
             anomalous=h.anomalous,
             scattering_override=h.scattering_override,
         )
+        if pawley and any(self.phases[n].pawley for n in h.contributions):
+            self._pawley_solve(hist, h, res)
         h.result = res
         return res
+
+    def _pawley_solve(self, i: int, h: HistogramEntry, res: PatternResult) -> None:
+        """Pawley 相の反射強度を解き、f2_tables と計算パターンを更新する。"""
+        names = list(h.contributions)
+        assert h.data.weight is not None
+        mask = h.mask()
+        for k, pname in enumerate(names):
+            ph = self.phases[pname]
+            if not ph.pawley:
+                continue
+            tbl = res.peaks[k]
+            y_fixed = res.y_calc - res.y_phases[k]
+            profiles: list[FloatArray] = []
+            for c, it in zip(tbl.contributions, tbl.intensity_total, strict=True):
+                profiles.append(c / it if it > 0 and len(c) else np.zeros(0))
+            sol = solve_pawley(
+                h.data.y, h.data.weight, y_fixed, tbl.windows(), profiles, mask=mask,
+                compute_sigma=False, split_weights=tbl.intensity_total,
+            )  # fmt: skip
+            table = ph.f2_tables.setdefault(i, {})
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = np.where(tbl.intensity_total > 0, sol.intensity / tbl.intensity_total, 1.0)
+            new_f2 = tbl.f2 * ratio
+            for hk, f2 in zip(tbl.hkl, new_f2, strict=True):
+                table[(int(hk[0]), int(hk[1]), int(hk[2]))] = max(float(f2), 0.0)
+            # 計算パターンを解いた強度で置き換える(表はこの比で更新済み)
+            res.y_calc = y_fixed + sol.y_bragg
+            res.y_phases[k] = sol.y_bragg
+            tbl.intensity_total = sol.intensity
+            tbl.f2 = new_f2
+            tbl.contributions = [
+                p * a if len(p) else p for p, a in zip(profiles, sol.intensity, strict=True)
+            ]
+            ph.pawley_solutions[i] = sol
+
+    def pawley_report(self, hist: int, phase: str) -> PawleySolution:
+        """Pawley 法で解いた強度と σ(相関込み)。f2_tables を |F|² の単位に直す前の積分強度。"""
+        h = self.histograms[hist]
+        res = calculate_pattern(
+            h.data.x,
+            self._contributions_for(hist, h),
+            h.instrument,
+            h.sample,
+            h.background_total,
+            d_min=h.effective_d_min(),
+            kalpha2_mode=h.kalpha2_mode,
+            fcj_method=h.fcj_method,
+            anomalous=h.anomalous,
+            scattering_override=h.scattering_override,
+        )
+        names = list(h.contributions)
+        k = names.index(phase)
+        tbl = res.peaks[k]
+        assert h.data.weight is not None
+        profiles = [
+            c / it if it > 0 and len(c) else np.zeros(0)
+            for c, it in zip(tbl.contributions, tbl.intensity_total, strict=True)
+        ]
+        return solve_pawley(
+            h.data.y, h.data.weight, res.y_calc - res.y_phases[k], tbl.windows(), profiles,
+            mask=h.mask(), compute_sigma=True, split_weights=tbl.intensity_total,
+        )  # fmt: skip
+
+    def pawley_structure_factors(
+        self, hist: int, phase: str
+    ) -> tuple[npt.NDArray[np.int64], FloatArray, FloatArray]:
+        """Pawley 法の結果を (hkl, |F|², σ(|F|²)) で返す(MEM の入力用)。"""
+        sol = self.pawley_report(hist, phase)
+        h = self.histograms[hist]
+        res = h.result if h.result is not None else self.calculate(hist)
+        k = list(h.contributions).index(phase)
+        tbl = res.peaks[k]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            scale = np.where(tbl.intensity_total > 0, tbl.f2 / tbl.intensity_total, 0.0)
+            sig = np.where(np.isfinite(sol.sigma), sol.sigma * scale, np.inf)
+        return tbl.hkl.copy(), sol.intensity * scale, sig
 
     def calculate_all(self) -> list[PatternResult]:
         return [self.calculate(i) for i in range(len(self.histograms))]
@@ -826,6 +1034,12 @@ class Project:
         g.result = res
         return res
 
+    def jacobian(self, base: FloatArray | None = None) -> FloatArray:
+        """現在のパラメータでの残差ヤコビアン(半解析的)。base は直近の残差。"""
+        from kaisetsu.refine.jacobian import project_jacobian
+
+        return project_jacobian(self, base)
+
     def residuals(self) -> FloatArray:
         parts = []
         for i, h in enumerate(self.histograms):
@@ -855,19 +1069,26 @@ class Project:
         le_bail_cycles: int = 0,
         ftol: float = 1e-6,
         xtol: float = 1e-8,
+        analytic_jacobian: bool = True,
     ) -> FitResult:
         """vary の立ったパラメータを最小二乗で精密化する。
 
         le_bail_cycles > 0 なら、Le Bail 相の強度を更新しながらその回数だけ繰り返す。
+        analytic_jacobian が真なら、背景・スケール・構造パラメータの微分を半解析的に求める
+        (`kaisetsu.refine.jacobian`)。Pawley 相があるときは数値微分に戻す。
         """
         if not self.histograms and not self.pdf_datasets:
             raise ValueError("ヒストグラムも PDF データもありません")
         self.params.evaluate_ties()
         self.params.apply_all()
-        n_outer = max(le_bail_cycles, 1) if any(ph.le_bail for ph in self.phases.values()) else 1
+        updating = any(ph.le_bail and ph.f2_update for ph in self.phases.values())
+        n_outer = max(le_bail_cycles, 1) if updating else 1
         result: FitResult | None = None
         for _ in range(n_outer):
             if self.params.free():
+                use_analytic = analytic_jacobian and not any(
+                    ph.pawley for ph in self.phases.values()
+                )
                 result = refine_least_squares(
                     self.params,
                     self.residuals,
@@ -876,8 +1097,9 @@ class Project:
                     progress=progress,
                     ftol=ftol,
                     xtol=xtol,
+                    jacobian_fn=self.jacobian if use_analytic else None,
                 )
-            if any(ph.le_bail for ph in self.phases.values()):
+            if updating:
                 self.le_bail_update()
         if result is None:
             raise ValueError("精密化するパラメータがありません(vary を立ててください)")
@@ -889,12 +1111,29 @@ class Project:
     # ------------------------------------------------------------------
     # Le Bail
     # ------------------------------------------------------------------
+    def start_pawley(
+        self, phase: str, hist: int | None = None, from_structure: bool = True
+    ) -> None:
+        """相を Pawley モードにする(反射強度は残差評価のたびに線形最小二乗で決まる)。"""
+        ph = self.phases[phase]
+        ph.pawley = True
+        ph.le_bail = False
+        self._init_f2_table(phase, hist, from_structure)
+
     def start_le_bail(
         self, phase: str, hist: int | None = None, from_structure: bool = True
     ) -> None:
         """相を Le Bail モードにし、抽出強度の初期値を作る。"""
         ph = self.phases[phase]
         ph.le_bail = True
+        ph.pawley = False
+        self._init_f2_table(phase, hist, from_structure)
+
+    def _init_f2_table(
+        self, phase: str, hist: int | None = None, from_structure: bool = True
+    ) -> None:
+        """f2_tables の初期値(構造から、または一様)を作る。"""
+        ph = self.phases[phase]
         hists = range(len(self.histograms)) if hist is None else [hist]
         for i in hists:
             h = self.histograms[i]
@@ -934,7 +1173,7 @@ class Project:
             res = self.calculate(i)
             for k, (pname, _pc) in enumerate(h.contributions.items()):
                 ph = self.phases[pname]
-                if not ph.le_bail:
+                if not (ph.le_bail and ph.f2_update):
                     continue
                 tbl = res.peaks[k]
                 i_obs = partition_intensities(
@@ -1075,16 +1314,44 @@ class Project:
         W_p = S_p M_p / Σ_j S_j M_j(Hill & Howard, J. Appl. Cryst. 20, 467 (1987) の
         W_p ∝ S_p (ZMV)_p を、スケール因子が 1/V を陽に含むこのプログラムの定義に直したもの。
         M は単位胞の質量)。σ_W はスケール因子の esd から相関を無視して伝播させた値。
-        Le Bail 相はスケールに意味が無いので除外する。
+        Le Bail / Pawley 相はスケールに意味が無いので除外する。
+
+        相に Brindley の粒子半径が設定されていれば(X 線のみ)、微小吸収因子 τ_p で
+        W_p ∝ S_p M_p / τ_p と補正する。τ_p は混合物の平均線吸収係数 μ̄ = Σ W_p μ_p に
+        依存するので数回反復する。
         """
         h = self.histograms[hist]
         items: list[tuple[str, float, float, float]] = []
         for pname in h.contributions:
             ph = self.phases[pname]
-            if ph.le_bail:
+            if ph.uses_f2_table:
                 continue
             p = self.params[f"h{hist}:{pname}:scale"]
             items.append((pname, p.value, p.esd or 0.0, ph.structure.cell_mass()))
+        rad = h.instrument.radiation
+        use_brindley = rad.is_xray and any(
+            self.phases[n].brindley_radius_um > 0 for n, _, _, _ in items
+        )
+        if use_brindley and len(items) > 1:
+            mu = {}
+            dens = {}
+            for n, _, _, _ in items:
+                st = self.phases[n].structure
+                mu[n] = st.linear_absorption_coefficient(rad.wavelength)
+                dens[n] = st.density()
+            tau = dict.fromkeys(mu, 1.0)
+            for _ in range(6):
+                raw = {n: s * m / tau[n] for n, s, _, m in items}
+                tot = sum(raw.values())
+                w = {n: v / tot for n, v in raw.items()} if tot > 0 else dict.fromkeys(raw, 0.0)
+                # 体積分率で平均した線吸収係数
+                vol = {n: w[n] / dens[n] if dens[n] > 0 else 0.0 for n in w}
+                vtot = sum(vol.values())
+                mu_bar = sum(vol[n] / vtot * mu[n] for n in vol) if vtot > 0 else 0.0
+                for n in tau:
+                    r_cm = self.phases[n].brindley_radius_um * 1e-4
+                    tau[n] = float(brindley_factor((mu[n] - mu_bar) * r_cm))
+            items = [(n, s / tau[n], e / tau[n], m) for n, s, e, m in items]
         total = sum(s * m for _, s, _, m in items)
         if total <= 0:
             return {name: (0.0, 0.0) for name, _, _, _ in items}

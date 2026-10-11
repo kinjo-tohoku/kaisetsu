@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QStyle,
     QTableView,
     QToolBar,
@@ -40,11 +41,13 @@ from kaisetsu.gui.background_dialog import BackgroundDialog
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
 from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
 from kaisetsu.gui.paths import last_dir, remember_dir
-from kaisetsu.gui.plot_widget import PatternPlot
+from kaisetsu.gui.plot_widget import HistoryPlot, PatternPlot, PDFPlot
+from kaisetsu.gui.structure_view import StructureView
 from kaisetsu.gui.worker import RefineThread, RefineWorker
 from kaisetsu.io.project import load_project, save_project
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
+from kaisetsu.pdf.data import PDFData, read_pdf_data
 from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.refine.recipe import Recipe
 
@@ -54,18 +57,23 @@ DATA_FILTER = (
     "回折データ (*.xy *.xye *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
     "*.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)"
 )
+PDF_FILTER = "PDF G(r) (*.gr *.dat *.txt *.csv);;すべて (*)"
 CIF_FILTER = "CIF (*.cif);;すべて (*)"
 PROJECT_FILTER = "kaisetsu プロジェクト (*.kaisetsu.json *.json);;すべて (*)"
+IMAGE_FILTER = "PNG 画像 (*.png);;SVG 画像 (*.svg)"
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"kaisetsu {__version__} — 粉末回折 Rietveld 解析")
+        self.setWindowTitle(f"kaisetsu {__version__} — 粉末回折 Rietveld / PDF / MEM 解析")
         self.resize(1400, 850)
         self.project = Project("新規プロジェクト")
         self.project_path: Path | None = None
         self.current_hist = 0
+        self.current_pdf = 0
+        self.current_view = "hist"  # "hist" か "pdf"
+        self.current_phase: str | None = None
         self._thread: RefineThread | None = None
         self._worker: RefineWorker | None = None
         self.settings = QSettings("kaisetsu", "kaisetsu")
@@ -84,11 +92,15 @@ class MainWindow(QMainWindow):
         self.tree.setMinimumWidth(220)
 
         self.plot = PatternPlot()
+        self.pdf_plot = PDFPlot()
+        self.plot_stack = QStackedWidget()
+        self.plot_stack.addWidget(self.plot)
+        self.plot_stack.addWidget(self.pdf_plot)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
         center = QSplitter(Qt.Orientation.Vertical)
-        center.addWidget(self.plot)
+        center.addWidget(self.plot_stack)
         center.addWidget(self.log_view)
         center.setStretchFactor(0, 4)
         center.setStretchFactor(1, 1)
@@ -121,7 +133,8 @@ class MainWindow(QMainWindow):
             ("U", "*:*:u*"),
             ("装置", "h*:inst:*"),
             ("背景", "h*:bkg:*"),
-            ("スケール", "h*:*:scale"),
+            ("スケール", "*:*:scale"),
+            ("PDF", "g*:*"),
         ):
             b = QPushButton(label)
             b.setFlat(True)
@@ -166,8 +179,23 @@ class MainWindow(QMainWindow):
         dock.setWidget(panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setMinimumWidth(480)
+        self.param_dock = dock
         self.filter_edit.textChanged.connect(self.param_filter.set_pattern)
         self.only_free.toggled.connect(self.param_filter.set_only_free)
+
+        # 構造の 3D 表示(ドック)
+        self.structure_dock = QDockWidget("構造", self)
+        self.structure_dock.setObjectName("structureDock")
+        self.structure_view = StructureView()
+        self.structure_dock.setWidget(self.structure_view)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.structure_dock)
+        # χ² の推移(ドック)
+        self.history_dock = QDockWidget("χ² の推移", self)
+        self.history_dock.setObjectName("historyDock")
+        self.history_plot = HistoryPlot()
+        self.history_dock.setWidget(self.history_plot)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.history_dock)
+        self.history_dock.hide()
 
         self.status_label = QLabel("データと相を読み込んでください")
         self.statusBar().addWidget(self.status_label, 1)
@@ -200,7 +228,8 @@ class MainWindow(QMainWindow):
         m_file.addSeparator()
         self._add_action(m_file, "計算パターンを CSV に書き出す…", self.export_pattern_csv)
         self._add_action(m_file, "反射リストを CSV に書き出す…", self.export_reflections_csv)
-        self._add_action(m_file, "相を CIF に書き出す…", self.export_cif)
+        self._add_action(m_file, "相を CIF に書き出す(VESTA で開けます)…", self.export_cif)
+        self._add_action(m_file, "図を画像で保存 (PNG/SVG)…", self.export_plot_image)
         m_file.addSeparator()
         self._add_action(m_file, "終了(&X)", self.close, QKeySequence.StandardKey.Quit)
 
@@ -217,6 +246,14 @@ class MainWindow(QMainWindow):
         self.act_background = self._add_action(
             m_data, "背景の設定(&B)…", self.edit_background, "Ctrl+B"
         )
+        self.act_phase = self._add_action(
+            m_data, "相の設定(強度の扱い・選択配向軸・異方性)…", self.edit_phase
+        )
+        m_data.addSeparator()
+        self.act_load_pdf = self._add_action(
+            m_data, "PDF データ G(r) を読み込む…", self.load_pdf_data
+        )
+        self.act_transform = self._add_action(m_data, "I(Q) から G(r) を作る…", self.transform_iq)
         m_data.addSeparator()
         self.act_wizard = self._add_action(
             m_data, "はじめての精密化(ウィザード)(&W)…", self.run_wizard
@@ -228,11 +265,21 @@ class MainWindow(QMainWindow):
         self.act_recipe = self._add_action(
             m_ref, "標準の手順で精密化(&S)…", self.refine_recipe, "Shift+F9"
         )
+        self.act_pdf_recipe = self._add_action(
+            m_ref, "PDF の標準手順で精密化…", self.refine_pdf_recipe
+        )
         self.act_stop = self._add_action(m_ref, "中止(&T)", self.stop_refine, "Esc")
         self.act_stop.setEnabled(False)
         m_ref.addSeparator()
         self._add_action(m_ref, "すべて固定(&F)", self.fix_all)
         self._add_action(m_ref, "結果の要約を表示(&U)", self.show_summary)
+        m_ref.addSeparator()
+        self.act_mem = self._add_action(m_ref, "MEM 電子密度 / 核密度(&M)…", self.run_mem)
+
+        m_view = mb.addMenu("表示(&V)")
+        m_view.addAction(self.param_dock.toggleViewAction())
+        m_view.addAction(self.structure_dock.toggleViewAction())
+        m_view.addAction(self.history_dock.toggleViewAction())
 
         m_help = mb.addMenu("ヘルプ(&H)")
         self._add_action(m_help, "パラメータ名の規則", self.show_naming_help)
@@ -243,8 +290,7 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         tb = QToolBar("メイン")
         tb.setObjectName("mainToolbar")
-        tb.setMovable(False)
-        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.addToolBar(tb)
         style = self.style()
         sp = QStyle.StandardPixmap
@@ -259,11 +305,15 @@ class MainWindow(QMainWindow):
         add(self.act_add_phase, sp.SP_FileIcon, "CIF 追加")
         add(self.act_instrument, sp.SP_FileDialogDetailedView, "装置設定")
         add(self.act_background, sp.SP_FileDialogListView, "背景設定")
+        add(self.act_phase, sp.SP_FileDialogInfoView, "相の設定")
         tb.addSeparator()
         add(self.act_calc, sp.SP_BrowserReload, "計算 (F5)")
         add(self.act_refine, sp.SP_MediaPlay, "精密化 (F9)")
         add(self.act_recipe, sp.SP_MediaSeekForward, "標準の手順で精密化")
         add(self.act_stop, sp.SP_MediaStop, "中止")
+        tb.addSeparator()
+        add(self.act_load_pdf, sp.SP_DirOpenIcon, "PDF 読込")
+        add(self.act_mem, sp.SP_ComputerIcon, "MEM")
         tb.addSeparator()
         add(self.act_save, sp.SP_DialogSaveButton, "保存")
 
@@ -271,12 +321,12 @@ class MainWindow(QMainWindow):
         self,
         menu: QMenu,
         text: str,
-        slot: Callable[..., Any],
-        shortcut: QKeySequence | QKeySequence.StandardKey | str | None = None,
+        slot: Callable[[], Any],
+        shortcut: str | QKeySequence.StandardKey | None = None,
     ) -> QAction:
         act = QAction(text, self)
         if shortcut is not None:
-            act.setShortcut(shortcut)
+            act.setShortcut(QKeySequence(shortcut))
         act.triggered.connect(slot)
         menu.addAction(act)
         return act
@@ -296,7 +346,8 @@ class MainWindow(QMainWindow):
         root.addChild(phases)
         for ph in self.project.phases.values():
             st = ph.structure
-            item = QTreeWidgetItem([f"{ph.name}  ({st.spacegroup.hm}, {st.n_sites} サイト)"])
+            mode = "、Pawley" if ph.pawley else ("、Le Bail" if ph.le_bail else "")
+            item = QTreeWidgetItem([f"{ph.name}  ({st.spacegroup.hm}, {st.n_sites} サイト{mode})"])
             item.setData(0, Qt.ItemDataRole.UserRole, ("phase", ph.name))
             item.setToolTip(0, repr(st.lattice))
             phases.addChild(item)
@@ -310,12 +361,43 @@ class MainWindow(QMainWindow):
             )
             item.setData(0, Qt.ItemDataRole.UserRole, ("hist", i))
             hists.addChild(item)
+        if self.project.pdf_datasets:
+            pdfs = QTreeWidgetItem(["PDF データ"])
+            root.addChild(pdfs)
+            for i, g in enumerate(self.project.pdf_datasets):
+                kind = "中性子" if g.radiation == "neutron" else "X 線"
+                item = QTreeWidgetItem(
+                    [
+                        f"g{i}: {g.name}  ({kind}, Q_max={g.qmax:g}, r={g.r_min:.1f}〜{g.r_max:.1f} Å)"
+                    ]
+                )
+                item.setData(0, Qt.ItemDataRole.UserRole, ("pdf", i))
+                pdfs.addChild(item)
         self.tree.expandAll()
 
     def _refresh_params(self) -> None:
         self.param_model.set_params(self.project.params)
 
     def _refresh_plot(self) -> None:
+        if self.current_view == "pdf" and self.project.pdf_datasets:
+            self.plot_stack.setCurrentWidget(self.pdf_plot)
+            i = min(self.current_pdf, len(self.project.pdf_datasets) - 1)
+            g = self.project.pdf_datasets[i]
+            self.pdf_plot.set_data(g.data, (g.r_min, g.r_max))
+            if self.project.phases:
+                try:
+                    res = self.project.calculate_pdf(i)
+                except Exception as exc:
+                    self.log(f"PDF の計算に失敗しました: {exc}")
+                    return
+                self.pdf_plot.set_result(res, g.mask())
+                rf = self.project.rfactors()
+                r = rf[f"g{i}"]
+                self.status_label.setText(
+                    f"g{i} {g.name}: Rw = {100 * r.rwp:.3f}%  χ² = {r.chi2:.3f}"
+                )
+            return
+        self.plot_stack.setCurrentWidget(self.plot)
         if not self.project.histograms:
             self.plot.set_data(None)
             return
@@ -333,13 +415,31 @@ class MainWindow(QMainWindow):
             rf = self.project.rfactors()
             self.status_label.setText(f"h{i} {h.name}: {rf[h.name]}")
 
+    def _refresh_structure(self) -> None:
+        name = self.current_phase
+        if name not in self.project.phases:
+            name = next(iter(self.project.phases), None)
+        self.current_phase = name
+        if name is None:
+            self.structure_view.set_structure(None)
+            return
+        ph = self.project.phases[name]
+        ph.sync()
+        self.structure_view.set_structure(ph.structure)
+        self.structure_dock.setWindowTitle(f"構造: {name}")
+
     def _refresh_all(self) -> None:
         self._refresh_tree()
         self._refresh_params()
         self._refresh_plot()
-        has_model = bool(self.project.phases and self.project.histograms)
+        self._refresh_structure()
+        has_model = bool(
+            self.project.phases and (self.project.histograms or self.project.pdf_datasets)
+        )
         self.act_refine.setEnabled(has_model)
-        self.act_recipe.setEnabled(has_model)
+        self.act_recipe.setEnabled(bool(self.project.phases and self.project.histograms))
+        self.act_pdf_recipe.setEnabled(bool(self.project.phases and self.project.pdf_datasets))
+        self.act_mem.setEnabled(bool(self.project.phases and self.project.histograms))
 
     def _on_tree_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -348,9 +448,17 @@ class MainWindow(QMainWindow):
         kind, ref = data
         if kind == "hist":
             self.current_hist = int(ref)
+            self.current_view = "hist"
             self._refresh_plot()
             self.filter_edit.setText(f"h{ref}:*")
+        elif kind == "pdf":
+            self.current_pdf = int(ref)
+            self.current_view = "pdf"
+            self._refresh_plot()
+            self.filter_edit.setText(f"g{ref}:*")
         elif kind == "phase":
+            self.current_phase = str(ref)
+            self._refresh_structure()
             self.filter_edit.setText(f"{ref}:*")
 
     def _set_vary_shown(self, flag: bool) -> None:
@@ -370,7 +478,11 @@ class MainWindow(QMainWindow):
         self.project = Project("新規プロジェクト")
         self.project_path = None
         self.current_hist = 0
+        self.current_pdf = 0
+        self.current_view = "hist"
+        self.current_phase = None
         self.log_view.clear()
+        self.history_plot.clear()
         self._refresh_all()
 
     def open_project(self) -> None:
@@ -393,6 +505,9 @@ class MainWindow(QMainWindow):
         self.project_path = Path(path)
         self._remember_dir(path)
         self.current_hist = 0
+        self.current_pdf = 0
+        self.current_view = "hist" if self.project.histograms else "pdf"
+        self.current_phase = None
         self.log(f"プロジェクトを開きました: {path}")
         for line in self.project.log[-20:]:
             self.log("  " + line)
@@ -418,6 +533,9 @@ class MainWindow(QMainWindow):
         self.save_project()
 
     def export_pattern_csv(self) -> None:
+        if self.current_view == "pdf" and self.project.pdf_datasets:
+            self._export_pdf_csv()
+            return
         if not self.project.histograms:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -435,6 +553,23 @@ class MainWindow(QMainWindow):
             header += f",{name}"
         np.savetxt(path, np.column_stack(cols), delimiter=",", header=header, comments="")
         self.log(f"計算パターンを書き出しました: {path}")
+
+    def _export_pdf_csv(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "計算 G(r) を書き出す", self._last_dir(), "CSV (*.csv)"
+        )
+        if not path:
+            return
+        i = self.current_pdf
+        g = self.project.pdf_datasets[i]
+        res = self.project.calculate_pdf(i)
+        cols = [res.r, g.data.g, res.g_calc, g.data.g - res.g_calc]
+        header = "r,G_obs,G_calc,diff"
+        for name, gp in zip(g.phases, res.g_phases, strict=True):
+            cols.append(gp)
+            header += f",{name}"
+        np.savetxt(path, np.column_stack(cols), delimiter=",", header=header, comments="")
+        self.log(f"計算 G(r) を書き出しました: {path}")
 
     def export_reflections_csv(self) -> None:
         if not (self.project.histograms and self.project.phases):
@@ -460,7 +595,7 @@ class MainWindow(QMainWindow):
     def export_cif(self) -> None:
         if not self.project.phases:
             return
-        name = next(iter(self.project.phases))
+        name = self.current_phase or next(iter(self.project.phases))
         path, _ = QFileDialog.getSaveFileName(self, "CIF に書き出す", self._last_dir(), CIF_FILTER)
         if not path:
             return
@@ -468,6 +603,23 @@ class MainWindow(QMainWindow):
         ph.sync()
         write_structure(ph.structure, path)
         self.log(f"CIF を書き出しました: {path}")
+
+    def export_plot_image(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "図を画像で保存", self._last_dir(), IMAGE_FILTER
+        )
+        if not path:
+            return
+        if not path.lower().endswith((".png", ".svg")):
+            path += ".png"
+        widget = self.pdf_plot if self.plot_stack.currentWidget() is self.pdf_plot else self.plot
+        try:
+            widget.export_image(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "画像の保存", f"保存できませんでした:\n{exc}")
+            return
+        self._remember_dir(path)
+        self.log(f"図を保存しました: {path}")
 
     # ------------------------------------------------------------------
     # データ・相・装置
@@ -507,6 +659,7 @@ class MainWindow(QMainWindow):
             instrument, sample = dlg.result_instrument()
         h = self.project.add_histogram(data, instrument, sample, n_background=n_background)
         self.current_hist = len(self.project.histograms) - 1
+        self.current_view = "hist"
         for pc in h.contributions.values():
             pc.scale = self._initial_scale(h)
         self.project.build_parameters()
@@ -514,6 +667,78 @@ class MainWindow(QMainWindow):
             f"データを読み込みました: {path} ({len(data)} 点, {data.x[0]:.3f}–{data.x[-1]:.3f}°)"
         )
         self._refresh_all()
+
+    def load_pdf_data(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "PDF データ G(r) を読み込む", self._last_dir(), PDF_FILTER
+        )
+        if not path:
+            return
+        self.load_pdf_file(path)
+
+    def load_pdf_file(self, path: str, options: dict[str, object] | None = None) -> None:
+        try:
+            data = read_pdf_data(path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "読み込みエラー", f"PDF データを読み込めませんでした:\n{exc}"
+            )
+            return
+        self._remember_dir(path)
+        self.add_pdf_dataset(data, options)
+        self.log(
+            f"PDF データを読み込みました: {path} ({len(data)} 点, r = {data.r[0]:.2f}〜{data.r[-1]:.2f} Å)"
+        )
+
+    def add_pdf_dataset(self, data: PDFData, options: dict[str, object] | None = None) -> None:
+        if options is None:
+            from kaisetsu.gui.pdf_dialogs import PDFDataDialog
+
+            dlg = PDFDataDialog(data, self)
+            if dlg.exec() != PDFDataDialog.DialogCode.Accepted:
+                return
+            options = dlg.values()
+        self.project.add_pdf(
+            data,
+            str(options.get("radiation", "xray")),
+            qmax=float(options.get("qmax", 0.0)),
+            qdamp=float(options.get("qdamp", 0.0)),
+            qbroad=float(options.get("qbroad", 0.0)),
+            r_min=options.get("r_min"),
+            r_max=options.get("r_max"),
+        )
+        self.current_pdf = len(self.project.pdf_datasets) - 1
+        self.current_view = "pdf"
+        self._refresh_all()
+
+    def transform_iq(self) -> None:
+        from kaisetsu.gui.pdf_dialogs import TransformDialog
+
+        comp = ""
+        if self.project.phases:
+            st = next(iter(self.project.phases.values())).structure
+            comp = "".join(f"{el}{n:g}" if n != 1 else el for el, n in st.composition().items())
+        dlg = TransformDialog(self, comp)
+        if dlg.exec() != TransformDialog.DialogCode.Accepted:
+            return
+        data = dlg.pdf_data()
+        if data is None:
+            return
+        for line in dlg.result.log if dlg.result else []:
+            self.log("  " + line)
+        settings = dlg.settings()
+        self.add_pdf_dataset(
+            data,
+            {
+                "radiation": settings.radiation,
+                "qmax": settings.qmax,
+                "qdamp": 0.04,
+                "qbroad": 0.0,
+                "r_min": 1.0,
+                "r_max": float(data.r[-1]),
+            },
+        )
+        self.log(f"I(Q) から G(r) を作ってプロジェクトに追加しました: {data.name}")
 
     def add_phase_from_cif(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -543,6 +768,7 @@ class MainWindow(QMainWindow):
         for h in self.project.histograms:
             h.contributions[name].scale = self._initial_scale(h)
         self.project.build_parameters()
+        self.current_phase = name
         self.log(f"相を追加しました: {name} ({st.spacegroup.hm}, {st.lattice})")
         self._refresh_all()
 
@@ -569,14 +795,36 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "背景", "先に回折データを読み込んでください")
             return
         h = self.project.histograms[self.current_hist]
-        dlg = BackgroundDialog(h.background.order, self)
+        dlg = BackgroundDialog(
+            h.background.order,
+            getattr(h.background, "kind", "chebyshev"),
+            len(h.humps),
+            (float(h.data.x[0]), float(h.data.x[-1])),
+            self,
+        )
         if dlg.exec() != BackgroundDialog.DialogCode.Accepted:
             return
-        n_terms, estimate = dlg.values()
-        self.project.reset_background(self.current_hist, n_terms, estimate)
+        st = dlg.settings()
+        kind = str(st["kind"])
+        n_terms = int(st["n_terms"])
+        estimate = bool(st["estimate"])
+        self.project.reset_background(self.current_hist, n_terms, estimate, kind=kind)
+        n_humps = int(st["n_humps"])
+        if n_humps != len(h.humps):
+            self.project.clear_humps(self.current_hist)
+            center = float(st["hump_center"])
+            fwhm = float(st["hump_fwhm"])
+            span = float(h.data.x[-1] - h.data.x[0])
+            for k in range(n_humps):
+                c = center + (k - 0.5 * (n_humps - 1)) * min(fwhm, span / max(n_humps, 1))
+                i = int(np.clip(np.searchsorted(h.data.x, c), 0, len(h.data.x) - 1))
+                height = max(float(h.data.y[i] - h.background(h.data.x[i])), 0.0) * 0.5
+                self.project.add_hump(self.current_hist, c, fwhm, height)
+        label = "固定点補間" if kind == "points" else "Chebyshev"
         self.log(
-            f"背景を {n_terms} 項にしました"
+            f"背景を {label} {n_terms} 項にしました"
             + ("(観測から推定し直し)" if estimate else "(係数は引き継ぎ)")
+            + (f"、ハンプ {n_humps} 個" if n_humps else "")
         )
         self._refresh_all()
 
@@ -595,12 +843,31 @@ class MainWindow(QMainWindow):
         self.log("装置パラメータを更新しました")
         self._refresh_all()
 
+    def edit_phase(self) -> None:
+        if not self.project.phases:
+            QMessageBox.information(self, "相の設定", "先に CIF から相を追加してください")
+            return
+        from kaisetsu.gui.phase_dialog import PhaseDialog
+
+        name = self.current_phase or next(iter(self.project.phases))
+        dlg = PhaseDialog(
+            self.project,
+            name,
+            min(self.current_hist, max(len(self.project.histograms) - 1, 0)),
+            self,
+        )
+        if dlg.exec() != PhaseDialog.DialogCode.Accepted:
+            return
+        for line in dlg.apply():
+            self.log(line)
+        self._refresh_all()
+
     # ------------------------------------------------------------------
     # 精密化
     # ------------------------------------------------------------------
     def recalculate(self) -> None:
         self._refresh_plot()
-        if self.project.histograms and self.project.phases:
+        if self.project.phases and (self.project.histograms or self.project.pdf_datasets):
             rf = self.project.rfactors()["total"]
             self.log(f"計算: {rf}")
 
@@ -624,6 +891,16 @@ class MainWindow(QMainWindow):
             return
         self._start_worker(RefineWorker(self.project, dlg.recipe()))
 
+    def refine_pdf_recipe(self) -> None:
+        from kaisetsu.gui.pdf_dialogs import PDFRecipeDialog
+
+        dlg = PDFRecipeDialog(list(self.project.phases), self)
+        if dlg.exec() != PDFRecipeDialog.DialogCode.Accepted:
+            return
+        self.current_view = "pdf"
+        self._refresh_plot()
+        self._start_worker(RefineWorker(self.project, dlg.recipe()))
+
     def run_recipe(self, recipe: Recipe) -> None:
         self._start_worker(RefineWorker(self.project, recipe))
 
@@ -635,12 +912,16 @@ class MainWindow(QMainWindow):
         self._thread = RefineThread(worker, self)
         worker.progress.connect(self.log)
         worker.iteration.connect(self._on_iteration)
+        worker.step_started.connect(self.history_plot.mark_step)
         worker.finished.connect(self._on_refine_finished)
         self.act_refine.setEnabled(False)
         self.act_recipe.setEnabled(False)
+        self.act_pdf_recipe.setEnabled(False)
         self.act_stop.setEnabled(True)
         self.progress_label.setText("精密化中…")
         self.progress_bar.show()
+        self.history_plot.clear()
+        self.history_dock.show()
         n_free = len(self.project.params.free())
         if worker.recipe is None:
             self.log(
@@ -649,16 +930,27 @@ class MainWindow(QMainWindow):
                 + (" …" if n_free > 12 else "")
             )
         else:
-            self.log(f"標準の手順で精密化を開始({len(worker.recipe.steps)} 段階)")
+            self.log(f"手順 '{worker.recipe.name}' で精密化を開始({len(worker.recipe.steps)} 段階)")
         self._thread.start()
 
     def _on_iteration(self, iteration: int, chi2: float, curves: object) -> None:
         self.progress_label.setText(f"精密化中: 反復 {iteration}  χ² = {chi2:.3f}")
+        self.history_plot.append(chi2)
         try:
-            i = min(self.current_hist, len(self.project.histograms) - 1)
-            if isinstance(curves, list) and 0 <= i < len(curves):
-                x, yc, yb = curves[i]
-                self.plot.update_curves(x, yc, yb)
+            if not isinstance(curves, dict):
+                return
+            if self.current_view == "pdf":
+                i = min(self.current_pdf, len(self.project.pdf_datasets) - 1)
+                pdfs = curves.get("pdf", [])
+                if 0 <= i < len(pdfs):
+                    r, gc = pdfs[i]
+                    self.pdf_plot.update_curves(r, gc)
+            else:
+                i = min(self.current_hist, len(self.project.histograms) - 1)
+                hists = curves.get("hist", [])
+                if 0 <= i < len(hists):
+                    x, yc, yb = hists[i]
+                    self.plot.update_curves(x, yc, yb)
         except Exception:
             pass
 
@@ -670,12 +962,14 @@ class MainWindow(QMainWindow):
     def _on_refine_finished(self, ok: bool, message: str) -> None:
         self.log(message)
         self.act_refine.setEnabled(True)
-        self.act_recipe.setEnabled(True)
+        self.act_recipe.setEnabled(bool(self.project.histograms))
+        self.act_pdf_recipe.setEnabled(bool(self.project.pdf_datasets))
         self.act_stop.setEnabled(False)
         self.progress_bar.hide()
         self.progress_label.setText(message.split("\n")[0])
         self.param_model.refresh()
         self._refresh_plot()
+        self._refresh_structure()
         if ok and self.project.last_fit is not None:
             hc = self.project.last_fit.high_correlations(0.95)
             if hc:
@@ -687,7 +981,7 @@ class MainWindow(QMainWindow):
                 self.log("注意: " + note)
 
     def show_summary(self) -> None:
-        if not (self.project.histograms and self.project.phases):
+        if not (self.project.phases and (self.project.histograms or self.project.pdf_datasets)):
             return
         text = self.project.summary()
         notes = self.project.diagnostics()
@@ -698,6 +992,18 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("結果の要約")
         box.setText(text[:4000])
         box.exec()
+
+    def run_mem(self) -> None:
+        if not (self.project.phases and self.project.histograms):
+            QMessageBox.information(
+                self, "MEM", "先に粉末データと相を読み込み、Rietveld 精密化を行ってください"
+            )
+            return
+        from kaisetsu.gui.mem_dialog import MEMDialog
+
+        dlg = MEMDialog(self.project, self)
+        dlg.exec()
+        self._refresh_all()
 
     # ------------------------------------------------------------------
     # ウィザード
@@ -718,11 +1024,13 @@ class MainWindow(QMainWindow):
             "パラメータ名の規則",
             "相:cell:a|b|c|alpha|beta|gamma … 格子定数\n"
             "相:サイト:x|y|z … 分率座標(特殊位置の拘束は自動)\n"
-            "相:サイト:occ … 占有率、相:サイト:uiso … 等方性変位パラメータ\n"
+            "相:サイト:occ … 占有率、相:サイト:uiso … 等方性変位パラメータ(異方性は u11〜u23)\n"
             "h0:inst:zero|u|v|w|p|x|y|z|s_l|h_l|pol … 装置(h0 は 1 番目のデータ)\n"
             "h0:sample:displacement|transparency|disp_x|disp_y|mu_r … 試料\n"
             "h0:bkg:0,1,2,… … 背景(Chebyshev 係数)\n"
-            "h0:相:scale|md_r|size|strain … スケール、選択配向、サイズ、歪み\n\n"
+            "h0:相:scale|md_r|size|strain … スケール、選択配向、サイズ、歪み\n"
+            "g0:pdf:scale|qdamp|qbroad … PDF データセット(g0 は 1 番目の G(r))\n"
+            "g0:相:scale|delta1|delta2|sratio|spdiameter … 相の PDF パラメータ\n\n"
             "絞り込み欄では * と ? が使えます(例: *:cell:*, h0:inst:[uvw])。",
         )
 
@@ -730,13 +1038,18 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "kaisetsu について",
-            f"kaisetsu {__version__}\n初心者向け・日本語対応の粉末回折 Rietveld 解析プログラム。\n\n"
-            "計算の検証は GSAS-II 5.7.4 と突き合わせています(docs/validation/)。",
+            f"kaisetsu {__version__}\n初心者向け・日本語対応の粉末回折解析プログラム(Rietveld / PDF / MEM)。\n\n"
+            "計算の検証は GSAS-II 5.7.4(Rietveld)と diffpy.pdffit2 1.6.0(PDF)と突き合わせています"
+            "(docs/validation/)。",
         )
 
     # ------------------------------------------------------------------
     def _confirm_discard(self) -> bool:
-        if not self.project.histograms and not self.project.phases:
+        if (
+            not self.project.histograms
+            and not self.project.phases
+            and not self.project.pdf_datasets
+        ):
             return True
         r = QMessageBox.question(
             self, "確認", "現在のプロジェクトを閉じますか?(保存していない変更は失われます)"

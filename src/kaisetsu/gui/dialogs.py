@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import polarization_from_monochromator
 from kaisetsu.refine.recipe import Recipe, standard_recipe
-from kaisetsu.scattering.radiation import CHARACTERISTIC_WAVELENGTHS, Radiation
+from kaisetsu.scattering.radiation import CHARACTERISTIC_WAVELENGTHS, KBETA_WAVELENGTHS, Radiation
 
 PRESETS: dict[str, dict[str, object]] = {
     "実験室 X 線 Cu Kα (Bragg-Brentano, モノクロメータ)": {
@@ -118,6 +118,20 @@ class InstrumentDialog(QDialog):
         row.addWidget(QLabel("強度比"))
         row.addWidget(self.ratio2)
         f_rad.addRow("", row)
+        self.use_kb = QCheckBox("Kβ あり(フィルタ漏れ)")
+        self.use_kb.setToolTip(
+            "Ni フィルタ付き Cu 管などで Kβ が少し残るとき。強度比は 0.005〜0.03 程度"
+        )
+        self.use_kb.setChecked(inst.radiation.wavelength3 is not None)
+        self.lam3 = _spin(inst.radiation.wavelength3 or 1.392225, 0.1, 10.0, 6, 0.0001)
+        self.ratio3 = _spin(inst.radiation.ratio3 or 0.01, 0.0, 0.5, 4, 0.001)
+        row3 = QHBoxLayout()
+        row3.addWidget(self.use_kb)
+        row3.addWidget(QLabel("λβ [Å]"))
+        row3.addWidget(self.lam3)
+        row3.addWidget(QLabel("強度比"))
+        row3.addWidget(self.ratio3)
+        f_rad.addRow("", row3)
         self.pol = _spin(inst.polarization, 0.0, 1.0, 3, 0.01)
         self.pol.setToolTip(
             "0.5: 無偏光(フィルタ)、1/(1+cos²2θm): 回折側モノクロメータ、1: 放射光(鉛直散乱)"
@@ -204,6 +218,8 @@ class InstrumentDialog(QDialog):
         self.lam1.setValue(l1)
         self.lam2.setValue(l2)
         self.use_ka2.setChecked(True)
+        if str(t) in KBETA_WAVELENGTHS:
+            self.lam3.setValue(KBETA_WAVELENGTHS[str(t)])
 
     def apply_hints(self, meta: dict[str, object] | None) -> None:
         """データファイルから読めた情報(ターゲット・波長)を反映する。"""
@@ -240,10 +256,14 @@ class InstrumentDialog(QDialog):
             self.lam2.setValue(l2)
             self.use_ka2.setChecked(bool(p.get("kalpha2", True)))
             self.ratio2.setValue(float(p.get("ratio2", 0.5)))
+            self.use_kb.setChecked(bool(p.get("kbeta", False)))
+            if str(p["target"]) in KBETA_WAVELENGTHS:
+                self.lam3.setValue(KBETA_WAVELENGTHS[str(p["target"])])
             self._set_target_from_wavelength(l1)
         else:
             self.lam1.setValue(float(p["wavelength"]))
             self.use_ka2.setChecked(False)
+            self.use_kb.setChecked(False)
             self._set_target_from_wavelength(float(p["wavelength"]), neutron)
         self.pol.setValue(float(p["polarization"]))
         for key in ("u", "v", "w", "x", "y", "s_l", "h_l"):
@@ -253,10 +273,14 @@ class InstrumentDialog(QDialog):
     def result_instrument(self) -> tuple[CWInstrument, SampleGeometry]:
         if self.kind.currentIndex() == 1:
             rad = Radiation.neutron(self.lam1.value())
-        elif self.use_ka2.isChecked():
-            rad = Radiation.xray(self.lam1.value(), self.lam2.value(), self.ratio2.value())
         else:
-            rad = Radiation.xray(self.lam1.value())
+            rad = Radiation.xray(
+                self.lam1.value(),
+                self.lam2.value() if self.use_ka2.isChecked() else None,
+                self.ratio2.value(),
+                self.lam3.value() if self.use_kb.isChecked() else None,
+                self.ratio3.value(),
+            )
         inst = CWInstrument(
             radiation=rad, zero=self.zero.value(), u=self.u.value(), v=self.v.value(), w=self.w.value(),
             p=self.p.value(), x=self.x.value(), y=self.y.value(), z=self.z.value(),

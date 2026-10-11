@@ -127,3 +127,38 @@ def partition_intensities(
         total = float(np.sum(c))
         out[k] = i_calc[k] * frac / total if total > 0 else 0.0
     return out
+
+
+def partition_uncertainties(
+    sigma_y: FloatArray,
+    y_calc: FloatArray,
+    y_bkg: FloatArray,
+    windows: list[tuple[int, int]],
+    contributions: list[FloatArray],
+    i_calc: FloatArray,
+) -> FloatArray:
+    """Rietveld 分配した "観測" 積分強度の標準偏差。
+
+    I_obs,k = I_calc,k Σ_i (y_obs,i - y_bkg,i) c_k(i) / (Σ_k' c_k'(i) Σ_i c_k(i)) の
+    y_obs,i についての誤差伝播:
+        σ²(I_obs,k) = I_calc,k² Σ_i [c_k(i) / ((y_calc,i - y_bkg,i) Σ c_k)]² σ_i²
+    重なった反射では分配の仮定(モデルの強度比)による誤差は含まれない。
+
+    Args:
+        sigma_y: 観測点の標準偏差(重み 0 の点は inf でよい)
+    """
+    net_calc = y_calc - y_bkg
+    out = np.zeros(len(windows))
+    floor = 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
+    for k, ((i0, i1), c) in enumerate(zip(windows, contributions, strict=True)):
+        nc = net_calc[i0:i1]
+        total = float(np.sum(c))
+        if total <= 0:
+            continue
+        ok = nc > floor
+        s = sigma_y[i0:i1]
+        finite = ok & np.isfinite(s)
+        coef = np.zeros_like(nc)
+        coef[finite] = c[finite] / (nc[finite] * total)
+        out[k] = i_calc[k] * float(np.sqrt(np.sum((coef[finite] * s[finite]) ** 2)))
+    return out
