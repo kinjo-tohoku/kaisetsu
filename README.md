@@ -64,3 +64,15 @@ proj.refine()
 ## ライセンス
 
 未定(研究室内利用の段階)。依存ライブラリはすべて商用利用可能なライセンス(BSD / MIT / MPL / LGPL / PSF)のものに限定している。散乱因子テーブルは cctbx(BSD-3)から出典を明記して取り込んだ(`tools/gen_scattering_tables.py`)。
+
+## GUI
+
+```powershell
+uv sync --extra gui        # PySide6 / pyqtgraph / matplotlib を入れる(開発環境では uv sync で入る)
+uv run kaisetsu-gui        # または uv run python -m kaisetsu.gui
+```
+
+「データ → はじめての精密化(ウィザード)」で、回折データ・CIF・装置プリセットを選ぶだけで
+標準の手順(スケールと背景 → 格子定数 → ピーク幅 → 原子座標 → 変位パラメータ)を実行できる。
+パラメータ表では精密化する量をチェックで選び、F9 で精密化、F5 で再計算、Esc で中止。
+使い方の詳細は [docs/user-guide/getting-started.md](docs/user-guide/getting-started.md)。
