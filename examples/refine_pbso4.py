@@ -45,8 +45,7 @@ def main() -> None:
     def report(step, fit):
         rf = project.rfactors()["total"]
         print(
-            f"[{step.name}] 変数 {fit.n_params:2d}  "
-            f"Rwp = {100 * rf.rwp:6.3f}%  χ² = {rf.chi2:6.3f}"
+            f"[{step.name}] 変数 {fit.n_params:2d}  Rwp = {100 * rf.rwp:6.3f}%  χ² = {rf.chi2:6.3f}"
         )
 
     recipe = standard_recipe("PbSO4", "h0")

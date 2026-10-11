@@ -133,7 +133,7 @@ def refine_least_squares(
         if not np.all(np.isfinite(r)):
             r = np.where(np.isfinite(r), r, 1e10)
         state["ssq"] = float(np.dot(r, r))
-        state["n_data"] = int(len(r))
+        state["n_data"] = len(r)
         return r
 
     def reduced_chi2() -> float:
