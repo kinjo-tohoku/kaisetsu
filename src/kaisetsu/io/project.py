@@ -14,7 +14,8 @@
       "params": {name: {value, vary, min, max, step, esd, tie}},
       "log": [...]
     }
-データ配列も JSON に含める(数万点なら数百 KB)。
+データ配列も JSON に含める(数万点なら数百 KB)。`save_project(..., external_arrays=True)` なら
+配列を同名の .npz に分けて保存し、JSON には {"$npz": キー} を置く(大きなデータ向け)。
 """
 
 from __future__ import annotations
@@ -406,9 +407,55 @@ def project_from_dict(d: dict[str, Any]) -> Project:
     return proj
 
 
-def save_project(proj: Project, path: str | Path) -> Path:
+_ARRAY_KEYS = ("x", "y", "weight", "r", "g", "dg")
+
+
+def _npz_path(p: Path) -> Path:
+    name = p.name
+    for suf in (".kaisetsu.json", ".json"):
+        if name.endswith(suf):
+            return p.with_name(name[: -len(suf)] + ".npz")
+    return p.with_suffix(".npz")
+
+
+def _externalize(d: dict[str, Any]) -> dict[str, Any]:
+    """ヒストグラムと PDF の配列を取り出し、JSON 側に参照キーを置く。"""
+    arrays: dict[str, Any] = {}
+    for prefix, items in (("h", d.get("histograms", [])), ("g", d.get("pdf_datasets", []))):
+        for i, item in enumerate(items):
+            data = item["data"]
+            for key in _ARRAY_KEYS:
+                if key in data and isinstance(data[key], list):
+                    name = f"{prefix}{i}_{key}"
+                    arrays[name] = np.asarray(data[key], dtype=float)
+                    data[key] = {"$npz": name}
+    return arrays
+
+
+def _internalize(d: dict[str, Any], npz: Path | None) -> None:
+    loaded: Any = None
+    for items in (d.get("histograms", []), d.get("pdf_datasets", [])):
+        for item in items:
+            data = item["data"]
+            for key in _ARRAY_KEYS:
+                v = data.get(key)
+                if isinstance(v, dict) and "$npz" in v:
+                    if loaded is None:
+                        if npz is None or not npz.exists():
+                            raise FileNotFoundError(
+                                f"プロジェクトの配列ファイル {npz} が見つかりません"
+                            )
+                        loaded = np.load(npz)
+                    data[key] = loaded[v["$npz"]].tolist()
+
+
+def save_project(proj: Project, path: str | Path, *, external_arrays: bool = False) -> Path:
     p = Path(path)
-    p.write_text(json.dumps(project_to_dict(proj), ensure_ascii=False, indent=1), encoding="utf-8")
+    d = project_to_dict(proj)
+    if external_arrays:
+        arrays = _externalize(d)
+        np.savez_compressed(_npz_path(p), **arrays)
+    p.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     return p
 
 
@@ -417,4 +464,6 @@ def load_project(path: str | Path) -> Project:
     if not p.exists():
         raise FileNotFoundError(f"プロジェクトファイルが見つかりません: {p}")
     with p.open(encoding="utf-8") as f:
-        return project_from_dict(json.load(f))
+        d = json.load(f)
+    _internalize(d, _npz_path(p))
+    return project_from_dict(d)

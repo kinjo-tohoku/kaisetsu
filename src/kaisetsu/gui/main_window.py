@@ -39,6 +39,7 @@ from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
 from kaisetsu.gui.background_dialog import BackgroundDialog
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
+from kaisetsu.gui.i18n import tr
 from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.gui.plot_widget import HistoryPlot, PatternPlot, PDFPlot
@@ -113,7 +114,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         # パラメータ表(ドック)
-        dock = QDockWidget("パラメータ", self)
+        dock = QDockWidget(tr("パラメータ"), self)
         dock.setObjectName("paramDock")
         panel = QWidget()
         v = QVBoxLayout(panel)
@@ -121,7 +122,7 @@ class MainWindow(QMainWindow):
         filt = QHBoxLayout()
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("絞り込み(例: *cell*, h0:inst:*, Pb)")
-        self.only_free = QCheckBox("精密化中のみ")
+        self.only_free = QCheckBox(tr("精密化中のみ"))
         filt.addWidget(self.filter_edit, 1)
         filt.addWidget(self.only_free)
         v.addLayout(filt)
@@ -136,7 +137,7 @@ class MainWindow(QMainWindow):
             ("スケール", "*:*:scale"),
             ("PDF", "g*:*"),
         ):
-            b = QPushButton(label)
+            b = QPushButton(tr(label))
             b.setFlat(True)
             b.clicked.connect(lambda _=False, p=pat: self.filter_edit.setText(p))
             quick.addWidget(b)
@@ -163,11 +164,11 @@ class MainWindow(QMainWindow):
         v.addWidget(hint)
         v.addWidget(self.table, 1)
         btns = QHBoxLayout()
-        self.btn_vary_shown = QPushButton("表示中の項目に全部チェック")
+        self.btn_vary_shown = QPushButton(tr("表示中の項目に全部チェック"))
         self.btn_vary_shown.setToolTip(
             "いま表に表示されている(絞り込み後の)パラメータの「精密化」をまとめてオンにします"
         )
-        self.btn_fix_shown = QPushButton("表示中のチェックを全部外す")
+        self.btn_fix_shown = QPushButton(tr("表示中のチェックを全部外す"))
         self.btn_fix_shown.setToolTip(
             "いま表に表示されているパラメータの「精密化」をまとめてオフにします"
         )
@@ -184,20 +185,20 @@ class MainWindow(QMainWindow):
         self.only_free.toggled.connect(self.param_filter.set_only_free)
 
         # 構造の 3D 表示(ドック)
-        self.structure_dock = QDockWidget("構造", self)
+        self.structure_dock = QDockWidget(tr("構造"), self)
         self.structure_dock.setObjectName("structureDock")
         self.structure_view = StructureView()
         self.structure_dock.setWidget(self.structure_view)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.structure_dock)
         # χ² の推移(ドック)
-        self.history_dock = QDockWidget("χ² の推移", self)
+        self.history_dock = QDockWidget(tr("χ² の推移"), self)
         self.history_dock.setObjectName("historyDock")
         self.history_plot = HistoryPlot()
         self.history_dock.setWidget(self.history_plot)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.history_dock)
         self.history_dock.hide()
 
-        self.status_label = QLabel("データと相を読み込んでください")
+        self.status_label = QLabel(tr("データと相を読み込んでください"))
         self.statusBar().addWidget(self.status_label, 1)
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color: #b02020; font-weight: bold;")
@@ -212,78 +213,86 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         mb = self.menuBar()
 
-        m_file = mb.addMenu("ファイル(&F)")
+        m_file = mb.addMenu(tr("ファイル(&F)"))
         self._add_action(
-            m_file, "新規プロジェクト(&N)", self.new_project, QKeySequence.StandardKey.New
+            m_file, tr("新規プロジェクト(&N)"), self.new_project, QKeySequence.StandardKey.New
         )
         self.act_open = self._add_action(
-            m_file, "プロジェクトを開く(&O)…", self.open_project, QKeySequence.StandardKey.Open
+            m_file, tr("プロジェクトを開く(&O)…"), self.open_project, QKeySequence.StandardKey.Open
         )
         self.act_save = self._add_action(
-            m_file, "プロジェクトを保存(&S)", self.save_project, QKeySequence.StandardKey.Save
+            m_file, tr("プロジェクトを保存(&S)"), self.save_project, QKeySequence.StandardKey.Save
         )
         self._add_action(
-            m_file, "名前を付けて保存(&A)…", self.save_project_as, QKeySequence.StandardKey.SaveAs
+            m_file,
+            tr("名前を付けて保存(&A)…"),
+            self.save_project_as,
+            QKeySequence.StandardKey.SaveAs,
         )
         m_file.addSeparator()
-        self._add_action(m_file, "計算パターンを CSV に書き出す…", self.export_pattern_csv)
-        self._add_action(m_file, "反射リストを CSV に書き出す…", self.export_reflections_csv)
-        self._add_action(m_file, "相を CIF に書き出す(VESTA で開けます)…", self.export_cif)
-        self._add_action(m_file, "図を画像で保存 (PNG/SVG)…", self.export_plot_image)
+        self._add_action(m_file, tr("計算パターンを CSV に書き出す…"), self.export_pattern_csv)
+        self._add_action(m_file, tr("反射リストを CSV に書き出す…"), self.export_reflections_csv)
+        self._add_action(m_file, tr("相を CIF に書き出す(VESTA で開けます)…"), self.export_cif)
+        self._add_action(m_file, tr("図を画像で保存 (PNG/SVG)…"), self.export_plot_image)
         m_file.addSeparator()
-        self._add_action(m_file, "終了(&X)", self.close, QKeySequence.StandardKey.Quit)
+        self._add_action(m_file, tr("終了(&X)"), self.close, QKeySequence.StandardKey.Quit)
 
-        m_data = mb.addMenu("データ(&D)")
+        m_data = mb.addMenu(tr("データ(&D)"))
         self.act_load = self._add_action(
-            m_data, "回折データを読み込む(&L)…", self.load_data, "Ctrl+L"
+            m_data, tr("回折データを読み込む(&L)…"), self.load_data, "Ctrl+L"
         )
         self.act_add_phase = self._add_action(
-            m_data, "CIF から相を追加(&P)…", self.add_phase_from_cif, "Ctrl+P"
+            m_data, tr("CIF から相を追加(&P)…"), self.add_phase_from_cif, "Ctrl+P"
         )
         self.act_instrument = self._add_action(
-            m_data, "装置と試料の設定(&I)…", self.edit_instrument, "Ctrl+I"
+            m_data, tr("装置と試料の設定(&I)…"), self.edit_instrument, "Ctrl+I"
         )
         self.act_background = self._add_action(
-            m_data, "背景の設定(&B)…", self.edit_background, "Ctrl+B"
+            m_data, tr("背景の設定(&B)…"), self.edit_background, "Ctrl+B"
         )
         self.act_phase = self._add_action(
-            m_data, "相の設定(強度の扱い・選択配向軸・異方性)…", self.edit_phase
+            m_data, tr("相の設定(強度の扱い・選択配向軸・異方性)…"), self.edit_phase
         )
         m_data.addSeparator()
         self.act_load_pdf = self._add_action(
-            m_data, "PDF データ G(r) を読み込む…", self.load_pdf_data
+            m_data, tr("PDF データ G(r) を読み込む…"), self.load_pdf_data
         )
-        self.act_transform = self._add_action(m_data, "I(Q) から G(r) を作る…", self.transform_iq)
+        self.act_transform = self._add_action(
+            m_data, tr("I(Q) から G(r) を作る…"), self.transform_iq
+        )
         m_data.addSeparator()
         self.act_wizard = self._add_action(
-            m_data, "はじめての精密化(ウィザード)(&W)…", self.run_wizard
+            m_data, tr("はじめての精密化(ウィザード)(&W)…"), self.run_wizard
+        )
+        self.act_sequence = self._add_action(
+            m_data, tr("連続データを順に精密化…"), self.run_sequence
         )
 
-        m_ref = mb.addMenu("精密化(&R)")
-        self.act_calc = self._add_action(m_ref, "パターンを計算(&C)", self.recalculate, "F5")
-        self.act_refine = self._add_action(m_ref, "精密化を実行(&R)", self.refine, "F9")
+        m_ref = mb.addMenu(tr("精密化(&R)"))
+        self.act_calc = self._add_action(m_ref, tr("パターンを計算(&C)"), self.recalculate, "F5")
+        self.act_refine = self._add_action(m_ref, tr("精密化を実行(&R)"), self.refine, "F9")
         self.act_recipe = self._add_action(
-            m_ref, "標準の手順で精密化(&S)…", self.refine_recipe, "Shift+F9"
+            m_ref, tr("標準の手順で精密化(&S)…"), self.refine_recipe, "Shift+F9"
         )
         self.act_pdf_recipe = self._add_action(
-            m_ref, "PDF の標準手順で精密化…", self.refine_pdf_recipe
+            m_ref, tr("PDF の標準手順で精密化…"), self.refine_pdf_recipe
         )
-        self.act_stop = self._add_action(m_ref, "中止(&T)", self.stop_refine, "Esc")
+        self.act_stop = self._add_action(m_ref, tr("中止(&T)"), self.stop_refine, "Esc")
         self.act_stop.setEnabled(False)
         m_ref.addSeparator()
-        self._add_action(m_ref, "すべて固定(&F)", self.fix_all)
-        self._add_action(m_ref, "結果の要約を表示(&U)", self.show_summary)
+        self._add_action(m_ref, tr("すべて固定(&F)"), self.fix_all)
+        self._add_action(m_ref, tr("結果の要約を表示(&U)"), self.show_summary)
         m_ref.addSeparator()
-        self.act_mem = self._add_action(m_ref, "MEM 電子密度 / 核密度(&M)…", self.run_mem)
+        self.act_mem = self._add_action(m_ref, tr("MEM 電子密度 / 核密度(&M)…"), self.run_mem)
 
-        m_view = mb.addMenu("表示(&V)")
+        m_view = mb.addMenu(tr("表示(&V)"))
         m_view.addAction(self.param_dock.toggleViewAction())
         m_view.addAction(self.structure_dock.toggleViewAction())
         m_view.addAction(self.history_dock.toggleViewAction())
 
-        m_help = mb.addMenu("ヘルプ(&H)")
-        self._add_action(m_help, "パラメータ名の規則", self.show_naming_help)
-        self._add_action(m_help, "バージョン情報(&A)", self.show_about)
+        m_help = mb.addMenu(tr("ヘルプ(&H)"))
+        self._add_action(m_help, tr("パラメータ名の規則"), self.show_naming_help)
+        self._add_action(m_help, tr("バージョン情報(&A)"), self.show_about)
 
         self._build_toolbar()
 
@@ -300,22 +309,22 @@ class MainWindow(QMainWindow):
             act.setIconText(text)
             tb.addAction(act)
 
-        add(self.act_wizard, sp.SP_DialogHelpButton, "ウィザード")
-        add(self.act_load, sp.SP_DialogOpenButton, "データ読込")
-        add(self.act_add_phase, sp.SP_FileIcon, "CIF 追加")
-        add(self.act_instrument, sp.SP_FileDialogDetailedView, "装置設定")
-        add(self.act_background, sp.SP_FileDialogListView, "背景設定")
-        add(self.act_phase, sp.SP_FileDialogInfoView, "相の設定")
+        add(self.act_wizard, sp.SP_DialogHelpButton, tr("ウィザード"))
+        add(self.act_load, sp.SP_DialogOpenButton, tr("データ読込"))
+        add(self.act_add_phase, sp.SP_FileIcon, tr("CIF 追加"))
+        add(self.act_instrument, sp.SP_FileDialogDetailedView, tr("装置設定"))
+        add(self.act_background, sp.SP_FileDialogListView, tr("背景設定"))
+        add(self.act_phase, sp.SP_FileDialogInfoView, tr("相の設定"))
         tb.addSeparator()
-        add(self.act_calc, sp.SP_BrowserReload, "計算 (F5)")
-        add(self.act_refine, sp.SP_MediaPlay, "精密化 (F9)")
-        add(self.act_recipe, sp.SP_MediaSeekForward, "標準の手順で精密化")
-        add(self.act_stop, sp.SP_MediaStop, "中止")
+        add(self.act_calc, sp.SP_BrowserReload, tr("計算 (F5)"))
+        add(self.act_refine, sp.SP_MediaPlay, tr("精密化 (F9)"))
+        add(self.act_recipe, sp.SP_MediaSeekForward, tr("標準の手順で精密化"))
+        add(self.act_stop, sp.SP_MediaStop, tr("中止"))
         tb.addSeparator()
-        add(self.act_load_pdf, sp.SP_DirOpenIcon, "PDF 読込")
-        add(self.act_mem, sp.SP_ComputerIcon, "MEM")
+        add(self.act_load_pdf, sp.SP_DirOpenIcon, tr("PDF 読込"))
+        add(self.act_mem, sp.SP_ComputerIcon, tr("MEM"))
         tb.addSeparator()
-        add(self.act_save, sp.SP_DialogSaveButton, "保存")
+        add(self.act_save, sp.SP_DialogSaveButton, tr("保存"))
 
     def _add_action(
         self,
@@ -339,10 +348,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_tree(self) -> None:
         self.tree.clear()
-        root = QTreeWidgetItem([self.project.name or "プロジェクト"])
+        root = QTreeWidgetItem([self.project.name or tr("プロジェクト")])
         root.setData(0, Qt.ItemDataRole.UserRole, ("project", None))
         self.tree.addTopLevelItem(root)
-        phases = QTreeWidgetItem(["相"])
+        phases = QTreeWidgetItem([tr("相")])
         root.addChild(phases)
         for ph in self.project.phases.values():
             st = ph.structure
@@ -351,7 +360,7 @@ class MainWindow(QMainWindow):
             item.setData(0, Qt.ItemDataRole.UserRole, ("phase", ph.name))
             item.setToolTip(0, repr(st.lattice))
             phases.addChild(item)
-        hists = QTreeWidgetItem(["ヒストグラム"])
+        hists = QTreeWidgetItem([tr("ヒストグラム")])
         root.addChild(hists)
         for i, h in enumerate(self.project.histograms):
             rad = h.instrument.radiation
@@ -362,7 +371,7 @@ class MainWindow(QMainWindow):
             item.setData(0, Qt.ItemDataRole.UserRole, ("hist", i))
             hists.addChild(item)
         if self.project.pdf_datasets:
-            pdfs = QTreeWidgetItem(["PDF データ"])
+            pdfs = QTreeWidgetItem([tr("PDF データ")])
             root.addChild(pdfs)
             for i, g in enumerate(self.project.pdf_datasets):
                 kind = "中性子" if g.radiation == "neutron" else "X 線"
@@ -1002,6 +1011,18 @@ class MainWindow(QMainWindow):
         from kaisetsu.gui.mem_dialog import MEMDialog
 
         dlg = MEMDialog(self.project, self)
+        dlg.exec()
+        self._refresh_all()
+
+    def run_sequence(self) -> None:
+        if not (self.project.phases and self.project.histograms):
+            QMessageBox.information(
+                self, tr("連続データを順に精密化"), "先に 1 つ目のデータで精密化しておいてください"
+            )
+            return
+        from kaisetsu.gui.sequence_dialog import SequenceDialog
+
+        dlg = SequenceDialog(self.project, self)
         dlg.exec()
         self._refresh_all()
 

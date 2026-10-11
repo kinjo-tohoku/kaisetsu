@@ -93,6 +93,8 @@ write_ccp4(mem.density, mem.lattice, mem.spacegroup, "pbso4_mem.ccp4")  # VESTA 
 ```powershell
 uv sync --extra gui        # PySide6 / pyqtgraph / matplotlib を入れる(開発環境では uv sync で入る)
 uv run kaisetsu-gui        # または uv run python -m kaisetsu.gui
+uv run kaisetsu-gui --lang en   # 主要メニューを英語にする
+.\packaginguild_windows.ps1  # PyInstaller で配布用フォルダ(dist/kaisetsu)と zip を作る
 ```
 
 「データ → はじめての精密化(ウィザード)」で、回折データ・CIF・装置プリセットを選ぶだけで

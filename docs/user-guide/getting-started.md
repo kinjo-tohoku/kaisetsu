@@ -174,6 +174,20 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 
 試すなら PbSO4(`examples/mem_pbso4.py` と同じ): Pb の位置に 700 e/Å³ 程度の最大、S、O の順に極大が出ます。
 
+## 7d. 連続データ(温度・時間系列)の逐次精密化
+
+1 つ目のデータで精密化を済ませ、動かすパラメータにチェックを入れた状態で
+「データ → 連続データを順に精密化」。ファイルを複数選んで「実行」すると、前の結果を初期値にして
+順に精密化し、Rwp・χ²・各パラメータ(esd 付き)の表が出ます。「CSV に保存」で表計算ソフトへ。
+スクリプトでは `kaisetsu.refine.sequential.refine_sequence` が同じことをします。
+
+## 7e. 英語表示・大きなデータの保存
+
+- 英語のメニューにするには `uv run kaisetsu-gui --lang en`(設定 "language" を "en" にしても同じ)。
+  主要なメニュー・ツールバー・パネル名だけが英語になり、説明文は日本語のままです。
+- 数万点を超えるデータは、スクリプトで `save_project(proj, path, external_arrays=True)` とすると
+  配列を同名の .npz に分けて保存できます(JSON が軽くなる)。読み込みは同じ `load_project`。
+
 ## 8. パラメータ名の規則
 
 ```
@@ -182,7 +196,9 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 相:サイト:occ, uiso, u11..u23       占有率、変位パラメータ
 h0:inst:zero|u|v|w|p|x|y|z|s_l|h_l|pol   装置(h0 は 1 番目のデータ)
 h0:sample:displacement|transparency|disp_x|disp_y|mu_r   試料
-h0:bkg:0,1,2,…                      背景(Chebyshev 係数)
+h0:bkg:0,1,2,…                      背景(Chebyshev 係数、固定点補間では各点の高さ)
+h0:hump0:center|fwhm|height         非晶質ハンプ(中心、半値全幅、高さ)
+h0:inst:kb_ratio                    Kβ 線の強度比(装置設定で「Kβ あり」のとき)
 h0:相:scale|md_r|size|strain        スケール、選択配向 r、結晶子サイズ(μm)、微小歪み
 g0:pdf:scale|qdamp|qbroad           PDF データセット(g0 は 1 番目の G(r))
 g0:相:scale|delta1|delta2|sratio|spdiameter   相の PDF パラメータ

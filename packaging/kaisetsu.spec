@@ -27,7 +27,7 @@ hiddenimports += collect_submodules("kaisetsu")
 hiddenimports += collect_submodules("scipy.special")
 hiddenimports += collect_submodules("scipy.optimize")
 hiddenimports += collect_submodules("scipy.sparse")
-hiddenimports += ["numba.core.types.old_scalars", "pyqtgraph.exporters", "matplotlib.backends.backend_agg", "matplotlib.backends.backend_svg"]
+hiddenimports += ["pyqtgraph.exporters", "matplotlib.backends.backend_agg", "matplotlib.backends.backend_svg"]
 
 a = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "launch.py")],
