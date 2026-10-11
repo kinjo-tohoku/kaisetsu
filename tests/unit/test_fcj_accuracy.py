@@ -61,7 +61,10 @@ def test_accurate_method_converges(
     gsas = fcj_pseudo_voigt(x, pos, fg, fl, s_l, h_l, method="gsas")
     assert np.max(np.abs(gsas - ref)) / ref.max() < 6e-2
     # 面積は 1
-    assert np.sum(ours) * 0.01 == pytest.approx(1.0, abs=1e-2)
+    xw = np.arange(pos - 15.0, pos + 15.0, 0.01)  # ローレンツ裾を含む広い範囲で面積 1
+    assert np.sum(fcj_pseudo_voigt(xw, pos, fg, fl, s_l, h_l)) * 0.01 == pytest.approx(
+        1.0, abs=5e-3
+    )
 
 
 def test_batch_matches_single_and_handles_windows() -> None:
