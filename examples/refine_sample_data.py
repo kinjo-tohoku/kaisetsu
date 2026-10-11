@@ -4,7 +4,7 @@
     uv run python examples/refine_sample_data.py lab6    # LaB6、Bruker .raw、Cu Kα
     uv run python examples/refine_sample_data.py garnet  # Y3(Fe,Al)5O12、ILL D1A 中性子 1.909 Å
     uv run python examples/refine_sample_data.py nac     # Na2Ca3Al2F14 + CaF2、放射光 11-BM
-    uv run python examples/refine_sample_data.py ni_pdf  # Ni の PDF(X 線 G(r)、PDFfit2 相当の実空間フィット)
+    uv run python examples/refine_sample_data.py ni_pdf  # Ni の PDF(X 線 G(r)、実空間フィット)
     uv run python examples/refine_sample_data.py ni_pdf_neutron  # 同、中性子
     uv run python examples/refine_sample_data.py all
 

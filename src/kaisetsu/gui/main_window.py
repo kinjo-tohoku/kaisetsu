@@ -1102,6 +1102,8 @@ class MainWindow(QMainWindow):
             "h0:sample:displacement|transparency|disp_x|disp_y|mu_r … 試料\n"
             "h0:bkg:0,1,2,… … 背景(Chebyshev 係数)\n"
             "h0:相:scale|md_r|size|strain … スケール、選択配向、サイズ、歪み\n"
+            "h0:相:size_ax … 一軸異方的サイズの軸方向成分、h0:相:S_HKL … Stephens 異方的歪み\n"
+            "h0:相:sh2_1,sh4_1,… … 球面調和関数の集合組織(相の設定で有効にしたとき)\n"
             "g0:pdf:scale|qdamp|qbroad … PDF データセット(g0 は 1 番目の G(r))\n"
             "g0:相:scale|delta1|delta2|sratio|spdiameter … 相の PDF パラメータ\n\n"
             "絞り込み欄では * と ? が使えます(例: *:cell:*, h0:inst:[uvw])。",

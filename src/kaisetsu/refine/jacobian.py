@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from kaisetsu.profile.corrections import march_dollase
+from kaisetsu.profile.texture import coefficient_names
 from kaisetsu.reflections.structure_factor import structure_factors
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ def classify(project: Project, p: Parameter) -> tuple[str, int | None, str | Non
         if len(parts) == 2 and parts[0] in project.phases:
             if parts[1] == "scale":
                 return "scale", i, parts[0]
-            if parts[1] == "md_r":
+            if parts[1] == "md_r" or parts[1].startswith("sh"):
                 return "po", i, parts[0]
         return "other", i, None
     parts = p.name.split(":")
@@ -172,17 +172,20 @@ def project_jacobian(project: Project, numerical_residual: FloatArray | None = N
                     else:
                         pc = h.contributions[phase]
                         tbl = h.result.peaks[list(h.contributions).index(phase)]
-                        st = ph.structure
-                        po0 = march_dollase(
-                            tbl.hkl, st.lattice, st.spacegroup, pc.march_dollase_axis, p.value
-                        )
-                        po1 = march_dollase(
-                            tbl.hkl,
-                            st.lattice,
-                            st.spacegroup,
-                            pc.march_dollase_axis,
-                            p.value + step,
-                        )
+                        pc.structure = ph.structure
+                        if p.name.endswith(":md_r"):
+                            po0 = pc.orientation_factor(tbl.hkl)
+                            po1 = pc.orientation_factor(tbl.hkl, march_dollase_r=p.value + step)
+                        else:
+                            # 球面調和関数の係数: O は係数に線形なので差分が厳密
+                            assert pc.sh_coefficients is not None
+                            k_sh = coefficient_names(pc.texture_basis()).index(
+                                p.name.split(":")[-1]
+                            )
+                            c1 = pc.sh_coefficients.copy()
+                            c1[k_sh] += step
+                            po0 = pc.orientation_factor(tbl.hkl)
+                            po1 = pc.orientation_factor(tbl.hkl, sh_coefficients=c1)
                         with np.errstate(divide="ignore", invalid="ignore"):
                             ratio = np.where(po0 > 0, (po1 - po0) / (step * po0), 0.0)
                     dy = _assemble(h, phase, ratio)

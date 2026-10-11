@@ -31,7 +31,6 @@ from kaisetsu.pattern.calculator import (
     PhaseContribution,
     _empty_peak_table,
 )
-from kaisetsu.profile.corrections import march_dollase
 from kaisetsu.profile.tof_profile import tof_peak, tof_peak_fwhm
 from kaisetsu.reflections.hkl import generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
@@ -165,9 +164,7 @@ def _sample_broadening_tof(
 ) -> tuple[FloatArray, FloatArray]:
     """試料由来の広がり(TOF、μs)。(ガウス分散 σ² への加算, ローレンツ FWHM への加算)。"""
     eight_ln2 = 8.0 * math.log(2.0)
-    dd_size = np.zeros_like(d)
-    if ph.size_um is not None and ph.size_um > 0:
-        dd_size = d * d / (1.0e4 * ph.size_um)
+    dd_size = d * d * ph.inverse_size(hkl, len(d)) / 1.0e4
     if ph.stephens is not None:
         from kaisetsu.profile.stephens import monomial_values
 
@@ -244,9 +241,7 @@ def calculate_pattern_tof(
         d = refl.d
         pos = instrument.position(d)
         lorentz = d**4 * sin_theta
-        po = march_dollase(
-            refl.hkl, st.lattice, st.spacegroup, ph.march_dollase_axis, ph.march_dollase_r
-        )
+        po = ph.orientation_factor(refl.hkl)
         inten = ph.scale / st.lattice.volume * refl.multiplicity * f2 * lorentz * po
         alpha = instrument.alpha_of(d)
         beta = instrument.beta_of(d)

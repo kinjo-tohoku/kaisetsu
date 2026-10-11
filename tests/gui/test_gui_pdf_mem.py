@@ -160,10 +160,21 @@ def test_phase_dialog_modes_and_aniso(qtbot, data_dir: Path) -> None:
     dlg.axis[2].setValue(0)
     dlg.site_boxes["Pb"].setChecked(True)
     dlg.radius.setValue(3.0)
+    dlg.sh_enable.setChecked(True)
+    dlg.sh_order.setValue(4)
+    dlg.size_uniaxial.setChecked(True)
+    dlg.size_axis[0].setValue(0)
+    dlg.size_axis[1].setValue(1)
+    dlg.size_axis[2].setValue(0)
     notes = dlg.apply()
     ph = win.project.phases["PbSO4"]
     assert ph.pawley and not ph.le_bail
-    assert win.project.histograms[0].contributions["PbSO4"].march_dollase_axis == (0, 1, 0)
+    pc = win.project.histograms[0].contributions["PbSO4"]
+    assert pc.march_dollase_axis == (0, 1, 0)
+    assert pc.sh_order == 4 and pc.sh_coefficients is not None and len(pc.sh_coefficients) == 5
+    assert "h0:PbSO4:sh2_1" in win.project.params.names()
+    assert pc.size_axial_um is not None and pc.size_axis == (0, 1, 0)
+    assert "h0:PbSO4:size_ax" in win.project.params.names()
     assert ph.structure.site("Pb").u_aniso is not None
     assert "PbSO4:Pb:u11" in win.project.params.names()
     assert ph.brindley_radius_um == 3.0
@@ -177,8 +188,12 @@ def test_phase_dialog_modes_and_aniso(qtbot, data_dir: Path) -> None:
     qtbot.addWidget(dlg2)
     dlg2.mode.setCurrentIndex(0)
     dlg2.site_boxes["Pb"].setChecked(False)
+    dlg2.sh_enable.setChecked(False)
+    dlg2.size_uniaxial.setChecked(False)
     dlg2.apply()
     assert not ph.pawley and ph.structure.site("Pb").u_aniso is None
+    assert pc.sh_order == 0 and pc.size_axial_um is None
+    assert "h0:PbSO4:sh2_1" not in win.project.params.names()
 
 
 def test_mem_dialog_runs_small_grid(qtbot, data_dir: Path, tmp_path: Path) -> None:

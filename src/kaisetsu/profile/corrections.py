@@ -83,6 +83,31 @@ def march_dollase(
     return out
 
 
+def axis_cos2(
+    hkl: npt.ArrayLike, lattice: Lattice, spacegroup: SpaceGroup, axis: npt.ArrayLike
+) -> FloatArray:
+    """反射の散乱ベクトルと軸(逆格子方向 hkl)のなす角の cos² を、ラウエ等価反射で平均したもの。
+
+    一軸異方的な結晶子サイズ広がり(`PhaseContribution.inverse_size`)に使う。
+    軸が対称軸なら等価反射はすべて同じ角をなすので平均は不要だが、一般の軸でも使えるようにする。
+    """
+    h = np.atleast_2d(np.asarray(hkl, dtype=np.int64))
+    gs = lattice.reciprocal_metric_tensor
+    ax = np.asarray(axis, dtype=np.float64)
+    ax_len = math.sqrt(float(ax @ gs @ ax))
+    if ax_len == 0.0:
+        raise ValueError("サイズの軸が零ベクトルです")
+    out = np.zeros(len(h))
+    for i, hh in enumerate(h):
+        eq = spacegroup.laue_equivalents(hh).astype(np.float64)
+        dots = eq @ gs @ ax
+        lens = np.sqrt(np.einsum("ij,jk,ik->i", eq, gs, eq))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cos_a = np.where(lens > 0, dots / (lens * ax_len), 0.0)
+        out[i] = float(np.mean(np.clip(cos_a, -1.0, 1.0) ** 2))
+    return out
+
+
 def cylinder_absorption(mu_r: float, two_theta: npt.ArrayLike) -> FloatArray:
     """円筒試料の透過率 A(θ)(Debye-Scherrer、入射ビームが試料全体を照らす場合)。
 

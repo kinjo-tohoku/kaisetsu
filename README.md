@@ -75,12 +75,12 @@ from kaisetsu.mem import write_ccp4
 proj = Project("Ni PDF")
 proj.add_phase(Structure.from_cif("data/public/pdf/Ni.cif"), name="Ni")
 proj.add_pdf(read_pdf_data("data/public/pdf/Ni-xray.gr"), "xray", qdamp=0.06, r_min=1.5, r_max=20)
-pdf_recipe("Ni", "g0").run(proj)      # スケール → 格子 → U と δ2 → Q_damp → 座標 → 最終
-print(proj.summary())                 # Rw ≈ 7.1%、a = 3.5316 Å
+pdf_recipe("Ni", "g0").run(proj)  # スケール → 格子 → U と δ2 → Q_damp → 座標 → 最終
+print(proj.summary())  # Rw ≈ 7.1%、a = 3.5316 Å
 
 # MEM: Rietveld 済みのプロジェクト(上の PbSO4)から電子密度
 mem = mem_from_project(proj_rietveld, hist=0, phase="PbSO4", grid=(64, 40, 54))
-print(mem.chi2, mem.maxima(5))        # C ≈ 1、極大は Pb の位置
+print(mem.chi2, mem.maxima(5))  # C ≈ 1、極大は Pb の位置
 write_ccp4(mem.density, mem.lattice, mem.spacegroup, "pbso4_mem.ccp4")  # VESTA で開く
 ```
 
@@ -101,5 +101,6 @@ uv run kaisetsu-gui --lang en   # 主要メニューを英語にする
 標準の手順(スケールと背景 → 格子定数 → ピーク幅 → 原子座標 → 変位パラメータ)を実行できる。
 パラメータ表では精密化する量をチェックで選び、F9 で精密化、F5 で再計算、Esc で中止。
 PDF データの読み込みと標準手順、I(Q) → G(r) の変換、MEM(断面表示、VESTA への書き出し、MPF)、
-相の設定(Le Bail / Pawley、選択配向軸、異方性 U)、構造の 3D 表示、χ² の推移、図の PNG/SVG 保存も GUI から使える。
+相の設定(Le Bail / Pawley、選択配向軸、球面調和関数の集合組織、異方性 U、Stephens 異方的歪み、
+一軸異方的サイズ)、構造の 3D 表示、χ² の推移、図の PNG/SVG 保存も GUI から使える。
 使い方の詳細は [docs/user-guide/getting-started.md](docs/user-guide/getting-started.md)。

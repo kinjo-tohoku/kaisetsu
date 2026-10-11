@@ -21,7 +21,9 @@
     h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
     h{i}:hump{k}:{center|fwhm|height}      非晶質ハンプ(ガウス関数)
     h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
+    h{i}:{相}:size_ax                      一軸異方的サイズの軸方向成分(有効にしたとき)
     h{i}:{相}:S_{HKL}                      Stephens 異方的歪み(有効にしたとき。ラウエ群で拘束)
+    h{i}:{相}:sh{l}_{j}                    球面調和関数の集合組織の係数(有効にしたとき)
     g{i}:pdf:{scale|qdamp|qbroad}          PDF データセット(G(r))
     g{i}:{相}:{scale|delta1|delta2|sratio|spdiameter}  相-PDF
 """
@@ -54,6 +56,7 @@ from kaisetsu.profile.background import (
 )
 from kaisetsu.profile.corrections import brindley_factor
 from kaisetsu.profile.stephens import MONOMIALS, monomial_name, stephens_constraint
+from kaisetsu.profile.texture import basis_size, coefficient_names, texture_index
 from kaisetsu.refine.constraints import (
     SymmetryConstraint,
     adp_constraint,
@@ -158,6 +161,13 @@ def _kbeta_setter(inst: CWInstrument) -> Callable[[float], None]:
 def _size_setter(pc: PhaseContribution) -> Callable[[float], None]:
     def _set(v: float) -> None:
         pc.size_um = v if v > 0 else None
+
+    return _set
+
+
+def _size_axial_setter(pc: PhaseContribution) -> Callable[[float], None]:
+    def _set(v: float) -> None:
+        pc.size_axial_um = max(v, 1e-6)
 
     return _set
 
@@ -507,6 +517,59 @@ class Project:
         else:
             pc.stephens = None
         self.build_parameters()
+
+    def enable_uniaxial_size(
+        self,
+        hist: int,
+        phase: str,
+        axis: tuple[int, int, int] | None = None,
+        enable: bool = True,
+    ) -> None:
+        """相-ヒストグラムの結晶子サイズ広がりを一軸異方的にする(板状・針状)。
+
+        axis は板の法線または針の方向(逆格子の hkl)。軸方向のサイズ h{i}:相:size_ax は
+        現在の等方サイズから初期化する。等方サイズが無ければ 1 μm にする。
+        """
+        pc = self.histograms[hist].contributions[phase]
+        if enable:
+            if axis is not None:
+                pc.size_axis = (int(axis[0]), int(axis[1]), int(axis[2]))
+            if pc.size_um is None or pc.size_um <= 0:
+                pc.size_um = 1.0
+            if pc.size_axial_um is None:
+                pc.size_axial_um = pc.size_um
+        else:
+            pc.size_axial_um = None
+        self.build_parameters()
+
+    def enable_texture(self, hist: int, phase: str, order: int = 4, enable: bool = True) -> None:
+        """相-ヒストグラムに球面調和関数の集合組織(次数 order、偶数)を入れる。
+
+        係数 h{i}:相:sh{l}_{j} はすべて 0(無配向)から始める。次数を変えると係数は 0 に戻る。
+        March-Dollase と併用もできるが、通常は md_r を 1 に固定しておく。
+        """
+        pc = self.histograms[hist].contributions[phase]
+        if enable:
+            order = int(order)
+            if order < 2 or order % 2:
+                raise ValueError("球面調和関数の次数は 2 以上の偶数にしてください")
+            st = self.phases[phase].structure
+            pc.structure = st
+            pc.sh_order = order
+            n = basis_size(pc.texture_basis())
+            if pc.sh_coefficients is None or len(pc.sh_coefficients) != n:
+                pc.sh_coefficients = np.zeros(n)
+        else:
+            pc.sh_order = 0
+            pc.sh_coefficients = None
+        self.build_parameters()
+
+    def texture_index(self, hist: int, phase: str) -> float:
+        """集合組織指数 J = 1 + Σ C²(球面調和関数を使っていなければ 1)。"""
+        pc = self.histograms[hist].contributions[phase]
+        if pc.sh_order <= 0 or pc.sh_coefficients is None:
+            return 1.0
+        return texture_index(pc.sh_coefficients)
 
     def add_hump(self, hist: int, center: float, fwhm: float, height: float) -> GaussianHump:
         """非晶質ハンプを背景に加える(パラメータ h{i}:hump{k}:center|fwhm|height)。"""
@@ -868,9 +931,23 @@ class Project:
                     step=1e-3,
                     setter=_size_setter(pc),
                     unit="μm",
-                    description=f"{pname} の結晶子サイズ(0 で広がりなし)",
+                    description=f"{pname} の結晶子サイズ(0 で広がりなし)"
+                    + ("。一軸モデルでは軸に垂直な方向" if pc.size_axial_um is not None else ""),
                 )
             )
+            if pc.size_axial_um is not None:
+                ps.add(
+                    Parameter(
+                        f"{ppre}:size_ax",
+                        float(pc.size_axial_um),
+                        min=1e-3,
+                        max=100.0,
+                        step=1e-3,
+                        setter=_size_axial_setter(pc),
+                        unit="μm",
+                        description=f"{pname} の結晶子サイズ(軸 {pc.size_axis} 方向)",
+                    )
+                )
             ps.add(
                 Parameter(
                     f"{ppre}:strain",
@@ -905,6 +982,25 @@ class Project:
                         [f"{ppre}:{monomial_name(MONOMIALS[k])}" for k in rel.pivots],
                         rel.coeffs,
                         rel.offset,
+                    )
+            if pc.sh_order > 0:
+                pc.structure = self.phases[pname].structure
+                basis = pc.texture_basis()
+                n_sh = basis_size(basis)
+                if pc.sh_coefficients is None or len(pc.sh_coefficients) != n_sh:
+                    pc.sh_coefficients = np.zeros(n_sh)
+                for k, nm in enumerate(coefficient_names(basis)):
+                    ell = nm[2:].split("_")[0]
+                    ps.add(
+                        Parameter(
+                            f"{ppre}:{nm}",
+                            float(pc.sh_coefficients[k]),
+                            min=-10.0,
+                            max=10.0,
+                            step=1e-3,
+                            setter=_item_setter(pc.sh_coefficients, k),
+                            description=f"{pname} の集合組織(球面調和関数 l = {ell})",
+                        )
                     )
 
     def _build_pdf_params(self, ps: ParameterSet, i: int, g: PDFEntry) -> None:
@@ -1475,10 +1571,13 @@ class Project:
         rf = self.rfactors() if (self.histograms or self.pdf_datasets) else {}
         for i, h in enumerate(self.histograms):
             lines.append(f"ヒストグラム h{i} ({h.name}): {len(h.data)} 点, {rf[h.name]}")
-            for pname in h.contributions:
+            for pname, pc in h.contributions.items():
                 rep = self.reflection_report(i, pname)
+                extra = ""
+                if pc.sh_order > 0:
+                    extra = f"  集合組織指数 J = {self.texture_index(i, pname):.3f}"
                 lines.append(
-                    f"  {pname}: R_B = {100 * rep.r_bragg:.2f}%  R_F = {100 * rep.r_f:.2f}%"
+                    f"  {pname}: R_B = {100 * rep.r_bragg:.2f}%  R_F = {100 * rep.r_f:.2f}%{extra}"
                 )
             fractions = self.phase_fractions(i)
             if len(fractions) > 1:

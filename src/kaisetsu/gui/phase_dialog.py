@@ -81,11 +81,44 @@ class PhaseDialog(QDialog):
         pf.addRow(
             QLabel("板状結晶なら劈開面の法線(例 001)、針状なら伸びる方向。r は h0:相:md_r で動かす")
         )
+        self.sh_enable = QCheckBox("球面調和関数の集合組織を使う(March-Dollase より一般的)")
+        self.sh_enable.setChecked(pc is not None and pc.sh_order > 0)
+        self.sh_order = QSpinBox()
+        self.sh_order.setRange(2, 10)
+        self.sh_order.setSingleStep(2)
+        self.sh_order.setValue(int(pc.sh_order) if pc is not None and pc.sh_order > 0 else 4)
+        self.sh_order.setToolTip(
+            "偶数。4 が目安、強い配向なら 6〜8。係数 h0:相:sh{l}_{j} が 0(無配向)から始まる。\n"
+            "併用するときは md_r を 1 に固定しておく"
+        )
+        row_sh = QHBoxLayout()
+        row_sh.addWidget(self.sh_enable)
+        row_sh.addWidget(QLabel("最大次数 L"))
+        row_sh.addWidget(self.sh_order)
+        row_sh.addStretch(1)
+        pf.addRow(row_sh)
         self.stephens = QCheckBox(
             "歪み広がりを異方的にする(Stephens。hkl ごとの幅、係数 S_HKL を精密化)"
         )
         self.stephens.setChecked(pc is not None and pc.stephens is not None)
         pf.addRow(self.stephens)
+        self.size_uniaxial = QCheckBox("結晶子サイズを一軸異方的にする(板状・針状)")
+        self.size_uniaxial.setChecked(pc is not None and pc.size_axial_um is not None)
+        self.size_uniaxial.setToolTip(
+            "軸方向のサイズは h0:相:size_ax、軸に垂直な方向は h0:相:size。\n"
+            "板状なら軸は板の法線(size_ax < size)、針状なら針の方向(size_ax > size)"
+        )
+        pf.addRow(self.size_uniaxial)
+        size_axis = pc.size_axis if pc is not None else (0, 0, 1)
+        self.size_axis = [QSpinBox() for _ in range(3)]
+        row_sa = QHBoxLayout()
+        for sb, v, lab in zip(self.size_axis, size_axis, ("h", "k", "l"), strict=True):
+            sb.setRange(-20, 20)
+            sb.setValue(int(v))
+            row_sa.addWidget(QLabel(lab))
+            row_sa.addWidget(sb)
+        row_sa.addStretch(1)
+        pf.addRow("サイズの軸 (hkl)", row_sa)
         self.size_lf = _spin(pc.size_lorentz_fraction if pc else 1.0, 0.0, 1.0, 2, 0.1)
         self.strain_lf = _spin(pc.strain_lorentz_fraction if pc else 1.0, 0.0, 1.0, 2, 0.1)
         pf.addRow("サイズ広がりのローレンツ成分の割合", self.size_lf)
@@ -161,6 +194,33 @@ class PhaseDialog(QDialog):
                 proj.enable_stephens(self.hist, self.phase, want)
                 notes.append(
                     f"{self.phase}: 歪み広がりを {'Stephens の異方的モデル' if want else '等方'} にしました"
+                )
+            want_sh = self.sh_enable.isChecked()
+            order = int(self.sh_order.value())
+            if order % 2:
+                order += 1
+            if want_sh != (pc.sh_order > 0) or (want_sh and order != pc.sh_order):
+                proj.enable_texture(self.hist, self.phase, order, want_sh)
+                n_sh = 0 if pc.sh_coefficients is None else len(pc.sh_coefficients)
+                notes.append(
+                    f"{self.phase}: 集合組織を "
+                    + (
+                        f"球面調和関数(L = {order}、係数 {n_sh} 個)"
+                        if want_sh
+                        else "March-Dollase のみ"
+                    )
+                    + " にしました"
+                )
+            want_ua = self.size_uniaxial.isChecked()
+            s_axis = tuple(int(sb.value()) for sb in self.size_axis)
+            if s_axis == (0, 0, 0):
+                s_axis = (0, 0, 1)
+            if want_ua != (pc.size_axial_um is not None) or (want_ua and s_axis != pc.size_axis):
+                proj.enable_uniaxial_size(self.hist, self.phase, s_axis, want_ua)
+                notes.append(
+                    f"{self.phase}: 結晶子サイズを "
+                    + (f"一軸異方的(軸 {s_axis})" if want_ua else "等方")
+                    + " にしました"
                 )
         if abs(ph.brindley_radius_um - float(self.radius.value())) > 1e-9:
             ph.brindley_radius_um = float(self.radius.value())

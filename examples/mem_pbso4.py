@@ -47,7 +47,8 @@ def main(argv: list[str]) -> None:
     t0 = time.perf_counter()
     standard_recipe("PbSO4", "h0", sample_displacement=True).run(proj)
     rf = proj.rfactors()["total"]
-    print(f"Rietveld: Rwp = {100 * rf.rwp:.2f}%  χ² = {rf.chi2:.2f}  ({time.perf_counter() - t0:.0f} s)")
+    elapsed = time.perf_counter() - t0
+    print(f"Rietveld: Rwp = {100 * rf.rwp:.2f}%  χ² = {rf.chi2:.2f}  ({elapsed:.0f} s)")
 
     t0 = time.perf_counter()
     grid = (64, 40, 54)  # a = 8.48, b = 5.40, c = 6.96 Å → 約 0.13 Å 刻み
@@ -55,7 +56,9 @@ def main(argv: list[str]) -> None:
         proj, 0, "PbSO4", grid,
         progress=lambda i, lam, c: print(f"  MEM 外側反復 {i}: λ = {lam:.3g}  C = {c:.3f}"),
     )  # fmt: skip
-    print(f"MEM: {mem.message}  R_F = {100 * mem.r_factor():.2f}%  ({time.perf_counter() - t0:.0f} s)")
+    print(
+        f"MEM: {mem.message}  R_F = {100 * mem.r_factor():.2f}%  ({time.perf_counter() - t0:.0f} s)"
+    )
     st = proj.phases["PbSO4"].structure
     for label in ("Pb", "S", "O1", "O2", "O3"):
         try:
@@ -63,7 +66,8 @@ def main(argv: list[str]) -> None:
         except KeyError:
             continue
         rho = mem.density[tuple(np.round(site.position * np.array(grid)).astype(int) % grid)]
-        print(f"  {label:3s} 位置の密度 {rho:8.2f} e/Å³   球(0.8 Å)内 {mem.integrate_sphere(site.position, 0.8):6.1f} e")
+        n_e = mem.integrate_sphere(site.position, 0.8)
+        print(f"  {label:3s} 位置の密度 {rho:8.2f} e/Å³   球(0.8 Å)内 {n_e:6.1f} e")
     print("  密度の極大(上位 5):")
     for x, v in mem.maxima(5, 0.8):
         print(f"    ({x[0]:.3f}, {x[1]:.3f}, {x[2]:.3f})  {v:.1f} e/Å³")
@@ -77,7 +81,8 @@ def main(argv: list[str]) -> None:
     if n_mpf > 0:
         t0 = time.perf_counter()
         res = run_mpf(proj, 0, "PbSO4", grid=grid, n_cycles=n_mpf, progress=print)
-        print(f"MPF: Rwp {[f'{100 * r:.2f}%' for r in res.rwp_history]}  ({time.perf_counter() - t0:.0f} s)")
+        history = [f"{100 * r:.2f}%" for r in res.rwp_history]
+        print(f"MPF: Rwp {history}  ({time.perf_counter() - t0:.0f} s)")
         write_ccp4(res.final.density, st.lattice, st.spacegroup, OUT / "pbso4_mpf.ccp4")
 
 

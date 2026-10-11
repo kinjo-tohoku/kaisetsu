@@ -25,6 +25,7 @@ import numpy.typing as npt
 from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.instrument import EIGHT_LN2, CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import (
+    axis_cos2,
     cylinder_absorption,
     lorentz_factor,
     march_dollase,
@@ -34,6 +35,7 @@ from kaisetsu.profile.corrections import (
 from kaisetsu.profile.fcj_batch import fcj_profile_batch
 from kaisetsu.profile.pseudo_voigt import tch_fwhm_eta
 from kaisetsu.profile.stephens import stephens_fwhm
+from kaisetsu.profile.texture import symmetrized_harmonics, texture_factor
 from kaisetsu.reflections.hkl import ReflectionList, generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
 from kaisetsu.scattering.xray import TableName
@@ -50,14 +52,20 @@ class PhaseContribution:
         structure: 結晶構造
         scale: スケール因子(1/V を陽に含む定義。GSAS-II の S_hist × S_phase / 100 に相当)
         march_dollase_r, march_dollase_axis: March-Dollase 選択配向(r = 1 で無し)
-        size_um: 等方的な結晶子サイズ [μm]。None で広がりなし。
+        size_um: 結晶子サイズ [μm]。None で広がりなし。
             Scherrer 式 Γ_size = (180/π) λ / (10^4 p cosθ) [deg](K = 1)
+        size_axis, size_axial_um: 一軸異方的なサイズ。size_axial_um が None でなければ、軸
+            (逆格子方向 hkl)と反射のなす角 φ で有効サイズを
+            1/p(φ) = sqrt(sin²φ / size_um² + cos²φ / size_axial_um²) とする
+            (GSAS-II の uniaxial と同じ。size_um は軸に垂直な方向のサイズ)
         strain_e6: 等方的な微小歪み(×10^-6、GSAS-II と同じ定義)。
             Γ_strain = (180/π) (ε × 10^-6) tanθ [deg]
         size_lorentz_fraction, strain_lorentz_fraction: 各広がりのローレンツ成分の割合。
             残りはガウス成分に Γ^2 として加える(GSAS-II と同じ扱い)。
         stephens: Stephens の異方的歪みの係数 S_HKL(15 個、×10⁻¹² Å⁻⁴)。None なら等方的な
             strain_e6 を使う。ローレンツ成分の割合は strain_lorentz_fraction を共用
+        sh_order, sh_coefficients: 球面調和関数の集合組織(`profile.texture`)。sh_order が 0 なら
+            使わない。係数はラウエ群で不変な調和関数(l = 2, 4, …, sh_order)の順
     """
 
     structure: Structure
@@ -69,10 +77,50 @@ class PhaseContribution:
     size_lorentz_fraction: float = 1.0
     strain_lorentz_fraction: float = 1.0
     stephens: FloatArray | None = None
+    size_axis: tuple[int, int, int] = (0, 0, 1)
+    size_axial_um: float | None = None
+    sh_order: int = 0
+    sh_coefficients: FloatArray | None = None
     #: Le Bail / Pawley 用: 代表 hkl → |F|^2。None なら構造から計算する。
     f2_table: dict[tuple[int, int, int], float] | None = None
     #: f2_table に無い反射に使う |F|^2
     f2_default: float = 1.0
+
+    @property
+    def is_uniaxial_size(self) -> bool:
+        return self.size_axial_um is not None
+
+    def inverse_size(self, hkl: IntArray | None, n: int) -> FloatArray:
+        """反射ごとの 1/p [1/μm](サイズ広がりなしなら 0)。一軸モデルは hkl が要る。"""
+        if self.size_um is None or self.size_um <= 0:
+            return np.zeros(n)
+        if self.size_axial_um is None or hkl is None:
+            return np.full(n, 1.0 / self.size_um)
+        pa = max(float(self.size_axial_um), 1e-6)
+        st = self.structure
+        c2 = axis_cos2(hkl, st.lattice, st.spacegroup, self.size_axis)
+        return np.asarray(np.sqrt((1.0 - c2) / self.size_um**2 + c2 / pa**2))
+
+    def texture_basis(self) -> tuple[tuple[int, FloatArray], ...]:
+        st = self.structure
+        return symmetrized_harmonics(st.spacegroup, st.lattice, int(self.sh_order))
+
+    def orientation_factor(
+        self,
+        hkl: IntArray,
+        march_dollase_r: float | None = None,
+        sh_coefficients: FloatArray | None = None,
+    ) -> FloatArray:
+        """選択配向の補正(March-Dollase × 球面調和関数)。引数で値を差し替えられる(微分用)。"""
+        st = self.structure
+        r = self.march_dollase_r if march_dollase_r is None else march_dollase_r
+        po = march_dollase(hkl, st.lattice, st.spacegroup, self.march_dollase_axis, r)
+        if self.sh_order > 0:
+            coef = self.sh_coefficients if sh_coefficients is None else sh_coefficients
+            basis = self.texture_basis()
+            if coef is not None and len(coef) == sum(u.shape[1] for _, u in basis):
+                po = po * texture_factor(hkl, st.lattice, basis, coef)
+        return np.asarray(po)
 
     def sample_broadening(
         self,
@@ -84,16 +132,14 @@ class PhaseContribution:
         """試料由来の広がり。
 
         Args:
-            hkl, inv_d2: Stephens の異方的歪みに使う反射指数と 1/d²(None なら等方)
+            hkl, inv_d2: Stephens の異方的歪みと一軸サイズに使う反射指数と 1/d²(None なら等方)
 
         Returns:
             (ガウス FWHM^2 への加算分 [deg^2], ローレンツ FWHM への加算分 [deg])
         """
         th = np.radians(two_theta / 2.0)
         deg = 180.0 / math.pi
-        g_size = np.zeros_like(two_theta)
-        if self.size_um is not None and self.size_um > 0:
-            g_size = deg * wavelength / (1.0e4 * self.size_um * np.cos(th))
+        g_size = deg * wavelength * self.inverse_size(hkl, len(two_theta)) / (1.0e4 * np.cos(th))
         if self.stephens is not None and hkl is not None and inv_d2 is not None:
             g_strain = stephens_fwhm(hkl, inv_d2, two_theta, self.stephens)
         else:
@@ -117,9 +163,9 @@ class PhaseContribution:
             axis = (int(po[3][0]), int(po[3][1]), int(po[3][2]))
         size = phase_hist.get("Size", ["isotropic", [1.0, 1.0, 1.0]])
         mus = phase_hist.get("Mustrain", ["isotropic", [1000.0, 1000.0, 1.0]])
-        if size[0] != "isotropic" or mus[0] != "isotropic":
-            raise NotImplementedError("GSAS-II の異方的なサイズ・歪みは未対応です")
-        return cls(
+        if size[0] not in ("isotropic", "uniaxial") or mus[0] != "isotropic":
+            raise NotImplementedError("GSAS-II の楕円体サイズ・異方的歪みは未対応です")
+        pc = cls(
             structure,
             scale=scale,
             march_dollase_r=r,
@@ -129,6 +175,11 @@ class PhaseContribution:
             size_lorentz_fraction=float(size[1][2]),
             strain_lorentz_fraction=float(mus[1][2]),
         )
+        if size[0] == "uniaxial":
+            pc.size_axial_um = float(size[1][1])
+            ax = size[3] if len(size) > 3 else [0, 0, 1]
+            pc.size_axis = (int(ax[0]), int(ax[1]), int(ax[2]))
+        return pc
 
 
 @dataclass
@@ -272,9 +323,7 @@ def calculate_pattern(
         contrib: list[FloatArray | None] = [None] * n_refl
         inten_total = np.zeros(n_refl)
 
-        po = march_dollase(
-            refl.hkl, st.lattice, st.spacegroup, ph.march_dollase_axis, ph.march_dollase_r
-        )
+        po = ph.orientation_factor(refl.hkl)
 
         table: PeakTable | None = None
         corr1: FloatArray | None = None

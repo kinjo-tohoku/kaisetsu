@@ -8,7 +8,8 @@ scratch 用 venv)。出力は validation/reference/pdffit2_ni.json。
 内容:
     calc: 固定パラメータ(a = 3.524, U_iso = 0.005, δ2 = 2.0, Q_damp = 0.06, Q_max = 40)
           での Ni の G(r)(r = 0.01〜20 Å、0.01 刻み)
-    fit_xray / fit_neutron: data/public/pdf/Ni-*.gr を a, U_iso, δ2, Q_damp, スケールで精密化した結果
+    fit_xray / fit_neutron: data/public/pdf/Ni-*.gr を a, U_iso, δ2, Q_damp, スケールで
+          精密化した結果
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ DEFAULT_PY = (
     / "0ecb529a-245e-497f-8b31-0718b6725688/scratchpad/pdffit2env/.venv/Scripts/python.exe"
 )
 
-WORKER = r'''
+WORKER = r"""
 import json, sys
 import numpy as np
 from diffpy.pdffit2 import PdfFit, redirect_stdout
@@ -40,7 +41,8 @@ from diffpy.structure import loadStructure
 import os, tempfile
 _txt = open(cif, encoding="utf-8").read()
 if not _txt.lstrip().startswith("data_"):
-    _txt = "data_kaisetsu" + chr(10) + _txt  # diffpy.structure の CIF パーサは data_ 見出しを要求する
+    # diffpy.structure の CIF パーサは data_ 見出しを要求する
+    _txt = "data_kaisetsu" + chr(10) + _txt
 _cif2 = os.path.join(tempfile.gettempdir(), "kaisetsu_ni.cif")
 open(_cif2, "w", encoding="utf-8").write(_txt)
 _st = loadStructure(_cif2)
@@ -101,13 +103,15 @@ def fit(fname, radiation, qmax, qdamp0, rmin, rmax):
         except Exception:
             esd[name] = None
     res["esd"] = esd
-    res["r"] = list(P.getR()); res["g_obs"] = list(P.getpdf_obs()); res["g_fit"] = list(P.getpdf_fit())
+    res["r"] = list(P.getR())
+    res["g_obs"] = list(P.getpdf_obs())
+    res["g_fit"] = list(P.getpdf_fit())
     return res
 
 out["fit_xray"] = fit(data_dir + "/Ni-xray.gr", "X", 40.0, 0.06, 1.5, 20.0)
 out["fit_neutron"] = fit(data_dir + "/Ni-neutron.gr", "N", 27.0, 0.02, 1.5, 20.0)
 json.dump(out, open(sys.argv[4], "w"))
-'''
+"""
 
 
 def main() -> None:
@@ -139,10 +143,11 @@ def main() -> None:
     OUT.write_text(json.dumps(data), encoding="utf-8")
     fx, fn = data["fit_xray"], data["fit_neutron"]
     print(f"書き出し: {OUT}")
-    print(f"X 線: a = {fx['a']:.5f}  Uiso = {fx['uiso']:.5f}  δ2 = {fx['delta2']:.3f}  "
-          f"Qdamp = {fx['qdamp']:.4f}  scale = {fx['dscale']:.4f}  Rw = {fx['rw']:.4f}")  # fmt: skip
-    print(f"中性子: a = {fn['a']:.5f}  Uiso = {fn['uiso']:.5f}  δ2 = {fn['delta2']:.3f}  "
-          f"Qdamp = {fn['qdamp']:.4f}  scale = {fn['dscale']:.4f}  Rw = {fn['rw']:.4f}")  # fmt: skip
+    for label, f in (("X 線", fx), ("中性子", fn)):
+        print(
+            f"{label}: a = {f['a']:.5f}  Uiso = {f['uiso']:.5f}  δ2 = {f['delta2']:.3f}  "
+            f"Qdamp = {f['qdamp']:.4f}  scale = {f['dscale']:.4f}  Rw = {f['rw']:.4f}"
+        )
 
 
 if __name__ == "__main__":
