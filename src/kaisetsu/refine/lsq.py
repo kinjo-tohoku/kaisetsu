@@ -122,6 +122,8 @@ def refine_least_squares(
     n_eval = 0
     history: list[float] = []
     t0 = time.perf_counter()
+    n_par = len(free)
+    state = {"ssq": float("nan"), "n_data": 0}
 
     def fun(x: FloatArray) -> FloatArray:
         nonlocal n_eval
@@ -130,7 +132,13 @@ def refine_least_squares(
         r = residual_fn()
         if not np.all(np.isfinite(r)):
             r = np.where(np.isfinite(r), r, 1e10)
+        state["ssq"] = float(np.dot(r, r))
+        state["n_data"] = int(len(r))
         return r
+
+    def reduced_chi2() -> float:
+        dof = max(state["n_data"] - n_par, 1)
+        return state["ssq"] / dof
 
     def jac(x: FloatArray) -> FloatArray:
         base = fun(x)
@@ -142,11 +150,13 @@ def refine_least_squares(
     if "callback" in inspect.signature(least_squares).parameters:
 
         def _cb(intermediate_result: Any = None, *args: Any) -> None:
-            chi2 = (
-                float(2.0 * intermediate_result.cost)
-                if hasattr(intermediate_result, "cost")
-                else float("nan")
-            )
+            # SciPy のバージョンにより OptimizeResult か x 配列が渡される。
+            # どちらでも直近の残差評価(受理された点)から χ²_red を出す。
+            if hasattr(intermediate_result, "cost"):
+                dof = max(state["n_data"] - n_par, 1)
+                chi2 = float(2.0 * intermediate_result.cost) / dof
+            else:
+                chi2 = reduced_chi2()
             history.append(chi2)
             if progress is not None:
                 progress(len(history), chi2)
