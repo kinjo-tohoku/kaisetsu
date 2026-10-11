@@ -48,6 +48,7 @@ from kaisetsu.gui.worker import RefineThread, RefineWorker
 from kaisetsu.io.project import load_project, save_project
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
+from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.pdf.data import PDFData, read_pdf_data
 from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.refine.recipe import Recipe
@@ -363,11 +364,15 @@ class MainWindow(QMainWindow):
         hists = QTreeWidgetItem([tr("ヒストグラム")])
         root.addChild(hists)
         for i, h in enumerate(self.project.histograms):
-            rad = h.instrument.radiation
-            kind = "中性子" if rad.is_neutron else "X 線"
-            item = QTreeWidgetItem(
-                [f"h{i}: {h.name}  ({kind} λ={rad.wavelength:.4f} Å, {len(h.data)} 点)"]
-            )
+            if isinstance(h.instrument, TOFInstrument):
+                label = (
+                    f"h{i}: {h.name}  (TOF 中性子 DIFC={h.instrument.difc:.0f}, {len(h.data)} 点)"
+                )
+            else:
+                rad = h.instrument.radiation
+                kind = "中性子" if rad.is_neutron else "X 線"
+                label = f"h{i}: {h.name}  ({kind} λ={rad.wavelength:.4f} Å, {len(h.data)} 点)"
+            item = QTreeWidgetItem([label])
             item.setData(0, Qt.ItemDataRole.UserRole, ("hist", i))
             hists.addChild(item)
         if self.project.pdf_datasets:
@@ -412,7 +417,12 @@ class MainWindow(QMainWindow):
             return
         i = min(self.current_hist, len(self.project.histograms) - 1)
         h = self.project.histograms[i]
-        self.plot.set_data(h.data, h.instrument.radiation.wavelength)
+        if isinstance(h.instrument, TOFInstrument):
+            self.plot.set_tof(h.instrument.difc)
+            self.plot.set_data(h.data, None)
+        else:
+            self.plot.set_tof(None)
+            self.plot.set_data(h.data, h.instrument.radiation.wavelength)
         if self.project.phases:
             try:
                 res = self.project.calculate(i)
@@ -644,7 +654,7 @@ class MainWindow(QMainWindow):
     def load_data_file(
         self,
         path: str,
-        instrument: CWInstrument | None = None,
+        instrument: CWInstrument | TOFInstrument | None = None,
         sample: SampleGeometry | None = None,
         n_background: int = 8,
     ) -> None:
@@ -654,6 +664,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "読み込みエラー", f"データを読み込めませんでした:\n{exc}")
             return
         self._remember_dir(path)
+        if instrument is None and data.metadata.get("xunit") == "tof_us":
+            from kaisetsu.gui.tof_dialog import TOFInstrumentDialog
+
+            guess = _guess_tof_instrument(data.metadata)
+            tdlg = TOFInstrumentDialog(guess, self)
+            if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
+                return
+            instrument = tdlg.result_instrument()
+            sample = sample or SampleGeometry()
         if instrument is None:
             dlg = InstrumentDialog(None, None, self)
             dlg.setWindowTitle("このデータの装置と試料の設定")
@@ -842,6 +861,17 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "装置", "先に回折データを読み込んでください")
             return
         h = self.project.histograms[self.current_hist]
+        if isinstance(h.instrument, TOFInstrument):
+            from kaisetsu.gui.tof_dialog import TOFInstrumentDialog
+
+            tdlg = TOFInstrumentDialog(h.instrument, self)
+            if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
+                return
+            h.instrument = tdlg.result_instrument()
+            self.project.build_parameters()
+            self.log("TOF 装置パラメータを更新しました")
+            self._refresh_all()
+            return
         dlg = InstrumentDialog(h.instrument, h.sample, self)
         if dlg.exec() != InstrumentDialog.DialogCode.Accepted:
             return
@@ -1089,6 +1119,22 @@ class MainWindow(QMainWindow):
                 self._worker.cancel()
             self._thread.wait(5000)
         event.accept()
+
+
+def _guess_tof_instrument(meta: dict[str, object]) -> TOFInstrument:
+    """Mantid の出力ヘッダ(DIFC と 2θ)から初期値を作る。"""
+    difc = 20000.0
+    tth = 90.0
+    comment = str(meta.get("comment", "") or "")
+    import re
+
+    m = re.search(r"DIFC\s+([\d.]+)", comment)
+    if m:
+        difc = float(m.group(1))
+    m = re.search(r"tth\s+([\d.]+)", comment)
+    if m:
+        tth = float(m.group(1))
+    return TOFInstrument(difc=difc, two_theta=tth)
 
 
 __all__ = ["MainWindow"]

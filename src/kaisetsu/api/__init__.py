@@ -14,6 +14,7 @@ from kaisetsu.pattern import (
     calculate_pattern,
 )
 from kaisetsu.pattern.instrument import GeometryKind
+from kaisetsu.pattern.tof import TOFInstrument, calculate_pattern_tof
 from kaisetsu.pdf import (
     PDFData,
     PDFPhase,
@@ -55,8 +56,10 @@ __all__ = [
     "SampleGeometry",
     "SpaceGroup",
     "Structure",
+    "TOFInstrument",
     "TransformSettings",
     "calculate_pattern",
+    "calculate_pattern_tof",
     "calculate_pdf",
     "mem_from_project",
     "pdf_recipe",

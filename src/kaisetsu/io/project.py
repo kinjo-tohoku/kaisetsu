@@ -36,6 +36,7 @@ from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.calculator import PhaseContribution
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
+from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.pdf.data import PDFData
 from kaisetsu.profile.background import (
     BackgroundModel,
@@ -98,7 +99,11 @@ def structure_from_dict(d: dict[str, Any]) -> Structure:
     return Structure(lat, sg, sites, name=d.get("name", ""))
 
 
-def _instrument_to_dict(inst: CWInstrument) -> dict[str, Any]:
+def _instrument_to_dict(inst: CWInstrument | TOFInstrument) -> dict[str, Any]:
+    if isinstance(inst, TOFInstrument):
+        d = asdict(inst)
+        d["kind"] = "tof"
+        return d
     d = asdict(inst)
     d["radiation"] = {
         "kind": inst.radiation.kind.value,
@@ -111,7 +116,10 @@ def _instrument_to_dict(inst: CWInstrument) -> dict[str, Any]:
     return d
 
 
-def _instrument_from_dict(d: dict[str, Any]) -> CWInstrument:
+def _instrument_from_dict(d: dict[str, Any]) -> CWInstrument | TOFInstrument:
+    if d.get("kind") == "tof":
+        kw = {k: v for k, v in d.items() if k != "kind"}
+        return TOFInstrument(**kw)
     r = d["radiation"]
     rad = Radiation(
         RadiationType(r["kind"]),

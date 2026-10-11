@@ -102,6 +102,13 @@ CASES: dict[str, dict[str, object]] = {
         "phase_name": "PbSO4",
         "extra": [*_FIT_STAGES, "--refine", "uiso", "--refine", "uiso", "--cycles", "30"],
     },
+    # TOF 中性子(POWGEN、NAC): 精密化なしで GSAS-II の計算パターンを出す(Phase 7 TOF の検証用)
+    "nac_tof": {
+        "cif": DATA / "nac" / "NAC.cif",
+        "data": DATA / "nac" / "PG3_22048.gsa",
+        "instprm": DATA / "nac" / "POWGEN_1066.instprm",
+        "phase_name": "NAC",
+    },
     # 中性子: 円筒試料の吸収と Debye-Scherrer の試料変位
     "pbso4_neutron_abs": {
         "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",

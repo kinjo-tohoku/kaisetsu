@@ -115,6 +115,15 @@ class PatternPlot(QWidget):
         self._x = np.zeros(0)
         self._y = np.zeros(0)
         self._ycalc: np.ndarray | None = None
+        self._difc: float | None = None
+
+    def set_tof(self, difc: float | None) -> None:
+        """TOF データの表示にする(difc は d 値表示用)。None で 2θ に戻す。"""
+        self._difc = difc
+        if difc is not None:
+            self.plot.setLabel("bottom", "TOF (μs)")
+        else:
+            self.plot.setLabel("bottom", "2θ (deg)")
 
     # ------------------------------------------------------------------
     def set_data(self, data: PowderData | None, wavelength: float | None = None) -> None:
@@ -178,10 +187,13 @@ class PatternPlot(QWidget):
             return
         p = vb.mapSceneToView(pos)
         x = float(p.x())
-        text = f"2θ = {x:.3f}°"
-        if self._wavelength and 0 < x < 180:
-            d = self._wavelength / (2.0 * math.sin(math.radians(x / 2.0)))
-            text += f"  d = {d:.4f} Å"
+        if self._difc:
+            text = f"TOF = {x:.1f} μs  d ≈ {x / self._difc:.4f} Å"
+        else:
+            text = f"2θ = {x:.3f}°"
+            if self._wavelength and 0 < x < 180:
+                d = self._wavelength / (2.0 * math.sin(math.radians(x / 2.0)))
+                text += f"  d = {d:.4f} Å"
         if self._x.size:
             i = int(np.clip(np.searchsorted(self._x, x), 0, len(self._x) - 1))
             text += f"  観測 = {self._y[i]:.0f}"

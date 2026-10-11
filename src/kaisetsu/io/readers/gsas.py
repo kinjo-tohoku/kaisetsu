@@ -3,6 +3,9 @@
 対応:
     - BANK n NCHAN NREC CONST START STEP 0 0 [STD|ESD|FXYE|FXY]
       START, STEP は centidegree。
+    - TOF: BANK n NCHAN NREC SLOG|RALF|... START END STEP 0 FXYE|FXY(x は μs、そのまま使う)。
+      metadata["xunit"] = "tof_us"。タイトル行や BANK 行が無くても 2θ か TOF かは
+      ビニングの種類(CONST 以外は TOF)で判定する。
     - STD: 8 文字固定幅 (I2, F6.0) × 10 / 行。I2 は計数回数 n、強度 y、分散 y / n。
     - ESD: 16 文字 (F8.0 強度, F8.0 σ) × 5 / 行。
     - FXYE: 自由形式 (2θ(centideg), 強度, σ)。FXY: (2θ(centideg), 強度)。
@@ -62,11 +65,15 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
 
     nchan = int(header[2])
     binning = header[4].upper() if len(header) > 4 else "CONST"
-    if not binning.startswith("CONS"):  # GSAS は "CONS" と略すこともある
-        raise ValueError(f"{p.name}: ビニング {binning} は未対応です(CONST のみ)")
-    start = float(header[5]) / 100.0
-    step = float(header[6]) / 100.0
+    is_tof = not binning.startswith("CONS")  # GSAS は "CONS" と略すこともある
     fmt = header[9].upper() if len(header) > 9 else "STD"
+    if is_tof and fmt not in ("FXYE", "FXY"):
+        raise ValueError(
+            f"{p.name}: ビニング {binning} は FXYE/FXY 形式(x の値を含む)のときだけ読めます"
+        )
+    start = float(header[5]) / 100.0 if not is_tof else 0.0
+    step = float(header[6]) / 100.0 if not is_tof else 0.0
+    xscale = 1.0 if is_tof else 0.01  # TOF は μs をそのまま、2θ は centidegree
 
     x: list[float] = []
     y: list[float] = []
@@ -107,7 +114,7 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
             parts = line.split()
             if len(parts) < 2:
                 continue
-            x.append(float(parts[0]) / 100.0)
+            x.append(float(parts[0]) * xscale)
             yi = float(parts[1])
             y.append(yi)
             if fmt == "FXYE" and len(parts) >= 3:
@@ -120,10 +127,18 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
 
     if len(x) > nchan:
         x, y, w = x[:nchan], y[:nchan], w[:nchan]
-    return PowderData(
-        np.array(x),
-        np.array(y),
-        np.array(w),
-        name=p.stem,
-        metadata={"format": "GSAS", "subformat": fmt, "title": title, "bank": bank, "path": str(p)},
-    )
+    meta: dict[str, object] = {
+        "format": "GSAS",
+        "subformat": fmt,
+        "title": title,
+        "bank": bank,
+        "path": str(p),
+        "binning": binning,
+        "xunit": "tof_us" if is_tof else "two_theta_deg",
+    }
+    if is_tof:
+        # Mantid の出力はコメントに DIFC や 2θ を書く(装置設定の目安)
+        for line in lines[:start_idx]:
+            if "DIFC" in line and "tth" in line:
+                meta["comment"] = line.strip("# ").strip()
+    return PowderData(np.array(x), np.array(y), np.array(w), name=p.stem, metadata=meta)

@@ -177,6 +177,15 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 
 試すなら PbSO4(`examples/mem_pbso4.py` と同じ): Pb の位置に 700 e/Å³ 程度の最大、S、O の順に極大が出ます。
 
+## 7f. TOF 中性子(J-PARC、SNS、ISIS)
+
+飛行時間データ(GSAS 形式の .gsa / .fxye で、BANK 行が SLOG など CONST 以外のもの)を読み込むと、
+TOF 装置パラメータのダイアログが開きます。装置から受け取った GSAS-II の .instprm があれば
+「.instprm を読む」で入れます(無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
+パラメータ名は `h0:inst:difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z`。
+標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、幅は `sig1`, `alpha`, `beta0` から)。
+試すなら `data/public/nac/PG3_22048.gsa` と `POWGEN_1066.instprm`、相は `NAC.cif`。
+
 ## 7d. 連続データ(温度・時間系列)の逐次精密化
 
 1 つ目のデータで精密化を済ませ、動かすパラメータにチェックを入れた状態で

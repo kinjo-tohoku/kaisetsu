@@ -12,7 +12,7 @@
   Chebyshev 背景、GSAS/Bruker/Rigaku/PANalytical リーダー)、Phase 3(精密化エンジン: パラメータと対称拘束、
   最小二乗、R 因子、Le Bail、Pawley、レシピ、プロジェクトファイル、スクリプト API)、
   Phase 4(日本語 GUI)、Phase 5(PDF: I(Q)→G(r) 変換と PDFfit2 相当の実空間フィット)、
-  Phase 6(MEM 電子密度・核密度、MPF、VESTA 出力)が完了。
+  Phase 6(MEM 電子密度・核密度、MPF、VESTA 出力)が完了。TOF 中性子(GSAS 型プロファイル、POWGEN データで検証)も使える。
 - 外部ソフトとの突き合わせ: GSAS-II 5.7.4(Rietveld)
   [Phase 1](docs/validation/phase1_structure_factors.md)、[Phase 2](docs/validation/phase2_pattern.md)、
   [Phase 3](docs/validation/phase3_refinement.md)、diffpy.pdffit2 1.6.0(PDF)

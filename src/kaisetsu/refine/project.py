@@ -16,6 +16,7 @@
     {相}:cell:{a|b|c|alpha|beta|gamma}      格子定数
     {相}:{サイト}:{x|y|z|occ|uiso|u11..u23}  原子
     h{i}:inst:{zero|u|v|w|p|x|y|z|s_l|h_l|pol|kb_ratio}  装置(kb_ratio は Kβ の強度比)
+    h{i}:inst:{difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z}  TOF 装置
     h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
     h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
     h{i}:hump{k}:{center|fwhm|height}      非晶質ハンプ(ガウス関数)
@@ -41,6 +42,7 @@ from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.calculator import PatternResult, PhaseContribution, calculate_pattern
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
+from kaisetsu.pattern.tof import TOFInstrument, calculate_pattern_tof
 from kaisetsu.pdf.calculator import PairList, PDFPhase, PDFResult, calculate_pdf, pair_distribution
 from kaisetsu.pdf.data import PDFData
 from kaisetsu.profile.background import (
@@ -203,7 +205,7 @@ class HistogramEntry:
 
     name: str
     data: PowderData
-    instrument: CWInstrument
+    instrument: CWInstrument | TOFInstrument
     sample: SampleGeometry
     background: BackgroundModel
     contributions: dict[str, PhaseContribution]
@@ -236,12 +238,23 @@ class HistogramEntry:
             m &= ~((x >= lo) & (x <= hi))
         return m
 
+    @property
+    def is_tof(self) -> bool:
+        return isinstance(self.instrument, TOFInstrument)
+
     def effective_d_min(self) -> float:
         if self.d_min is not None:
             return self.d_min
+        if isinstance(self.instrument, TOFInstrument):
+            return float(self.instrument.d_from_tof(np.array([self.x_min]))[0]) * 0.98
         lam = self.instrument.radiation.wavelength
         tt = min(self.x_max + self.d_min_margin_deg, 179.0)
         return lam / (2.0 * math.sin(math.radians(tt / 2.0)))
+
+    def effective_d_max(self) -> float | None:
+        if isinstance(self.instrument, TOFInstrument):
+            return float(self.instrument.d_from_tof(np.array([self.x_max]))[0]) * 1.02
+        return None
 
 
 def _structure_key(st: Structure) -> bytes:
@@ -352,7 +365,7 @@ class Project:
     def add_histogram(
         self,
         data: PowderData,
-        instrument: CWInstrument,
+        instrument: CWInstrument | TOFInstrument,
         sample: SampleGeometry | None = None,
         background: BackgroundModel | None = None,
         *,
@@ -662,9 +675,45 @@ class Project:
                 total,
             )
 
+    def _build_tof_inst_params(self, ps: ParameterSet, pre: str, inst: TOFInstrument) -> None:
+        spec: list[tuple[str, str, float, float, float, str, str]] = [
+            ("difc", "difc", 1e-2, 1.0, 1e6, "μs/Å", "DIFC(d の係数)"),
+            ("difa", "difa", 1e-3, -1e4, 1e4, "μs/Å²", "DIFA(d² の係数)"),
+            ("difb", "difb", 1e-3, -1e4, 1e4, "μs·Å", "DIFB(1/d の係数)"),
+            ("zero", "zero", 1e-2, -1e4, 1e4, "μs", "ゼロ点"),
+            ("alpha", "alpha", 1e-4, 1e-4, 10.0, "1/μs·Å", "立ち上がり α = alpha / d"),
+            ("beta0", "beta0", 1e-4, 0.0, 10.0, "1/μs", "減衰 β の定数項"),
+            ("beta1", "beta1", 1e-5, 0.0, 10.0, "Å⁴/μs", "減衰 β の 1/d⁴ の係数"),
+            ("betaq", "betaq", 1e-5, 0.0, 10.0, "Å²/μs", "減衰 β の 1/d² の係数"),
+            ("sig0", "sig0", 1e-1, -1e6, 1e6, "μs²", "ガウス分散 σ² の定数項"),
+            ("sig1", "sig1", 1e-1, -1e6, 1e6, "μs²/Å²", "σ² の d² の係数"),
+            ("sig2", "sig2", 1e-1, -1e6, 1e6, "μs²/Å⁴", "σ² の d⁴ の係数"),
+            ("sigq", "sigq", 1e-1, -1e6, 1e6, "μs²/Å", "σ² の d の係数"),
+            ("x", "x", 1e-2, 0.0, 1e4, "μs/Å", "ローレンツ幅 γ の d の係数(歪み)"),
+            ("y", "y", 1e-2, 0.0, 1e4, "μs/Å²", "γ の d² の係数(サイズ)"),
+            ("z", "z", 1e-2, 0.0, 1e4, "μs", "γ の定数項"),
+        ]  # fmt: skip
+        for nm, attr, step, lo, hi, unit, desc in spec:
+            ps.add(
+                Parameter(
+                    f"{pre}:inst:{nm}",
+                    float(getattr(inst, attr)),
+                    step=step,
+                    min=lo,
+                    max=hi,
+                    setter=_attr_setter(inst, attr),
+                    unit=unit,
+                    description=desc,
+                )
+            )
+
     def _build_hist_params(self, ps: ParameterSet, i: int, h: HistogramEntry) -> None:
         pre = f"h{i}"
         inst = h.instrument
+        if isinstance(inst, TOFInstrument):
+            self._build_tof_inst_params(ps, pre, inst)
+            self._build_hist_common_params(ps, i, h)
+            return
         spec: list[tuple[str, str, float, float, float, str, str]] = [
             # (名前, 属性, step, min, max, unit, 説明)
             ("zero", "zero", 1e-4, -5.0, 5.0, "deg", "ゼロ点シフト"),
@@ -704,6 +753,11 @@ class Project:
                     description="Kβ 線の強度比 I(Kβ)/I(Kα1)(フィルタ漏れ)",
                 )
             )
+        self._build_hist_common_params(ps, i, h)
+
+    def _build_hist_common_params(self, ps: ParameterSet, i: int, h: HistogramEntry) -> None:
+        """試料・背景・相ごとのパラメータ(CW と TOF で共通)。"""
+        pre = f"h{i}"
         smp = h.sample
         sspec: list[tuple[str, str, float, float, float, str, str]] = [
             ("displacement", "displacement_mm", 1e-4, -5.0, 5.0, "mm", "試料高さずれ (BB)"),
@@ -951,7 +1005,26 @@ class Project:
     def calculate(self, hist: int = 0, *, pawley: bool = True) -> PatternResult:
         """パターンを計算する。Pawley 相があれば反射強度を線形最小二乗で解いて反映する。"""
         h = self.histograms[hist]
-        res = calculate_pattern(
+        res = self._calculate_raw(hist, h)
+        if pawley and any(self.phases[n].pawley for n in h.contributions):
+            self._pawley_solve(hist, h, res)
+        h.result = res
+        return res
+
+    def _calculate_raw(self, hist: int, h: HistogramEntry) -> PatternResult:
+        """Pawley の線形解を含まない素のパターン計算(CW / TOF で分岐)。"""
+        if isinstance(h.instrument, TOFInstrument):
+            return calculate_pattern_tof(
+                h.data.x,
+                self._contributions_for(hist, h),
+                h.instrument,
+                h.background_total,
+                d_min=h.effective_d_min(),
+                d_max=h.effective_d_max(),
+                anomalous=h.anomalous,
+                scattering_override=h.scattering_override,
+            )
+        return calculate_pattern(
             h.data.x,
             self._contributions_for(hist, h),
             h.instrument,
@@ -963,10 +1036,6 @@ class Project:
             anomalous=h.anomalous,
             scattering_override=h.scattering_override,
         )
-        if pawley and any(self.phases[n].pawley for n in h.contributions):
-            self._pawley_solve(hist, h, res)
-        h.result = res
-        return res
 
     def _pawley_solve(self, i: int, h: HistogramEntry, res: PatternResult) -> None:
         """Pawley 相の反射強度を解き、f2_tables と計算パターンを更新する。"""
@@ -1005,18 +1074,7 @@ class Project:
     def pawley_report(self, hist: int, phase: str) -> PawleySolution:
         """Pawley 法で解いた強度と σ(相関込み)。f2_tables を |F|² の単位に直す前の積分強度。"""
         h = self.histograms[hist]
-        res = calculate_pattern(
-            h.data.x,
-            self._contributions_for(hist, h),
-            h.instrument,
-            h.sample,
-            h.background_total,
-            d_min=h.effective_d_min(),
-            kalpha2_mode=h.kalpha2_mode,
-            fcj_method=h.fcj_method,
-            anomalous=h.anomalous,
-            scattering_override=h.scattering_override,
-        )
+        res = self._calculate_raw(hist, h)
         names = list(h.contributions)
         k = names.index(phase)
         tbl = res.peaks[k]
@@ -1182,7 +1240,10 @@ class Project:
             from kaisetsu.reflections.hkl import generate_reflections
 
             refl = generate_reflections(
-                ph.structure.lattice, ph.structure.spacegroup, h.effective_d_min()
+                ph.structure.lattice,
+                ph.structure.spacegroup,
+                h.effective_d_min(),
+                h.effective_d_max() or math.inf,
             )
             if from_structure and ph.structure.sites:
                 f2 = (

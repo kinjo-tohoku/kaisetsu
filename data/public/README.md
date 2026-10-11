@@ -85,6 +85,7 @@ GSAS-II チュートリアル "TOF-CW Joint Refinement" の 11-BM データ。λ
 | `11BM_NAC.fxye` | 回折データ(GSAS FXYE 形式、2θ は centidegree) |
 | `11bm_gsas.prm` | 11-BM の装置パラメータ(U, V, W, X = 1.163, -0.126, 0.063, 0.173、偏光 0.99) |
 | `NAC.cif`, `CaF2.cif` | 出発構造(異方性 U_ij 付き) |
+| `PG3_22048.gsa`, `POWGEN_1066.instprm` | 同じ試料の TOF 中性子データ(SNS POWGEN、バンク 2、λ中心 1.066 Å)と装置パラメータ。TOF の練習と GSAS-II との突き合わせ用 |
 
 点数が多く反射も多いので、まず 2θ の上限を 30° にして試す(スクリプト例は `x_max=30`)。
 参考結果(0.5–30°、標準の手順、2 相): Rwp = 8.2%、χ² = 8.3、NAC R_Bragg = 7.7%、CaF2 R_Bragg = 28.5%(少量相)、重量分率 NAC 98.8 / CaF2 1.2 wt%。55 変数で約 50 秒。
