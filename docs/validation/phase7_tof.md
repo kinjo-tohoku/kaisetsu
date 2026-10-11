@@ -40,8 +40,19 @@ TOF の試料広がりは GSAS-II の定義に合わせた: サイズ ΔT = DIFC
 歪みの定義は CW(Δd/d = ε × 10⁻⁶ / 2)と 2 倍違う(GSAS-II 自身の不整合をそのまま踏襲)。
 Lorentz 因子は d⁴ sinθ、入射スペクトルはデータ側で規格化済みとする(Mantid の FXYE と同じ)。
 
-## 3. 残課題
+## 3. 吸収と消衰(2026-10-12 追加)
 
-- 吸収・消衰(波長依存)の補正は未実装。
+- TOF の吸収: 円筒試料の μR を λ = 1 Å で与え(`h{i}:sample:mu_r`)、反射ごとに λ = 2 d sinθ に比例させて
+  Lobanov の近似式で透過率を求める(GSAS-II の `GetAbsorb` と同じ)。ベクトル化した
+  `cylinder_absorption_array` はスカラー版と一致(μR = 0〜8、2θ = 20〜150°)。
+- Sabine の粉末消衰(`profile.corrections.sabine_extinction`、`h{i}:相:ext`、CW と TOF の両方):
+  GSAS-II の `GSASIIstrMath.GetPwdrExt` を直接呼んだ参照値(X 線・中性子 6 ケースずつ、
+  `validation/reference/sabine_extinction.json`)と相対差 2e-16 で一致。E の単位は GSAS-II の
+  Extinction と同じ(中性子の |F|² は fm² → (10⁻¹² cm)² に換算)。
+  解析ヤコビアンは消衰込みの |F|² E(|F|²) で差分を取り、数値微分と 0.2% 以内で一致
+  (`tests/unit/test_extinction.py`)。
+
+## 4. 残課題
+
 - 複数バンクの同時精密化は、バンクごとにヒストグラムを追加すれば可能だが、GUI の一括読み込みは未対応。
 - GSAS-II との精密化結果の比較(POWGEN LaB6 の校正データ)は未実施。

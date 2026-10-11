@@ -143,6 +143,96 @@ def cylinder_absorption(mu_r: float, two_theta: npt.ArrayLike) -> FloatArray:
     return np.asarray(((t1 - t4) / (1.0 + t2 * (mu_r - 3.0)) ** t3 + t4) / 100.0)
 
 
+def cylinder_absorption_array(mu_r: npt.ArrayLike, two_theta: npt.ArrayLike) -> FloatArray:
+    """μR が反射ごとに違う場合(TOF: μR ∝ λ)の円筒試料の透過率(ベクトル化)。"""
+    mr, tt = np.broadcast_arrays(
+        np.asarray(mu_r, dtype=np.float64), np.asarray(two_theta, dtype=np.float64)
+    )
+    sth2 = np.sin(np.radians(tt / 2.0)) ** 2
+    # μR ≤ 3 の式
+    t0 = 16.0 / (3.0 * math.pi)
+    t1 = (
+        (25.99978 - 0.01911 * sth2**0.25) * np.exp(-0.024551 * sth2)
+        + 0.109561 * np.sqrt(sth2)
+        - 26.04556
+    )
+    t2 = (
+        -0.02489
+        - 0.39499 * sth2
+        + 1.219077 * sth2**1.5
+        - 1.31268 * sth2**2
+        + 0.871081 * sth2**2.5
+        - 0.2327 * sth2**3
+    )
+    t3 = 0.003045 + 0.018167 * sth2 - 0.03305 * sth2**2
+    low = np.exp(-t0 * mr - t1 * mr**2 - t2 * mr**3 - t3 * mr**4)
+    # μR > 3 の式
+    u1 = 1.433902 + 11.07504 * sth2 - 8.77629 * sth2 * sth2 + 10.02088 * sth2**3 - 3.36778 * sth2**4
+    u2 = (0.013869 - 0.01249 * sth2) * np.exp(3.27094 * sth2) + (0.337894 + 13.77317 * sth2) / (
+        1.0 + 11.53544 * sth2
+    ) ** 1.555039
+    u3 = 1.933433 / (1.0 + 23.12967 * sth2) ** 1.686715 - 0.13576 * np.sqrt(sth2) + 1.163198
+    u4 = 0.044365 - 0.04259 / (1.0 + 0.41051 * sth2) ** 148.4202
+    with np.errstate(invalid="ignore", divide="ignore"):
+        high = ((u1 - u4) / (1.0 + u2 * np.maximum(mr - 3.0, 0.0)) ** u3 + u4) / 100.0
+    out = np.where(mr > 3.0, high, low)
+    return np.asarray(np.where(mr > 0.0, out, 1.0))
+
+
+_SABINE_COEF = np.array([-0.5, 0.25, -0.10416667, 0.036458333, -0.0109375, 2.8497409e-3])
+
+
+def sabine_extinction(
+    f2: npt.ArrayLike,
+    wavelength: npt.ArrayLike,
+    volume: float,
+    two_theta: npt.ArrayLike,
+    extinction: float,
+    is_xray: bool,
+) -> FloatArray:
+    """Sabine の粉末消衰補正(GSAS-II と同じ定式化)。
+
+    x = E · F² (λ/V)²(F は 10⁻¹² cm 単位。X 線は F[e] × r_e と偏光 (1 + cos²2θ)/2 を含める)
+    E_B = 1/√(1 + x)、E_L = 1 − x/2 + x²/4 − …(x ≤ 1)、E_L ≈ √(2/π)(1 − 1/(8x))/√x(x > 1)
+    補正 = E_B sin²θ + E_L cos²θ。E の単位は GSAS-II の Extinction と同じ(数値を揃えてある)。
+
+    Args:
+        f2: |F|²(X 線は電子²、中性子は fm²。内部で (10⁻¹² cm)² に換算する)
+        wavelength: 反射ごとの波長 [Å](CW ではスカラー)
+        volume: 単位胞体積 [Å³]
+        two_theta: 反射の 2θ [deg](TOF ではバンクの 2θ)
+        extinction: 係数 E(0 で補正なし)
+        is_xray: X 線なら偏光と r_e² を含める
+
+    出典: T. M. Sabine, Int. Tables Vol. C, 6.4; T. M. Sabine, R. B. Von Dreele & J. E. Jørgensen,
+          Acta Cryst. A44, 374-379 (1988); GSAS-II GSASIIstrMath.GetPwdrExt。
+    """
+    f2a = np.asarray(f2, dtype=np.float64)
+    tt = np.asarray(two_theta, dtype=np.float64)
+    if extinction == 0.0:
+        return np.ones(np.broadcast(f2a, tt).shape)
+    lam = np.asarray(wavelength, dtype=np.float64)
+    sth2 = np.sin(np.radians(tt / 2.0)) ** 2
+    c2th = 1.0 - 2.0 * sth2
+    if is_xray:
+        f2_cm = f2a * 0.079411 * (1.0 + c2th**2) / 2.0  # r_e² = 0.0794 (10⁻¹² cm)²
+    else:
+        f2_cm = f2a / 100.0  # fm² → (10⁻¹² cm)²
+    x = extinction * f2_cm * (lam / volume) ** 2
+    x = np.broadcast_to(x, np.broadcast(x, sth2).shape).copy()
+    exb = np.where(x > -1.0, 1.0 / np.sqrt(np.maximum(1.0 + x, 1e-12)), 1.0)
+    exl = np.ones_like(x)
+    small = (x > 0.0) & (x <= 1.0)
+    if np.any(small):
+        xs = x[small]
+        exl[small] = 1.0 + sum(c * xs ** (i + 1) for i, c in enumerate(_SABINE_COEF))
+    big = x > 1.0
+    if np.any(big):
+        xb = x[big]
+        exl[big] = math.sqrt(2.0 / math.pi) * (1.0 - 0.125 / xb) / np.sqrt(xb)
+    return np.asarray(exb * sth2 + exl * (1.0 - sth2))
+
+
 def surface_roughness_suortti(a: float, b: float, two_theta: npt.ArrayLike) -> FloatArray:
     """Suortti の表面粗さ補正(Bragg-Brentano)。a = b = 0 で 1。"""
     tt = np.asarray(two_theta, dtype=np.float64)

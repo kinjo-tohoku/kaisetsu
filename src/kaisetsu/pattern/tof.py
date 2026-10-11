@@ -31,6 +31,8 @@ from kaisetsu.pattern.calculator import (
     PhaseContribution,
     _empty_peak_table,
 )
+from kaisetsu.pattern.instrument import SampleGeometry
+from kaisetsu.profile.corrections import cylinder_absorption_array
 from kaisetsu.profile.tof_profile import tof_peak, tof_peak_fwhm
 from kaisetsu.reflections.hkl import generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
@@ -205,8 +207,13 @@ def calculate_pattern_tof(
     window_widths: float = 30.0,
     anomalous: Mapping[str, complex] | None = None,
     scattering_override: Mapping[str, complex] | None = None,
+    sample: SampleGeometry | None = None,
 ) -> PatternResult:
-    """TOF パターンを計算する。x は TOF [μs](昇順)。"""
+    """TOF パターンを計算する。x は TOF [μs](昇順)。
+
+    sample.mu_r は円筒試料の μR を λ = 1 Å で与えたもの。反射ごとに λ = 2 d sinθ に比例させて
+    Lobanov の近似式で透過率を求める(GSAS-II と同じ)。
+    """
     xa = np.asarray(x, dtype=np.float64).ravel()
     d_lo, d_hi = (float(v) for v in instrument.d_from_tof(np.array([xa[0], xa[-1]])))
     dmin = d_min if d_min is not None else d_lo * 0.98
@@ -242,7 +249,12 @@ def calculate_pattern_tof(
         pos = instrument.position(d)
         lorentz = d**4 * sin_theta
         po = ph.orientation_factor(refl.hkl)
-        inten = ph.scale / st.lattice.volume * refl.multiplicity * f2 * lorentz * po
+        lam = 2.0 * d * sin_theta
+        corr = lorentz * po
+        if sample is not None and sample.mu_r > 0.0:
+            corr = corr * cylinder_absorption_array(sample.mu_r * lam, instrument.two_theta)
+        corr = corr * ph.extinction_factor(f2, lam, instrument.two_theta, False)
+        inten = ph.scale / st.lattice.volume * refl.multiplicity * f2 * corr
         alpha = instrument.alpha_of(d)
         beta = instrument.beta_of(d)
         sig2 = instrument.sigma2_of(d)

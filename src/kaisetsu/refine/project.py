@@ -20,7 +20,7 @@
     h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
     h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
     h{i}:hump{k}:{center|fwhm|height}      非晶質ハンプ(ガウス関数)
-    h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
+    h{i}:{相}:{scale|md_r|size|strain|ext} 相-ヒストグラム(ext は Sabine 消衰係数)
     h{i}:{相}:size_ax                      一軸異方的サイズの軸方向成分(有効にしたとき)
     h{i}:{相}:S_{HKL}                      Stephens 異方的歪み(有効にしたとき。ラウエ群で拘束)
     h{i}:{相}:sh{l}_{j}                    球面調和関数の集合組織の係数(有効にしたとき)
@@ -829,7 +829,15 @@ class Project:
             ("rough_b", "roughness_b", 1e-3, 0.0, 10.0, "", "表面粗さ B (Suortti)"),
             ("disp_x", "displace_x_mm", 1e-4, -5.0, 5.0, "mm", "試料位置ずれ x (DS)"),
             ("disp_y", "displace_y_mm", 1e-4, -5.0, 5.0, "mm", "試料位置ずれ y (DS)"),
-            ("mu_r", "mu_r", 1e-3, 0.0, 20.0, "", "円筒試料の μR (DS)"),
+            (
+                "mu_r",
+                "mu_r",
+                1e-3,
+                0.0,
+                20.0,
+                "",
+                "円筒試料の μR(λ = 1 Å での値。λ に比例)" if h.is_tof else "円筒試料の μR (DS)",
+            ),
         ]
         for nm, attr, step, lo, hi, unit, desc in sspec:
             ps.add(
@@ -933,6 +941,17 @@ class Project:
                     unit="μm",
                     description=f"{pname} の結晶子サイズ(0 で広がりなし)"
                     + ("。一軸モデルでは軸に垂直な方向" if pc.size_axial_um is not None else ""),
+                )
+            )
+            ps.add(
+                Parameter(
+                    f"{ppre}:ext",
+                    pc.extinction,
+                    min=0.0,
+                    max=1e5,
+                    step=1e-2,
+                    setter=_attr_setter(pc, "extinction"),
+                    description=f"{pname} の Sabine 消衰係数(GSAS-II の Extinction と同じ単位)",
                 )
             )
             if pc.size_axial_um is not None:
@@ -1119,6 +1138,7 @@ class Project:
                 d_max=h.effective_d_max(),
                 anomalous=h.anomalous,
                 scattering_override=h.scattering_override,
+                sample=h.sample,
             )
         return calculate_pattern(
             h.data.x,

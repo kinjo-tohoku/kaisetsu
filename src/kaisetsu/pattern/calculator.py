@@ -30,6 +30,7 @@ from kaisetsu.profile.corrections import (
     lorentz_factor,
     march_dollase,
     polarization_factor,
+    sabine_extinction,
     surface_roughness_suortti,
 )
 from kaisetsu.profile.fcj_batch import fcj_profile_batch
@@ -66,6 +67,7 @@ class PhaseContribution:
             strain_e6 を使う。ローレンツ成分の割合は strain_lorentz_fraction を共用
         sh_order, sh_coefficients: 球面調和関数の集合組織(`profile.texture`)。sh_order が 0 なら
             使わない。係数はラウエ群で不変な調和関数(l = 2, 4, …, sh_order)の順
+        extinction: Sabine の粉末消衰係数 E(GSAS-II の Extinction と同じ単位。0 で補正なし)
     """
 
     structure: Structure
@@ -81,6 +83,7 @@ class PhaseContribution:
     size_axial_um: float | None = None
     sh_order: int = 0
     sh_coefficients: FloatArray | None = None
+    extinction: float = 0.0
     #: Le Bail / Pawley 用: 代表 hkl → |F|^2。None なら構造から計算する。
     f2_table: dict[tuple[int, int, int], float] | None = None
     #: f2_table に無い反射に使う |F|^2
@@ -121,6 +124,20 @@ class PhaseContribution:
             if coef is not None and len(coef) == sum(u.shape[1] for _, u in basis):
                 po = po * texture_factor(hkl, st.lattice, basis, coef)
         return np.asarray(po)
+
+    def extinction_factor(
+        self,
+        f2: FloatArray,
+        wavelength: npt.ArrayLike,
+        two_theta: npt.ArrayLike,
+        is_xray: bool,
+    ) -> FloatArray:
+        """Sabine 消衰補正(反射ごと)。extinction = 0 なら 1。"""
+        if self.extinction == 0.0:
+            return np.ones(len(f2))
+        return sabine_extinction(
+            f2, wavelength, self.structure.lattice.volume, two_theta, self.extinction, is_xray
+        )
 
     def sample_broadening(
         self,
@@ -356,7 +373,8 @@ def calculate_pattern(
                 if wl == lam1:
                     corr1, fg1, fl1 = corr, fg, fl
             ok = np.isfinite(pos)
-            inten = ph.scale * ratio / volume * refl.multiplicity * f2 * corr * po
+            ext = ph.extinction_factor(f2, wl, np.where(ok, pos, 90.0), rad.is_xray)
+            inten = ph.scale * ratio / volume * refl.multiplicity * f2 * corr * po * ext
             fwhm = np.array(
                 [tch_fwhm_eta(float(a), float(b))[0] for a, b in zip(fg, fl, strict=True)]
             )

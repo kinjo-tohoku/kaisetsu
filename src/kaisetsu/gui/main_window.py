@@ -690,11 +690,11 @@ class MainWindow(QMainWindow):
             from kaisetsu.gui.tof_dialog import TOFInstrumentDialog
 
             guess = _guess_tof_instrument(data.metadata)
-            tdlg = TOFInstrumentDialog(guess, self)
+            tdlg = TOFInstrumentDialog(guess, self, sample)
             if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
                 return
             instrument = tdlg.result_instrument()
-            sample = sample or SampleGeometry()
+            sample = tdlg.result_sample()
         if instrument is None:
             dlg = InstrumentDialog(None, None, self)
             dlg.setWindowTitle("このデータの装置と試料の設定")
@@ -886,10 +886,11 @@ class MainWindow(QMainWindow):
         if isinstance(h.instrument, TOFInstrument):
             from kaisetsu.gui.tof_dialog import TOFInstrumentDialog
 
-            tdlg = TOFInstrumentDialog(h.instrument, self)
+            tdlg = TOFInstrumentDialog(h.instrument, self, h.sample)
             if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
                 return
             h.instrument = tdlg.result_instrument()
+            h.sample = tdlg.result_sample()
             self.project.build_parameters()
             self.log("TOF 装置パラメータを更新しました")
             self._refresh_all()
@@ -1101,7 +1102,7 @@ class MainWindow(QMainWindow):
             "h0:inst:zero|u|v|w|p|x|y|z|s_l|h_l|pol … 装置(h0 は 1 番目のデータ)\n"
             "h0:sample:displacement|transparency|disp_x|disp_y|mu_r … 試料\n"
             "h0:bkg:0,1,2,… … 背景(Chebyshev 係数)\n"
-            "h0:相:scale|md_r|size|strain … スケール、選択配向、サイズ、歪み\n"
+            "h0:相:scale|md_r|size|strain|ext … スケール、選択配向、サイズ、歪み、Sabine 消衰\n"
             "h0:相:size_ax … 一軸異方的サイズの軸方向成分、h0:相:S_HKL … Stephens 異方的歪み\n"
             "h0:相:sh2_1,sh4_1,… … 球面調和関数の集合組織(相の設定で有効にしたとき)\n"
             "g0:pdf:scale|qdamp|qbroad … PDF データセット(g0 は 1 番目の G(r))\n"

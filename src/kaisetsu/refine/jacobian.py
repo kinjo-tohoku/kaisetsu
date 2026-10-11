@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from kaisetsu.pattern.calculator import PeakTable, PhaseContribution
+from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.profile.texture import coefficient_names
 from kaisetsu.reflections.structure_factor import structure_factors
 
@@ -87,6 +89,18 @@ def _f2_for(project: Project, hist: HistogramEntry, phase: str) -> FloatArray:
         override=hist.scattering_override,
     )
     return np.asarray(np.abs(f) ** 2)
+
+
+def _extinction_for(
+    hist: HistogramEntry, pc: PhaseContribution, tbl: PeakTable, f2: FloatArray
+) -> FloatArray:
+    """反射ごとの Sabine 消衰補正(CW は λ1 の位置、TOF はバンク 2θ と λ = 2 d sinθ)。"""
+    inst = hist.instrument
+    if isinstance(inst, TOFInstrument):
+        lam = 2.0 * tbl.d * math.sin(math.radians(inst.two_theta / 2.0))
+        return pc.extinction_factor(f2, lam, inst.two_theta, False)
+    pos = np.where(np.isfinite(tbl.two_theta), tbl.two_theta, 90.0)
+    return pc.extinction_factor(f2, inst.radiation.wavelength, pos, inst.radiation.is_xray)
 
 
 def _assemble(hist: HistogramEntry, phase: str, ratio: FloatArray) -> FloatArray:
@@ -165,9 +179,17 @@ def project_jacobian(project: Project, numerical_residual: FloatArray | None = N
                         f2_minus = _f2_for(project, h, phase)
                         _perturbed(project, p, step)
                         tbl = h.result.peaks[list(h.contributions).index(phase)]
+                        pc = h.contributions[phase]
+                        if pc.extinction != 0.0:
+                            # 消衰は |F|² に依存するので、強度 |F|² E(|F|²) ごと差分を取る
+                            f2_plus = f2_plus * _extinction_for(h, pc, tbl, f2_plus)
+                            f2_minus = f2_minus * _extinction_for(h, pc, tbl, f2_minus)
+                            f2_base = tbl.f2 * _extinction_for(h, pc, tbl, tbl.f2)
+                        else:
+                            f2_base = tbl.f2
                         with np.errstate(divide="ignore", invalid="ignore"):
                             ratio = np.where(
-                                tbl.f2 > 0, (f2_plus - f2_minus) / (2.0 * step * tbl.f2), 0.0
+                                f2_base > 0, (f2_plus - f2_minus) / (2.0 * step * f2_base), 0.0
                             )
                     else:
                         pc = h.contributions[phase]

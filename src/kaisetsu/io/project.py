@@ -182,6 +182,7 @@ def _contribution_to_dict(pc: PhaseContribution) -> dict[str, Any]:
         "size_axis": list(pc.size_axis),
         "size_axial_um": pc.size_axial_um,
         "sh_order": int(pc.sh_order),
+        "extinction": float(pc.extinction),
         "sh_coefficients": (
             None if pc.sh_coefficients is None else [float(v) for v in pc.sh_coefficients]
         ),
@@ -378,6 +379,7 @@ def project_from_dict(d: dict[str, Any]) -> Project:
                 pc.size_axis = tuple(int(v) for v in cd["size_axis"])  # type: ignore[assignment]
             pc.size_axial_um = cd.get("size_axial_um")
             pc.sh_order = int(cd.get("sh_order", 0))
+            pc.extinction = float(cd.get("extinction", 0.0))
             if cd.get("sh_coefficients") is not None:
                 pc.sh_coefficients = np.asarray(cd["sh_coefficients"], dtype=float)
     for gd in d.get("pdf_datasets", []):
