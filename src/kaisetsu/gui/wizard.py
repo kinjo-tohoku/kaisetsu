@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from kaisetsu.crystal.cif import read_structure
 from kaisetsu.gui.dialogs import InstrumentDialog
+from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.refine.recipe import standard_recipe
 
@@ -48,7 +49,9 @@ class _FilePage(QWizardPage):
         self.registerField(title + "*", self.edit)
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, self.title(), str(Path.home()), self._filter)
+        path, _ = QFileDialog.getOpenFileName(self, self.title(), last_dir(), self._filter)
+        if path:
+            remember_dir(path)
         if path:
             self.edit.setText(path)
             self.info.setText(self.describe(path))

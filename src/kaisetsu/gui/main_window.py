@@ -35,6 +35,7 @@ from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
 from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
+from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.gui.plot_widget import PatternPlot
 from kaisetsu.gui.worker import RefineThread, RefineWorker
 from kaisetsu.io.project import load_project, save_project
@@ -629,10 +630,10 @@ class MainWindow(QMainWindow):
         return r == QMessageBox.StandardButton.Yes
 
     def _last_dir(self) -> str:
-        return str(self.settings.value("last_dir", str(Path.home())))
+        return last_dir(self.settings)
 
     def _remember_dir(self, path: str) -> None:
-        self.settings.setValue("last_dir", str(Path(path).parent))
+        remember_dir(path, self.settings)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._thread is not None and self._thread.isRunning():
