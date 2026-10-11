@@ -855,6 +855,37 @@ class Project:
                 )
         return notes
 
+    def phase_fractions(self, hist: int = 0) -> dict[str, tuple[float, float]]:
+        """ヒストグラム hist での各相の重量分率と esd(相の名前 → (W, σ_W))。
+
+        W_p = S_p M_p / Σ_j S_j M_j(Hill & Howard, J. Appl. Cryst. 20, 467 (1987) の
+        W_p ∝ S_p (ZMV)_p を、スケール因子が 1/V を陽に含むこのプログラムの定義に直したもの。
+        M は単位胞の質量)。σ_W はスケール因子の esd から相関を無視して伝播させた値。
+        Le Bail 相はスケールに意味が無いので除外する。
+        """
+        h = self.histograms[hist]
+        items: list[tuple[str, float, float, float]] = []
+        for pname in h.contributions:
+            ph = self.phases[pname]
+            if ph.le_bail:
+                continue
+            p = self.params[f"h{hist}:{pname}:scale"]
+            items.append((pname, p.value, p.esd or 0.0, ph.structure.cell_mass()))
+        total = sum(s * m for _, s, _, m in items)
+        if total <= 0:
+            return {name: (0.0, 0.0) for name, _, _, _ in items}
+        out: dict[str, tuple[float, float]] = {}
+        for name, s, _, m in items:
+            var = 0.0
+            for name2, _, es2, m2 in items:
+                if name2 == name:
+                    d = m * (total - s * m) / total**2
+                else:
+                    d = -(m * s * m2) / total**2
+                var += (d * es2) ** 2
+            out[name] = (s * m / total, math.sqrt(var))
+        return out
+
     def summary(self) -> str:
         lines = [f"プロジェクト {self.name or '(無名)'}"]
         for ph in self.phases.values():
@@ -866,6 +897,14 @@ class Project:
                 rep = self.reflection_report(i, pname)
                 lines.append(
                     f"  {pname}: R_B = {100 * rep.r_bragg:.2f}%  R_F = {100 * rep.r_f:.2f}%"
+                )
+            fractions = self.phase_fractions(i)
+            if len(fractions) > 1:
+                lines.append(
+                    "  重量分率: "
+                    + ", ".join(
+                        f"{n} {100 * w:.2f} ± {100 * e:.2f} wt%" for n, (w, e) in fractions.items()
+                    )
                 )
         if "total" in rf and len(self.histograms) > 1:
             lines.append(f"全体: {rf['total']}")

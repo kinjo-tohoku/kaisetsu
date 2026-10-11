@@ -9,12 +9,15 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+import gemmi
 import numpy as np
 import numpy.typing as npt
 
 from kaisetsu.crystal.atoms import AtomSite
 from kaisetsu.crystal.lattice import Lattice
 from kaisetsu.crystal.spacegroup import SpaceGroup
+
+AVOGADRO = 6.02214076e23  # 1/mol
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -112,6 +115,15 @@ class Structure:
         for s, m in zip(self.sites, self.multiplicities(), strict=True):
             comp[s.element] = comp.get(s.element, 0.0) + s.occupancy * float(m)
         return comp
+
+    def cell_mass(self) -> float:
+        """単位胞の質量 [g/mol](占有率込み)。原子量は gemmi の表を使う。"""
+        return sum(n * gemmi.Element(el).weight for el, n in self.composition().items())
+
+    def density(self) -> float:
+        """計算密度 [g/cm³] = M_cell / (N_A V)。"""
+        v = self.lattice.volume
+        return self.cell_mass() / (AVOGADRO * v * 1e-24) if v > 0 else 0.0
 
     def formula_units(self) -> float:
         """最小公約の式単位数 Z の推定値(整数とは限らない)。"""
