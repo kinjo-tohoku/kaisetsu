@@ -144,6 +144,50 @@ def _unit(z: complex) -> complex:
     return z / a if a > 0 else 1.0 + 0j
 
 
+def overlap_groups_from_project(
+    project: Project, hist: int, phase: str, overlap_fwhm: float = 0.5
+) -> list[tuple[IntArray, float, float, IntArray]]:
+    """ピーク位置の差が FWHM × overlap_fwhm 以内で連なる反射を群にまとめる(G 拘束用)。
+
+    群の観測値 G_obs = Σ_h m_h |F_obs,h|²(Rietveld 分配の値の和。分配の仮定によらず群の和は決まる)、
+    σ_G は各反射の σ(|F|²) m_h を二乗和した値。
+    """
+    h = project.histograms[hist]
+    res = project.calculate(hist)
+    k = list(h.contributions).index(phase)
+    tbl = res.peaks[k]
+    pos = tbl.two_theta
+    order = np.argsort(pos)
+    groups: list[list[int]] = []
+    current: list[int] = []
+    for j in order:
+        if not np.isfinite(pos[j]):
+            continue
+        if current:
+            prev = current[-1]
+            if abs(pos[j] - pos[prev]) <= overlap_fwhm * 0.5 * (tbl.fwhm[j] + tbl.fwhm[prev]):
+                current.append(int(j))
+                continue
+            if len(current) > 1:
+                groups.append(current)
+        current = [int(j)]
+    if len(current) > 1:
+        groups.append(current)
+    if not groups:
+        return []
+    obs = observed_structure_factors(project, hist, phase)
+    f_abs = np.abs(obs.f_obs)
+    sig_f2 = 2.0 * f_abs * obs.sigma
+    out: list[tuple[IntArray, float, float, IntArray]] = []
+    for g in groups:
+        idx = np.asarray(g, dtype=np.int64)
+        mult = tbl.multiplicity[idx].astype(np.int64)
+        g_obs = float(np.sum(mult * f_abs[idx] ** 2))
+        sig_g = float(np.sqrt(np.sum((mult * sig_f2[idx]) ** 2)))
+        out.append((idx, g_obs, max(sig_g, 1e-3 * max(g_obs, 1.0)), mult))
+    return out
+
+
 def mem_from_project(
     project: Project,
     hist: int,
@@ -153,17 +197,23 @@ def mem_from_project(
     two_channel: bool | None = None,
     phases: Mapping[HklKey, complex] | None = None,
     min_rel_sigma: float = 0.01,
+    group_overlaps: bool = False,
+    overlap_fwhm: float = 0.5,
     **mem_kwargs: Any,
 ) -> MEMResult:
     """Rietveld 結果(現在のモデルと観測)から MEM 密度を求める。
 
     two_channel を省略すると、負の散乱長があるとき(中性子)だけ 2 チャンネルにする。
+    group_overlaps が真なら、重なった反射(位置の差が FWHM × overlap_fwhm 以内)を G 拘束にする。
     """
     obs = observed_structure_factors(
         project, hist, phase, phases=phases, min_rel_sigma=min_rel_sigma
     )
     ph = project.phases[phase]
     two = two_channel if two_channel is not None else obs.f000_negative > 0
+    groups = (
+        overlap_groups_from_project(project, hist, phase, overlap_fwhm) if group_overlaps else []
+    )
     inp = MEMInput(
         lattice=ph.structure.lattice,
         spacegroup=ph.structure.spacegroup,
@@ -174,6 +224,7 @@ def mem_from_project(
         grid=grid,
         two_channel=two,
         f000_negative=obs.f000_negative if two else 0.0,
+        overlap_groups=groups,
     )
     return run_mem(inp, **mem_kwargs)
 

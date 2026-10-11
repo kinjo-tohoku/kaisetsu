@@ -81,6 +81,11 @@ class PhaseDialog(QDialog):
         pf.addRow(
             QLabel("板状結晶なら劈開面の法線(例 001)、針状なら伸びる方向。r は h0:相:md_r で動かす")
         )
+        self.stephens = QCheckBox(
+            "歪み広がりを異方的にする(Stephens。hkl ごとの幅、係数 S_HKL を精密化)"
+        )
+        self.stephens.setChecked(pc is not None and pc.stephens is not None)
+        pf.addRow(self.stephens)
         self.size_lf = _spin(pc.size_lorentz_fraction if pc else 1.0, 0.0, 1.0, 2, 0.1)
         self.strain_lf = _spin(pc.strain_lorentz_fraction if pc else 1.0, 0.0, 1.0, 2, 0.1)
         pf.addRow("サイズ広がりのローレンツ成分の割合", self.size_lf)
@@ -151,6 +156,12 @@ class PhaseDialog(QDialog):
                 notes.append(f"{self.phase}: 選択配向の軸を {axis} にしました")
             pc.size_lorentz_fraction = float(self.size_lf.value())
             pc.strain_lorentz_fraction = float(self.strain_lf.value())
+            want = self.stephens.isChecked()
+            if want != (pc.stephens is not None):
+                proj.enable_stephens(self.hist, self.phase, want)
+                notes.append(
+                    f"{self.phase}: 歪み広がりを {'Stephens の異方的モデル' if want else '等方'} にしました"
+                )
         if abs(ph.brindley_radius_um - float(self.radius.value())) > 1e-9:
             ph.brindley_radius_um = float(self.radius.value())
             notes.append(

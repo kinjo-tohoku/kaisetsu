@@ -41,7 +41,7 @@ class _MEMWorker(QObject):
 
     def __init__(
         self, project: Project, hist: int, phase: str, grid: tuple[int, int, int],
-        source: str, mpf_cycles: int, two_channel: bool | None,
+        source: str, mpf_cycles: int, two_channel: bool | None, group_overlaps: bool = False,
     ) -> None:  # fmt: skip
         super().__init__()
         self.project = project
@@ -51,6 +51,7 @@ class _MEMWorker(QObject):
         self.source = source
         self.mpf_cycles = mpf_cycles
         self.two_channel = two_channel
+        self.group_overlaps = group_overlaps
 
     def run(self) -> None:
         try:
@@ -58,7 +59,7 @@ class _MEMWorker(QObject):
             if self.mpf_cycles > 0:
                 res = run_mpf(
                     proj, self.hist, self.phase, grid=self.grid, n_cycles=self.mpf_cycles,
-                    progress=self.progress.emit,
+                    progress=self.progress.emit, group_overlaps=self.group_overlaps,
                 )  # fmt: skip
                 mem = res.final
                 self.finished.emit(True, f"MPF 完了: Rwp {100 * res.rwp_history[-1]:.3f}%", mem)
@@ -95,6 +96,7 @@ class _MEMWorker(QObject):
 
                 mem = mem_from_project(
                     proj, self.hist, self.phase, self.grid, two_channel=self.two_channel,
+                    group_overlaps=self.group_overlaps,
                     progress=lambda i, lam, c: self.progress.emit(f"  外側反復 {i}: λ = {lam:.3g}  C = {c:.3f}"),
                 )  # fmt: skip
             self.finished.emit(True, mem.message, mem)
@@ -192,6 +194,12 @@ class MEMDialog(QDialog):
         cf.addRow("格子点数 (a, b, c)", row)
         self.two_channel = QCheckBox("2 チャンネル(負の散乱長がある中性子データ)")
         cf.addRow(self.two_channel)
+        self.group_overlaps = QCheckBox("重なった反射は強度の和だけを拘束する(G 拘束)")
+        self.group_overlaps.setToolTip(
+            "位置の差が FWHM の半分以内で連なる反射を群にし、群の強度和だけを拘束します。"
+            "分配の仮定(モデルの強度比)を MEM に持ち込まないための選択肢"
+        )
+        cf.addRow(self.group_overlaps)
         self.mpf = QSpinBox()
         self.mpf.setRange(0, 20)
         self.mpf.setValue(0)
@@ -253,6 +261,7 @@ class MEMDialog(QDialog):
             self.project, int(self.hist.currentData()), str(self.phase.currentData()),
             grid, str(self.source.currentData()), int(self.mpf.value()),
             True if self.two_channel.isChecked() else None,
+            self.group_overlaps.isChecked(),
         )  # fmt: skip
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)

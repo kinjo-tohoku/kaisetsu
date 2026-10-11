@@ -20,6 +20,7 @@
     h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
     h{i}:hump{k}:{center|fwhm|height}      非晶質ハンプ(ガウス関数)
     h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
+    h{i}:{相}:S_{HKL}                      Stephens 異方的歪み(有効にしたとき。ラウエ群で拘束)
     g{i}:pdf:{scale|qdamp|qbroad}          PDF データセット(G(r))
     g{i}:{相}:{scale|delta1|delta2|sratio|spdiameter}  相-PDF
 """
@@ -50,6 +51,7 @@ from kaisetsu.profile.background import (
     estimate_chebyshev_background,
 )
 from kaisetsu.profile.corrections import brindley_factor
+from kaisetsu.profile.stephens import MONOMIALS, monomial_name, stephens_constraint
 from kaisetsu.refine.constraints import (
     SymmetryConstraint,
     adp_constraint,
@@ -478,6 +480,21 @@ class Project:
             h.background = ChebyshevBackground(coeffs, h.background.x_min, h.background.x_max)
         self.build_parameters()
 
+    def enable_stephens(self, hist: int, phase: str, enable: bool = True) -> None:
+        """相-ヒストグラムの歪み広がりを Stephens の異方的モデルにする(等方 strain から初期化)。"""
+        pc = self.histograms[hist].contributions[phase]
+        if enable:
+            if pc.stephens is None:
+                from kaisetsu.profile.stephens import isotropic_coefficients
+
+                st = self.phases[phase].structure
+                pc.stephens = isotropic_coefficients(
+                    pc.strain_e6, st.lattice.reciprocal_metric_tensor
+                )
+        else:
+            pc.stephens = None
+        self.build_parameters()
+
     def add_hump(self, hist: int, center: float, fwhm: float, height: float) -> GaussianHump:
         """非晶質ハンプを背景に加える(パラメータ h{i}:hump{k}:center|fwhm|height)。"""
         hmp = GaussianHump(center, fwhm, height)
@@ -809,9 +826,32 @@ class Project:
                     step=1.0,
                     setter=_attr_setter(pc, "strain_e6"),
                     unit="×1e-6",
-                    description=f"{pname} の微小歪み",
+                    description=f"{pname} の微小歪み(等方。Stephens を使うときは無視)",
                 )
             )
+            if pc.stephens is not None:
+                sc = stephens_constraint(self.phases[pname].structure.spacegroup, pc.stephens)
+                pc.stephens[:] = sc.symmetrized
+                for k, mono in enumerate(MONOMIALS):
+                    par = Parameter(
+                        f"{ppre}:{monomial_name(mono)}",
+                        float(pc.stephens[k]),
+                        min=-1e12,
+                        max=1e12,
+                        step=max(1e-3 * abs(float(pc.stephens[k])), 1e-3),
+                        setter=_item_setter(pc.stephens, k),
+                        description=f"{pname} の Stephens 異方的歪み {monomial_name(mono)}",
+                    )
+                    if k in sc.fixed:
+                        par.locked = True
+                    ps.add(par)
+                for j, rel in sc.dependent.items():
+                    ps.tie(
+                        f"{ppre}:{monomial_name(MONOMIALS[j])}",
+                        [f"{ppre}:{monomial_name(MONOMIALS[k])}" for k in rel.pivots],
+                        rel.coeffs,
+                        rel.offset,
+                    )
 
     def _build_pdf_params(self, ps: ParameterSet, i: int, g: PDFEntry) -> None:
         pre = f"g{i}"

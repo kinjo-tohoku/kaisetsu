@@ -170,6 +170,7 @@ def _contribution_to_dict(pc: PhaseContribution) -> dict[str, Any]:
         "strain_e6": pc.strain_e6,
         "size_lorentz_fraction": pc.size_lorentz_fraction,
         "strain_lorentz_fraction": pc.strain_lorentz_fraction,
+        "stephens": None if pc.stephens is None else [float(v) for v in pc.stephens],
     }
 
 
@@ -357,6 +358,8 @@ def project_from_dict(d: dict[str, Any]) -> Project:
             pc.strain_e6 = cd.get("strain_e6", 0.0)
             pc.size_lorentz_fraction = cd.get("size_lorentz_fraction", 1.0)
             pc.strain_lorentz_fraction = cd.get("strain_lorentz_fraction", 1.0)
+            if cd.get("stephens") is not None:
+                pc.stephens = np.asarray(cd["stephens"], dtype=float)
     for gd in d.get("pdf_datasets", []):
         dd = gd["data"]
         pdata = PDFData(

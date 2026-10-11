@@ -33,6 +33,7 @@ from kaisetsu.profile.corrections import (
 )
 from kaisetsu.profile.fcj_batch import fcj_profile_batch
 from kaisetsu.profile.pseudo_voigt import tch_fwhm_eta
+from kaisetsu.profile.stephens import stephens_fwhm
 from kaisetsu.reflections.hkl import ReflectionList, generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
 from kaisetsu.scattering.xray import TableName
@@ -55,6 +56,8 @@ class PhaseContribution:
             Γ_strain = (180/π) (ε × 10^-6) tanθ [deg]
         size_lorentz_fraction, strain_lorentz_fraction: 各広がりのローレンツ成分の割合。
             残りはガウス成分に Γ^2 として加える(GSAS-II と同じ扱い)。
+        stephens: Stephens の異方的歪みの係数 S_HKL(15 個、×10⁻¹² Å⁻⁴)。None なら等方的な
+            strain_e6 を使う。ローレンツ成分の割合は strain_lorentz_fraction を共用
     """
 
     structure: Structure
@@ -65,15 +68,23 @@ class PhaseContribution:
     strain_e6: float = 0.0
     size_lorentz_fraction: float = 1.0
     strain_lorentz_fraction: float = 1.0
+    stephens: FloatArray | None = None
     #: Le Bail / Pawley 用: 代表 hkl → |F|^2。None なら構造から計算する。
     f2_table: dict[tuple[int, int, int], float] | None = None
     #: f2_table に無い反射に使う |F|^2
     f2_default: float = 1.0
 
     def sample_broadening(
-        self, two_theta: FloatArray, wavelength: float
+        self,
+        two_theta: FloatArray,
+        wavelength: float,
+        hkl: IntArray | None = None,
+        inv_d2: FloatArray | None = None,
     ) -> tuple[FloatArray, FloatArray]:
         """試料由来の広がり。
+
+        Args:
+            hkl, inv_d2: Stephens の異方的歪みに使う反射指数と 1/d²(None なら等方)
 
         Returns:
             (ガウス FWHM^2 への加算分 [deg^2], ローレンツ FWHM への加算分 [deg])
@@ -83,7 +94,10 @@ class PhaseContribution:
         g_size = np.zeros_like(two_theta)
         if self.size_um is not None and self.size_um > 0:
             g_size = deg * wavelength / (1.0e4 * self.size_um * np.cos(th))
-        g_strain = deg * (self.strain_e6 * 1.0e-6) * np.tan(th)
+        if self.stephens is not None and hkl is not None and inv_d2 is not None:
+            g_strain = stephens_fwhm(hkl, inv_d2, two_theta, self.stephens)
+        else:
+            g_strain = deg * (self.strain_e6 * 1.0e-6) * np.tan(th)
         fs, fm = self.size_lorentz_fraction, self.strain_lorentz_fraction
         add_l = fs * g_size + fm * g_strain
         add_g2 = EIGHT_LN2 * (((1.0 - fs) * g_size) ** 2 + ((1.0 - fm) * g_strain) ** 2)
@@ -287,7 +301,7 @@ def calculate_pattern(
                 else:
                     absorb = surface_roughness_suortti(sample.roughness_a, sample.roughness_b, pos)
                 corr = lp * absorb
-                add_g2, add_l = ph.sample_broadening(pos, wl)
+                add_g2, add_l = ph.sample_broadening(pos, wl, refl.hkl, 1.0 / (refl.d * refl.d))
                 fg = np.sqrt(instrument.fwhm_gauss(pos) ** 2 + add_g2)
                 fl = instrument.fwhm_lorentz(pos) + add_l
                 if wl == lam1:

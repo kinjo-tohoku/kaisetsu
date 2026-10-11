@@ -5,7 +5,10 @@
 
 情報エントロピー   S = Σ_i [m_i - τ_i - m_i ln(m_i / τ_i)]   (τ_i: 事前分布。既定は一様。
                    Skilling の形。総量が固定なら -Σ m ln(m/τ) と定数差)
-F 拘束            C = (1/N_F) Σ_h |F_obs(h) - F_c(h)|² / σ²(h)
+F 拘束            C_F = (1/N_F) Σ_h |F_obs(h) - F_c(h)|² / σ²(h)
+G 拘束(任意)    重なって分離できない反射の群 g について、群の強度和だけを拘束する
+                   C_G = (1/N_G) Σ_g (G_obs,g - Σ_{h∈g} m_h |F_c(h)|²)² / σ_g²   (m_h: 多重度)
+                   全体の C = (N_F C_F + N_G C_G) / (N_F + N_G)。Dysnomia の G 拘束と同じ考え方
 F000 の規格化は (000) 反射を小さな σ で観測値に含めて扱う。
 
 解法:
@@ -68,6 +71,8 @@ class MEMInput:
         sigma_f000: F000 の σ(既定は f000 × 1e-4)
         two_channel: 2 チャンネル MEM(負の散乱長用)
         f000_negative: 2 チャンネルのとき、負側の総量 |Σ b_neg|(正側は f000 + f000_negative)
+        overlap_groups: G 拘束の群のリスト。各要素は (hkl の添字の配列, G_obs, σ_G, 多重度の配列)。
+            群に入った反射は F 拘束から外れる(位相は f_obs のものを初期の参考にしない)
     """
 
     lattice: Lattice
@@ -80,6 +85,7 @@ class MEMInput:
     sigma_f000: float | None = None
     two_channel: bool = False
     f000_negative: float = 0.0
+    overlap_groups: list[tuple[IntArray, float, float, IntArray]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.hkl = np.atleast_2d(np.asarray(self.hkl, dtype=np.int64))
@@ -246,14 +252,62 @@ class _Model:
         self.owner_first = np.array(
             [int(np.nonzero(owner == r)[0][0]) for r in range(len(hkl))], dtype=np.int64
         )
+        self.counts = counts
+        # G 拘束: 群に入った反射は F 拘束の重みを 0 にする(添字は F000 の分 1 ずれる)
+        self.groups: list[tuple[IntArray, float, float, FloatArray]] = []
+        for idx_r, g_obs, sig_g, mult in inp.overlap_groups:
+            r_idx = np.asarray(idx_r, dtype=np.int64) + 1
+            self.w_eq[np.isin(owner, r_idx)] = 0.0
+            self.groups.append(
+                (r_idx, float(g_obs), float(sig_g), np.asarray(mult, dtype=np.float64))
+            )
+        self.n_groups = len(self.groups)
+        self.n_f = self.n_refl - sum(len(g[0]) for g in self.groups)
+
+    def group_terms(self, fc_eq: ComplexArray) -> tuple[float, list[float]]:
+        """Σ_g w_g r_g² と各群の残差 r_g = G_obs - Σ m_h |F_c|²。
+
+        |F_c|² は等価反射の平均(密度が対称なら全部同じ値)。勾配と厳密に整合させるため。
+        """
+        total = 0.0
+        resid: list[float] = []
+        f2_all = fc_eq.real**2 + fc_eq.imag**2
+        for r_idx, g_obs, sig_g, mult in self.groups:
+            f2 = np.array([float(np.mean(f2_all[self.owner == r])) for r in r_idx])
+            r_g = g_obs - float(np.sum(mult * f2))
+            resid.append(r_g)
+            total += (r_g / sig_g) ** 2
+        return total, resid
+
+    def group_gradient(self, fc_eq: ComplexArray, resid: list[float]) -> FloatArray:
+        """∂/∂m_i Σ_g w_g r_g² = -4 N Re[ifftn(A2)]_i、A2[h] = (w_g r_g m_h / count_h) F_c(h)*。"""
+        if not self.groups:
+            return np.zeros(self.n)
+        coef = np.zeros(len(self.idx), dtype=np.complex128)
+        for (r_idx, _g_obs, sig_g, mult), r_g in zip(self.groups, resid, strict=True):
+            w_g = 1.0 / (sig_g * sig_g)
+            for r, m_h in zip(r_idx, mult, strict=True):
+                sel = self.owner == r
+                coef[sel] += (w_g * r_g * m_h / self.counts[r]) * np.conj(fc_eq[sel])
+        a = np.bincount(self.idx, weights=coef.real, minlength=self.n) + 1j * np.bincount(
+            self.idx, weights=coef.imag, minlength=self.n
+        )
+        g = np.fft.ifftn(a.reshape(self.grid)).real.ravel()
+        return np.asarray(-4.0 * self.n * g)
+
+    def chi2_total(self, fc_eq: ComplexArray) -> float:
+        """C = (N_F C_F + N_G C_G) / (N_F + N_G)。"""
+        d = self.f_obs_eq - fc_eq
+        c_f = float(np.sum(self.w_eq * (d.real**2 + d.imag**2)))
+        c_g, _ = self.group_terms(fc_eq)
+        return (c_f + c_g) / max(self.n_f + self.n_groups, 1)
 
     def f_calc_eq(self, m: FloatArray) -> ComplexArray:
         f = self.n * np.fft.ifftn(m.reshape(self.grid))
         return np.asarray(f.ravel()[self.idx])
 
     def chi2(self, fc: ComplexArray) -> float:
-        d = self.f_obs_eq - fc
-        return float(np.sum(self.w_eq * (d.real**2 + d.imag**2)) / self.n_refl)
+        return self.chi2_total(fc)
 
     def data_gradient(self, fc: ComplexArray) -> FloatArray:
         """∂/∂m_i Σ_h w_h |F_o - F_c|² = -2 N Re[ifftn(A)]_i, A[h] = w_h (F_o - F_c)*。"""
@@ -395,6 +449,10 @@ def run_mem(
         d = model.f_obs_eq - fc
         data = float(np.sum(model.w_eq * (d.real**2 + d.imag**2)))
         gd = model.data_gradient(fc)
+        if model.groups:
+            g_val, resid = model.group_terms(fc)
+            data += g_val
+            gd = gd + model.group_gradient(fc, resid)
         val = -s_val + 0.5 * lam * data
         grad = -gs + 0.5 * lam * gd
         if use_log:

@@ -9,7 +9,13 @@ from kaisetsu.mem.io import (
     write_grd,
     write_xplor,
 )
-from kaisetsu.mem.mpf import MPFResult, mem_from_project, observed_structure_factors, run_mpf
+from kaisetsu.mem.mpf import (
+    MPFResult,
+    mem_from_project,
+    observed_structure_factors,
+    overlap_groups_from_project,
+    run_mpf,
+)
 
 __all__ = [
     "MEMInput",
@@ -20,6 +26,7 @@ __all__ = [
     "line_profile",
     "mem_from_project",
     "observed_structure_factors",
+    "overlap_groups_from_project",
     "run_mem",
     "run_mpf",
     "trilinear",
