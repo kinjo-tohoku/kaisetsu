@@ -124,10 +124,14 @@ class RunPage(QWizardPage):
         self.coords.setChecked(True)
         self.adp = QCheckBox("変位パラメータ(U)も動かす")
         self.adp.setChecked(True)
-        self.disp = QCheckBox("ゼロ点ではなく試料高さずれを動かす(Bragg-Brentano で推奨)")
+        self.disp = QCheckBox(
+            "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
+        )
+        self.rough = QCheckBox("表面粗さも動かす(重い元素など吸収の強い試料。Bragg-Brentano)")
         layout.addWidget(self.coords)
         layout.addWidget(self.adp)
         layout.addWidget(self.disp)
+        layout.addWidget(self.rough)
         row = QHBoxLayout()
         row.addWidget(QLabel("背景(Chebyshev)の項数:"))
         self.n_background = QSpinBox()
@@ -187,6 +191,7 @@ class StartWizard(QWizard):
             coordinates=self.page_run.coords.isChecked(),
             adp=self.page_run.adp.isChecked(),
             sample_displacement=self.page_run.disp.isChecked(),
+            roughness=self.page_run.rough.isChecked(),
         )
         super().accept()
         main.run_recipe(recipe)

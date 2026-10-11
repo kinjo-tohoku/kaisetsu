@@ -16,7 +16,7 @@
     {相}:cell:{a|b|c|alpha|beta|gamma}      格子定数
     {相}:{サイト}:{x|y|z|occ|uiso|u11..u23}  原子
     h{i}:inst:{zero|u|v|w|p|x|y|z|s_l|h_l|pol}  装置
-    h{i}:sample:{displacement|mu_eff|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
+    h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
     h{i}:bkg:{k}                           バックグラウンド係数
     h{i}:{相}:{scale|md_r|size|strain}     相-ヒストグラム
 """
@@ -71,6 +71,28 @@ def _attr_setter(obj: object, attr: str) -> Callable[[float], None]:
         setattr(obj, attr, v)
 
     return _set
+
+
+def _shared_position_groups(sites: Sequence[Any], tol: float = 1e-4) -> list[list[Any]]:
+    """同じ分率座標(格子並進を除く)にあるサイトをまとめる。2 個以上の組だけ返す。"""
+    groups: list[list[Any]] = []
+    used: set[int] = set()
+    for i, a in enumerate(sites):
+        if i in used:
+            continue
+        group = [a]
+        for j in range(i + 1, len(sites)):
+            if j in used:
+                continue
+            d = np.asarray(sites[j].position, dtype=float) - np.asarray(a.position, dtype=float)
+            d -= np.round(d)
+            if np.all(np.abs(d) < tol):
+                group.append(sites[j])
+                used.add(j)
+        if len(group) > 1:
+            used.add(i)
+            groups.append(group)
+    return groups
 
 
 def _item_setter(arr: Any, k: int) -> Callable[[float], None]:
@@ -400,6 +422,15 @@ class Project:
                         rel.coeffs,
                         rel.offset,
                     )
+        # 混合サイト(同じ座標に複数の散乱種)は占有率の和を保つ: 最後の種を他に従属させる
+        for group in _shared_position_groups(st.sites):
+            total = sum(site.occupancy for site in group)
+            ps.tie(
+                f"{pre}:{group[-1].label}:occ",
+                [f"{pre}:{site.label}:occ" for site in group[:-1]],
+                [-1.0] * (len(group) - 1),
+                total,
+            )
 
     def _build_hist_params(self, ps: ParameterSet, i: int, h: HistogramEntry) -> None:
         pre = f"h{i}"
@@ -434,7 +465,7 @@ class Project:
         smp = h.sample
         sspec: list[tuple[str, str, float, float, float, str, str]] = [
             ("displacement", "displacement_mm", 1e-4, -5.0, 5.0, "mm", "試料高さずれ (BB)"),
-            ("mu_eff", "mu_eff_inv_mm", 1e-3, 0.0, 1e3, "1/mm", "透過補正 μ_eff (BB)"),
+            ("transparency", "transparency_mm", 1e-3, 0.0, 10.0, "mm", "透過補正 1/μ_eff (BB)"),
             ("rough_a", "roughness_a", 1e-3, 0.0, 1.0, "", "表面粗さ A (Suortti)"),
             ("rough_b", "roughness_b", 1e-3, 0.0, 10.0, "", "表面粗さ B (Suortti)"),
             ("disp_x", "displace_x_mm", 1e-4, -5.0, 5.0, "mm", "試料位置ずれ x (DS)"),
@@ -755,6 +786,48 @@ class Project:
 
     def canonical(self, phase: str, hkl: npt.ArrayLike) -> npt.NDArray[np.int64]:
         return canonical_hkl(self.phases[phase].structure.spacegroup, hkl)
+
+    def diagnostics(self) -> list[str]:
+        """精密化結果の簡単な点検。初心者向けの注意点を日本語で返す(問題が無ければ空)。"""
+        notes: list[str] = []
+        ps = self.params
+        adp_tags = ("uiso", "u11", "u22", "u33")
+        for p in ps:
+            tail = p.name.rsplit(":", 1)[-1]
+            if tail in adp_tags and p.value < -1e-6:
+                notes.append(
+                    f"{p.name} が負({p.value:.4f} Å²)です。平板試料(Bragg-Brentano)なら"
+                    "表面粗さ(sample:rough_a, rough_b)を、キャピラリなら吸収 μR を動かして"
+                    "みてください。背景が高すぎる、偏光係数が合っていないときにも起こります。"
+                )
+            elif tail in adp_tags and p.value > 0.1:
+                notes.append(
+                    f"{p.name} が大きすぎます({p.value:.3f} Å²)。"
+                    "そのサイトの元素や占有率を疑ってください。"
+                )
+        for p in ps.free():
+            if math.isfinite(p.min) and abs(p.value - p.min) <= 1e-9 * max(1.0, abs(p.min)):
+                notes.append(
+                    f"{p.name} が下限 {p.min:g} に張り付いています。初期値を見直してください"
+                )
+            elif math.isfinite(p.max) and abs(p.value - p.max) <= 1e-9 * max(1.0, abs(p.max)):
+                notes.append(
+                    f"{p.name} が上限 {p.max:g} に張り付いています。初期値を見直してください"
+                )
+            elif p.esd is not None and p.esd > max(abs(p.value), 10 * p.step):
+                notes.append(
+                    f"{p.name} は決まっていません(esd {p.esd:.3g} が値 {p.value:.3g} より大きい)。"
+                    "他のパラメータと強く相関しているか、データに感度がありません。固定を検討してください。"
+                )
+        if self.histograms and self.phases:
+            rf = self.rfactors()["total"]
+            if rf.chi2 > 10.0:
+                notes.append(
+                    f"χ² = {rf.chi2:.1f} と大きめです。計数が多いデータでは普通ですが、"
+                    "差のプロットに系統的な残差があれば、ピーク形状(U, V, W, X, Y)・背景の項数・"
+                    "未同定のピーク(別の相)を確認してください。"
+                )
+        return notes
 
     def summary(self) -> str:
         lines = [f"プロジェクト {self.name or '(無名)'}"]

@@ -153,7 +153,7 @@ def test_position_shifts() -> None:
     assert np.allclose(s, -np.degrees(2 * 0.1 / 200 * np.cos(np.radians(tt / 2))))
     assert s[0] < 0
     # 透過
-    s2 = bragg_brentano_shift(tt, 0.0, 200.0, mu_eff_inv_mm=0.05)
+    s2 = bragg_brentano_shift(tt, 0.0, 200.0, transparency_mm=20.0)
     assert np.allclose(s2, -np.degrees(np.sin(np.radians(tt)) / (2 * 0.05 * 200.0)))
     d = debye_scherrer_shift(tt, 0.1, 0.0, 200.0)
     assert np.allclose(d, -np.degrees(0.1 * np.cos(np.radians(tt)) / 200.0))

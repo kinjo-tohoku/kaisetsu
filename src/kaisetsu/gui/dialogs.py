@@ -294,11 +294,16 @@ class RecipeDialog(QDialog):
         self.coords.setChecked(True)
         self.adp = QCheckBox("変位パラメータ(U)を動かす")
         self.adp.setChecked(True)
-        self.occ = QCheckBox("占有率を動かす(通常は不要)")
-        self.disp = QCheckBox("ゼロ点ではなく試料高さずれを動かす(Bragg-Brentano で推奨)")
+        self.occ = QCheckBox("占有率を動かす(混合サイト・部分占有のサイトだけ)")
+        self.disp = QCheckBox(
+            "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
+        )
         self.asym = QCheckBox("ピーク非対称 (S/L, H/L) を動かす")
         self.po = QCheckBox("選択配向 (March-Dollase) を動かす")
-        for w in (self.coords, self.adp, self.occ, self.disp, self.asym, self.po):
+        self.rough = QCheckBox(
+            "表面粗さを動かす(吸収の強い試料で U が負になるとき。Bragg-Brentano)"
+        )
+        for w in (self.coords, self.adp, self.occ, self.disp, self.asym, self.po, self.rough):
             form.addRow(w)
         self.cycles = QSpinBox()
         self.cycles.setRange(1, 200)
@@ -322,6 +327,7 @@ class RecipeDialog(QDialog):
             sample_displacement=self.disp.isChecked(),
             asymmetry=self.asym.isChecked(),
             preferred_orientation=self.po.isChecked(),
+            roughness=self.rough.isChecked(),
         )
         for s in r.steps:
             s.max_cycles = (

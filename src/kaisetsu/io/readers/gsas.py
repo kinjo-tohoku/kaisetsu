@@ -62,7 +62,7 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
 
     nchan = int(header[2])
     binning = header[4].upper() if len(header) > 4 else "CONST"
-    if binning != "CONST":
+    if not binning.startswith("CONS"):  # GSAS は "CONS" と略すこともある
         raise ValueError(f"{p.name}: ビニング {binning} は未対応です(CONST のみ)")
     start = float(header[5]) / 100.0
     step = float(header[6]) / 100.0

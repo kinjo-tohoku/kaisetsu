@@ -116,6 +116,9 @@ def _sample_to_dict(s: SampleGeometry) -> dict[str, Any]:
 def _sample_from_dict(d: dict[str, Any]) -> SampleGeometry:
     kw = dict(d)
     kw["kind"] = GeometryKind(kw.get("kind", "bragg-brentano"))
+    if "mu_eff_inv_mm" in kw:  # 旧形式(有効線吸収係数)→ 侵入深さ 1/μ_eff [mm]
+        mu = float(kw.pop("mu_eff_inv_mm"))
+        kw["transparency_mm"] = 1.0 / mu if mu > 0 else 0.0
     return SampleGeometry(**kw)
 
 

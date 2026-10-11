@@ -683,11 +683,16 @@ class MainWindow(QMainWindow):
                     "注意: 強く相関するパラメータがあります(片方を固定することを検討): "
                     + "; ".join(f"{a}–{b} ({c:+.2f})" for a, b, c in hc[:5])
                 )
+            for note in self.project.diagnostics():
+                self.log("注意: " + note)
 
     def show_summary(self) -> None:
         if not (self.project.histograms and self.project.phases):
             return
         text = self.project.summary()
+        notes = self.project.diagnostics()
+        if notes:
+            text += "\n\n注意:\n" + "\n".join(f"- {n}" for n in notes)
         self.log(text)
         box = QMessageBox(self)
         box.setWindowTitle("結果の要約")
@@ -715,7 +720,7 @@ class MainWindow(QMainWindow):
             "相:サイト:x|y|z … 分率座標(特殊位置の拘束は自動)\n"
             "相:サイト:occ … 占有率、相:サイト:uiso … 等方性変位パラメータ\n"
             "h0:inst:zero|u|v|w|p|x|y|z|s_l|h_l|pol … 装置(h0 は 1 番目のデータ)\n"
-            "h0:sample:displacement|mu_eff|disp_x|disp_y|mu_r … 試料\n"
+            "h0:sample:displacement|transparency|disp_x|disp_y|mu_r … 試料\n"
             "h0:bkg:0,1,2,… … 背景(Chebyshev 係数)\n"
             "h0:相:scale|md_r|size|strain … スケール、選択配向、サイズ、歪み\n\n"
             "絞り込み欄では * と ? が使えます(例: *:cell:*, h0:inst:[uvw])。",

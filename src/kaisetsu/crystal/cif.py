@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import gemmi
 import numpy as np
 
-from kaisetsu.crystal.atoms import AtomSite
+from kaisetsu.crystal.atoms import AtomSite, normalize_species
 from kaisetsu.crystal.lattice import Lattice
 from kaisetsu.crystal.spacegroup import SpaceGroup
 from kaisetsu.crystal.structure import Structure
@@ -30,7 +31,7 @@ def read_structure(path: str | Path, block: str | None = None) -> Structure:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"CIF ファイルが見つかりません: {path}")
-    doc = gemmi.cif.read(str(path))
+    doc = _read_document(path)
     cif_block = doc[0] if block is None else doc.find_block(block)
     if cif_block is None:
         raise ValueError(f"CIF にブロック {block!r} がありません")
@@ -43,11 +44,12 @@ def read_structure(path: str | Path, block: str | None = None) -> Structure:
 
     spacegroup = _spacegroup_from_small_structure(st, path.name)
 
+    # _atom_site_type_symbol が無い CIF(AMCSD 由来の COD エントリに多い)では
+    # gemmi がラベルを type_symbol に入れるので、元素記号に落として使う
+    has_type_symbol = bool(cif_block.find_values("_atom_site_type_symbol"))
     sites: list[AtomSite] = []
     for s in st.sites:
-        species = s.type_symbol.strip() if s.type_symbol.strip() else s.element.name
-        if species.lower() in ("", "x", "?"):
-            species = s.element.name
+        species = _species_of(s, has_type_symbol, path.name)
         aniso = None
         if s.aniso.nonzero():
             aniso = np.array(
@@ -74,6 +76,43 @@ def read_structure(path: str | Path, block: str | None = None) -> Structure:
             name = gemmi.cif.as_string(v)
             break
     return Structure(lattice, spacegroup, sites, name=name)
+
+
+def _read_document(path: Path) -> gemmi.cif.Document:
+    """CIF を gemmi で読む。`data_` 見出しの無いファイル(一部のソフトが書き出す)は見出しを補う。"""
+    try:
+        return gemmi.cif.read(str(path))
+    except (ValueError, RuntimeError) as exc:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"^\s*data_", text, flags=re.MULTILINE):
+            raise ValueError(f"CIF {path.name} を解釈できません: {exc}") from exc
+        try:
+            return gemmi.cif.read_string(f"data_{_safe_name(path.stem)}\n{text}")
+        except (ValueError, RuntimeError) as exc2:
+            raise ValueError(f"CIF {path.name} を解釈できません: {exc2}") from exc2
+
+
+def _species_of(site: gemmi.SmallStructure.Site, has_type_symbol: bool, fname: str) -> str:
+    """サイトの散乱種を決める。
+
+    _atom_site_type_symbol があればそれを正規化する('Pb2+' など)。
+    'La0' のように酸化数 0 を付けた表記や、ラベルしか無い場合は元素記号に落とす。
+    """
+    sym = site.type_symbol.strip() if has_type_symbol else ""
+    if sym and sym not in ("?", ".") and sym.lower() != "x":
+        try:
+            return normalize_species(sym)
+        except ValueError:
+            m = re.fullmatch(r"([A-Z][a-z]?)0", sym)
+            if m:
+                return m.group(1)
+    el = site.element.name
+    if el in ("", "X"):
+        raise ValueError(
+            f"CIF {fname}: サイト {site.label!r} の元素が判別できません"
+            "(_atom_site_type_symbol を書いてください)"
+        )
+    return el
 
 
 def _spacegroup_from_small_structure(st: gemmi.SmallStructure, fname: str) -> SpaceGroup:

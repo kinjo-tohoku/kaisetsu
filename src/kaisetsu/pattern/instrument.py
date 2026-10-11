@@ -138,7 +138,7 @@ class SampleGeometry:
         kind: Bragg-Brentano(反射、平板)か Debye-Scherrer(透過、キャピラリ)
         radius_mm: ゴニオメータ半径 [mm]
         displacement_mm: (BB) 試料高さずれ [mm]
-        mu_eff_inv_mm: (BB) 透過補正の有効線吸収係数 [1/mm]。0 で補正なし
+        transparency_mm: (BB) 透過補正の有効侵入深さ 1/μ_eff [mm]。0 で補正なし
         roughness_a, roughness_b: (BB) Suortti 表面粗さ
         displace_x_mm, displace_y_mm: (DS) 試料位置ずれ [mm]
         mu_r: (DS) 円筒試料の μR
@@ -147,7 +147,7 @@ class SampleGeometry:
     kind: GeometryKind = GeometryKind.BRAGG_BRENTANO
     radius_mm: float = 200.0
     displacement_mm: float = 0.0
-    mu_eff_inv_mm: float = 0.0
+    transparency_mm: float = 0.0
     roughness_a: float = 0.0
     roughness_b: float = 0.0
     displace_x_mm: float = 0.0
@@ -158,7 +158,7 @@ class SampleGeometry:
         """試料に由来するピークシフト Δ2θ [deg]。"""
         if self.kind is GeometryKind.BRAGG_BRENTANO:
             return bragg_brentano_shift(
-                two_theta, self.displacement_mm, self.radius_mm, self.mu_eff_inv_mm
+                two_theta, self.displacement_mm, self.radius_mm, self.transparency_mm
             )
         return debye_scherrer_shift(
             two_theta, self.displace_x_mm, self.displace_y_mm, self.radius_mm
@@ -185,13 +185,13 @@ class SampleGeometry:
             else GeometryKind.BRAGG_BRENTANO
         )
         transparency = val("Transparency")
-        # GSAS-II: Δ2θ = -(9/(π R)) T sin2θ [deg] ⇔ 1/(2 μ_eff) = T/20 mm
-        mu_eff = 10.0 / transparency if transparency > 0 else 0.0
+        # GSAS-II: Δ2θ = -(9/(π R)) T sin2θ [deg] ⇔ 1/μ_eff = T/10 mm
+        t_mm = transparency / 10.0
         return cls(
             kind=kind,
             radius_mm=radius,
             displacement_mm=val("Shift") / 1000.0,
-            mu_eff_inv_mm=mu_eff,
+            transparency_mm=t_mm,
             roughness_a=val("SurfRoughA"),
             roughness_b=val("SurfRoughB"),
             displace_x_mm=val("DisplaceX") / 1000.0,

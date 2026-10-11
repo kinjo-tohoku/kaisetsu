@@ -12,6 +12,7 @@ from kaisetsu.pattern import (
     SampleGeometry,
     calculate_pattern,
 )
+from kaisetsu.pattern.instrument import GeometryKind
 from kaisetsu.profile import ChebyshevBackground
 from kaisetsu.refine.project import HistogramEntry, PhaseEntry, Project, ReflectionReport
 from kaisetsu.scattering import Radiation
@@ -20,6 +21,7 @@ __all__ = [
     "AtomSite",
     "CWInstrument",
     "ChebyshevBackground",
+    "GeometryKind",
     "HistogramEntry",
     "Lattice",
     "PhaseContribution",

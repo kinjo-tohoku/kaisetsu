@@ -133,18 +133,22 @@ def bragg_brentano_shift(
     two_theta: npt.ArrayLike,
     displacement_mm: float,
     radius_mm: float,
-    mu_eff_inv_mm: float = 0.0,
+    transparency_mm: float = 0.0,
 ) -> FloatArray:
     """Bragg-Brentano 光学系の試料変位・透過によるピークシフト Δ2θ [deg]。
 
     変位 s(試料面が焦点円の中心からずれた量、mm): Δ2θ = -(2 s / R) cosθ
-    透過(有効線吸収係数 μ_eff [1/mm]): Δ2θ = -sin 2θ / (2 μ_eff R)
+    透過(有効侵入深さ t = 1/μ_eff [mm]): Δ2θ = -t sin 2θ / (2 R)
+        t = 0 で補正なし。μ_eff でなく t を変数にするのは、μ_eff → 0 で発散しないようにするため。
+
+    出典: Klug & Alexander, X-ray Diffraction Procedures, 2nd ed. (1974) Sec. 5-3.4;
+        Wilson, Mathematical Theory of X-ray Powder Diffractometry (1963)
     """
     tt = np.asarray(two_theta, dtype=np.float64)
     th = np.radians(tt / 2.0)
     shift = -(2.0 * displacement_mm / radius_mm) * np.cos(th)
-    if mu_eff_inv_mm > 0.0:
-        shift = shift - np.sin(2.0 * th) / (2.0 * mu_eff_inv_mm * radius_mm)
+    if transparency_mm != 0.0:
+        shift = shift - transparency_mm * np.sin(2.0 * th) / (2.0 * radius_mm)
     return np.asarray(np.degrees(shift))
 
 
