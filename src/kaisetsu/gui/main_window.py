@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
+from kaisetsu.gui.background_dialog import BackgroundDialog
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
 from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
 from kaisetsu.gui.paths import last_dir, remember_dir
@@ -212,6 +213,9 @@ class MainWindow(QMainWindow):
         self.act_instrument = self._add_action(
             m_data, "装置と試料の設定(&I)…", self.edit_instrument, "Ctrl+I"
         )
+        self.act_background = self._add_action(
+            m_data, "背景の設定(&B)…", self.edit_background, "Ctrl+B"
+        )
         m_data.addSeparator()
         self.act_wizard = self._add_action(
             m_data, "はじめての精密化(ウィザード)(&W)…", self.run_wizard
@@ -253,6 +257,7 @@ class MainWindow(QMainWindow):
         add(self.act_load, sp.SP_DialogOpenButton, "データ読込")
         add(self.act_add_phase, sp.SP_FileIcon, "CIF 追加")
         add(self.act_instrument, sp.SP_FileDialogDetailedView, "装置設定")
+        add(self.act_background, sp.SP_FileDialogListView, "背景設定")
         tb.addSeparator()
         add(self.act_calc, sp.SP_BrowserReload, "計算 (F5)")
         add(self.act_refine, sp.SP_MediaPlay, "精密化 (F9)")
@@ -479,6 +484,7 @@ class MainWindow(QMainWindow):
         path: str,
         instrument: CWInstrument | None = None,
         sample: SampleGeometry | None = None,
+        n_background: int = 8,
     ) -> None:
         try:
             data = read_powder_data(path)
@@ -492,7 +498,7 @@ class MainWindow(QMainWindow):
             if dlg.exec() != InstrumentDialog.DialogCode.Accepted:
                 return
             instrument, sample = dlg.result_instrument()
-        h = self.project.add_histogram(data, instrument, sample, n_background=6)
+        h = self.project.add_histogram(data, instrument, sample, n_background=n_background)
         self.current_hist = len(self.project.histograms) - 1
         for pc in h.contributions.values():
             pc.scale = self._initial_scale(h)
@@ -550,6 +556,22 @@ class MainWindow(QMainWindow):
             return float(obs / peak) if peak > 0 else 1.0
         except Exception:
             return 1.0
+
+    def edit_background(self) -> None:
+        if not self.project.histograms:
+            QMessageBox.information(self, "背景", "先に回折データを読み込んでください")
+            return
+        h = self.project.histograms[self.current_hist]
+        dlg = BackgroundDialog(h.background.order, self)
+        if dlg.exec() != BackgroundDialog.DialogCode.Accepted:
+            return
+        n_terms, estimate = dlg.values()
+        self.project.reset_background(self.current_hist, n_terms, estimate)
+        self.log(
+            f"背景を {n_terms} 項にしました"
+            + ("(観測から推定し直し)" if estimate else "(係数は引き継ぎ)")
+        )
+        self._refresh_all()
 
     def edit_instrument(self) -> None:
         if not self.project.histograms:

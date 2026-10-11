@@ -55,13 +55,13 @@ def test_main_window_loads_and_plots(qtbot, data_dir: Path, tmp_path: Path) -> N
     win.filter_edit.setText("*:cell:*")
     assert win.param_filter.rowCount() == 6
     win.filter_edit.setText("h0:bkg:*")
-    assert win.param_filter.rowCount() == 6
+    assert win.param_filter.rowCount() == 8
     win.only_free.setChecked(True)
     assert win.param_filter.rowCount() == 0
     win.only_free.setChecked(False)
     # 表示中を精密化する
     win._set_vary_shown(True)
-    assert set(win.project.params.free_names()) == {f"h0:bkg:{k}" for k in range(6)}
+    assert set(win.project.params.free_names()) == {f"h0:bkg:{k}" for k in range(8)}
     # チェックボックスの編集
     win.filter_edit.setText("h0:PbSO4:scale")
     idx = win.param_filter.index(0, COL_VARY)
@@ -126,3 +126,22 @@ def test_instrument_and_recipe_dialogs(qtbot) -> None:
     names = [s.name for s in r.steps]
     assert names[0] == "スケールと背景" and "原子座標" in names
     assert any("sample:displacement" in p for s in r.steps for p in s.patterns)
+
+
+def test_background_dialog_and_reset(qtbot, data_dir: Path) -> None:
+    from kaisetsu.gui.background_dialog import BackgroundDialog
+
+    win = _window(qtbot, data_dir)
+    assert len(win.project.params.select("h0:bkg:*")) == 8
+    # 読み込み時の背景推定は低角の立ち上がりを捉えている
+    h = win.project.histograms[0]
+    assert h.background(h.data.x[:1])[0] > 110.0
+    dlg = BackgroundDialog(8)
+    qtbot.addWidget(dlg)
+    dlg.n_terms.setValue(12)
+    assert dlg.values() == (12, True)
+    win.project.reset_background(0, 12, True)
+    win._refresh_all()
+    assert len(win.project.params.select("h0:bkg:*")) == 12
+    win.project.reset_background(0, 5, False)
+    assert len(win.project.params.select("h0:bkg:*")) == 5

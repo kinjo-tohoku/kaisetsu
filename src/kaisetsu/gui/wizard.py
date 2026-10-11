@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWizard,
     QWizardPage,
@@ -127,6 +128,15 @@ class RunPage(QWizardPage):
         layout.addWidget(self.coords)
         layout.addWidget(self.adp)
         layout.addWidget(self.disp)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("背景(Chebyshev)の項数:"))
+        self.n_background = QSpinBox()
+        self.n_background.setRange(1, 36)
+        self.n_background.setValue(8)
+        self.n_background.setToolTip("目安 6〜12。低角の立ち上がりが合わなければ増やす")
+        row.addWidget(self.n_background)
+        row.addStretch(1)
+        layout.addLayout(row)
         layout.addWidget(QLabel(
             "手順: スケールと背景 → 格子定数とピーク位置 → ピーク幅 → 原子座標 → 変位パラメータ\n"
             "Rwp が大きく変わらなくなれば収束です。結果はパラメータ表と「結果の要約」で確認できます。"
@@ -154,7 +164,9 @@ class StartWizard(QWizard):
     def accept(self) -> None:
         inst, smp = self.page_inst.dialog.result_instrument()
         main = self.main
-        main.load_data_file(self.page_data.edit.text(), inst, smp)
+        main.load_data_file(
+            self.page_data.edit.text(), inst, smp, n_background=self.page_run.n_background.value()
+        )
         main.add_phase_file(
             self.page_phase.edit.text(), name=_phase_name(self.page_phase.edit.text())
         )

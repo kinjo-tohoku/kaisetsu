@@ -37,7 +37,7 @@ from kaisetsu.crystal.structure import Structure
 from kaisetsu.pattern.calculator import PatternResult, PhaseContribution, calculate_pattern
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
-from kaisetsu.profile.background import ChebyshevBackground
+from kaisetsu.profile.background import ChebyshevBackground, estimate_chebyshev_background
 from kaisetsu.refine.constraints import (
     SymmetryConstraint,
     adp_constraint,
@@ -210,7 +210,7 @@ class Project:
         sample: SampleGeometry | None = None,
         background: ChebyshevBackground | None = None,
         *,
-        n_background: int = 6,
+        n_background: int = 8,
         name: str | None = None,
         phases: Iterable[str] | None = None,
         x_min: float | None = None,
@@ -219,10 +219,13 @@ class Project:
         kalpha2_mode: str = "exact",
         weight_factor: float = 1.0,
     ) -> HistogramEntry:
+        """ヒストグラムを追加する。
+
+        background を省略すると、観測パターンからピークを避けて推定した Chebyshev 背景
+        (n_background 項)を初期値にする。
+        """
         if background is None:
-            coeffs = np.zeros(max(n_background, 1))
-            coeffs[0] = float(np.median(data.y))
-            background = ChebyshevBackground(coeffs, float(data.x[0]), float(data.x[-1]))
+            background = _initial_background(data, max(n_background, 1))
         names = list(phases) if phases is not None else list(self.phases)
         for n in names:
             if n not in self.phases:
@@ -247,6 +250,21 @@ class Project:
 
     def phase_contribution(self, hist: int, phase: str) -> PhaseContribution:
         return self.histograms[hist].contributions[phase]
+
+    def reset_background(
+        self, hist: int, n_terms: int | None = None, estimate: bool = True
+    ) -> None:
+        """背景の項数を変える、または観測から推定し直す。パラメータ集合も作り直す。"""
+        h = self.histograms[hist]
+        n = max(n_terms if n_terms is not None else h.background.order, 1)
+        if estimate:
+            h.background = _initial_background(h.data, n)
+        else:
+            old = h.background.coefficients
+            coeffs = np.zeros(n)
+            coeffs[: min(n, len(old))] = old[: min(n, len(old))]
+            h.background = ChebyshevBackground(coeffs, h.background.x_min, h.background.x_max)
+        self.build_parameters()
 
     # ------------------------------------------------------------------
     # パラメータ
@@ -755,3 +773,13 @@ class Project:
         lines.append("パラメータ(* 精密化中, = 拘束):")
         lines.append(self.params.summary())
         return "\n".join(lines)
+
+
+def _initial_background(data: PowderData, n_terms: int) -> ChebyshevBackground:
+    """観測からの背景推定。失敗したら中央値の定数にする。"""
+    try:
+        return estimate_chebyshev_background(data.x, data.y, n_terms)
+    except (ValueError, np.linalg.LinAlgError):
+        coeffs = np.zeros(n_terms)
+        coeffs[0] = float(np.median(data.y))
+        return ChebyshevBackground(coeffs, float(data.x[0]), float(data.x[-1]))
