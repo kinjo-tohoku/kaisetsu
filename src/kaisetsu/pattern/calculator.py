@@ -31,7 +31,7 @@ from kaisetsu.profile.corrections import (
     polarization_factor,
     surface_roughness_suortti,
 )
-from kaisetsu.profile.fcj import fcj_pseudo_voigt
+from kaisetsu.profile.fcj_batch import fcj_profile_batch
 from kaisetsu.profile.pseudo_voigt import tch_fwhm_eta
 from kaisetsu.reflections.hkl import ReflectionList, generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
@@ -194,6 +194,7 @@ def calculate_pattern(
     xray_table: TableName = "it1992",
     anomalous: Mapping[str, complex] | None = None,
     scattering_override: Mapping[str, complex] | None = None,
+    fcj_method: str = "accurate",
 ) -> PatternResult:
     """パターンを計算する。
 
@@ -296,40 +297,45 @@ def calculate_pattern(
             fwhm = np.array(
                 [tch_fwhm_eta(float(a), float(b))[0] for a, b in zip(fg, fl, strict=True)]
             )
-            for i in range(len(refl)):
-                if not ok[i] or inten[i] <= 0.0:
-                    continue
-                lo, hi = peak_window(
-                    float(pos[i]),
-                    float(fg[i] + fl[i]),
-                    instrument.s_l,
-                    instrument.h_l,
-                    *window_fwhm,
-                )
-                i0 = int(np.searchsorted(xa, lo))
-                i1 = int(np.searchsorted(xa, hi))
-                if i1 <= i0:
-                    continue
-                prof = fcj_pseudo_voigt(
-                    xa[i0:i1],
-                    float(pos[i]),
-                    float(fg[i]),
-                    float(fl[i]),
-                    instrument.s_l,
-                    instrument.h_l,
-                )
-                part = inten[i] * prof
-                yp[i0:i1] += part
+            # ピーク窓(GSAS-II と同じ規則)をまとめて決め、全ピークを一括計算する
+            pos_safe = np.where(ok, pos, 0.0)
+            width = np.maximum(fg + fl, 1e-4)
+            lo_w = window_fwhm[0] * (
+                width + (instrument.s_l + instrument.h_l) * np.abs(np.cos(np.radians(pos_safe)))
+            )
+            hi_w = window_fwhm[1] * width
+            high = pos_safe > 90.0
+            lo_w, hi_w = np.where(high, hi_w, lo_w), np.where(high, lo_w, hi_w)
+            i0 = np.searchsorted(xa, pos_safe - lo_w).astype(np.int64)
+            i1 = np.searchsorted(xa, pos_safe + hi_w).astype(np.int64)
+            use = ok & (inten > 0.0) & (i1 > i0)
+            i1 = np.where(use, i1, i0)
+            out, offsets, lengths = fcj_profile_batch(
+                xa,
+                pos_safe,
+                fg,
+                fl,
+                inten,
+                i0,
+                i1,
+                instrument.s_l,
+                instrument.h_l,
+                method=fcj_method,
+            )
+            for i in np.nonzero(lengths > 0)[0]:
+                a, b = int(i0[i]), int(i1[i])
+                part = out[offsets[i] : offsets[i] + lengths[i]]
+                yp[a:b] += part
                 inten_total[i] += inten[i]
                 prev = contrib[i]
                 if prev is None:
-                    w_start[i], w_stop[i] = i0, i1
-                    contrib[i] = part
+                    w_start[i], w_stop[i] = a, b
+                    contrib[i] = part.copy()
                 else:
-                    s0, s1 = min(int(w_start[i]), i0), max(int(w_stop[i]), i1)
+                    s0, s1 = min(int(w_start[i]), a), max(int(w_stop[i]), b)
                     merged = np.zeros(s1 - s0)
                     merged[w_start[i] - s0 : w_stop[i] - s0] += prev
-                    merged[i0 - s0 : i1 - s0] += part
+                    merged[a - s0 : b - s0] += part
                     w_start[i], w_stop[i] = s0, s1
                     contrib[i] = merged
             if table is None:

@@ -58,7 +58,7 @@ def test_pattern_matches_gsas2(case: str) -> None:
     ref = load_reference(case)
     x, inst, sample, bkg, phase, d_min, kwargs = _setup(ref)
     res = calculate_pattern(
-        x, [phase], inst, sample, bkg, d_min=d_min, kalpha2_mode="gsas", **kwargs
+        x, [phase], inst, sample, bkg, d_min=d_min, kalpha2_mode="gsas", fcj_method="gsas", **kwargs
     )
     y_ref = np.asarray(ref["pattern"]["ycalc"], dtype=float)
     b_ref = np.asarray(ref["pattern"]["background"], dtype=float)
@@ -88,7 +88,7 @@ def test_peak_positions_widths_intensities_match_gsas2(case: str) -> None:
     ref = load_reference(case)
     x, inst, sample, bkg, phase, d_min, kwargs = _setup(ref)
     res = calculate_pattern(
-        x, [phase], inst, sample, bkg, d_min=d_min, kalpha2_mode="gsas", **kwargs
+        x, [phase], inst, sample, bkg, d_min=d_min, kalpha2_mode="gsas", fcj_method="gsas", **kwargs
     )
     tbl = res.peaks[0]
     cols = ref["reflections"]["columns"]

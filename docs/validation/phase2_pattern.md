@@ -57,7 +57,13 @@ Kα2 の扱いは `kalpha2_mode="gsas"`(GSAS-II と同じ近似)にした。
    (物理的にはこちらが正しい)。GSAS-II と比べるときだけ `"gsas"` を使う。
 4. **FCJ 非対称。** GSAS-II の PSVFCJO は S/L = H/L = (SH/L)/2 とし、[2φ_min, 2θ] を
    Gauss-Legendre 則の正の半分の節点で積分する。節点数は 3·(2θ - 2φ_min)/Γ_L を超える表の値。
-   kaisetsu は同じ手順(倍精度)で実装した。
+   kaisetsu は同じ手順(倍精度)を `fcj_method="gsas"` として実装し、この比較に使った。
+   ただしこの積分は δ → 2θ に 1/√(2θ-δ) の特異点があるため収束が 1/n 程度で、
+   GSAS-II の 400 節点でも低角の非対称ピークに相対 1e-3 程度の誤差が残る
+   (`tests/unit/test_fcj_accuracy.py`)。kaisetsu の既定 `fcj_method="accurate"` は
+   変数変換 δ = 2θ - S u² で特異点を消し、変曲点で区間を分けた Gauss-Legendre 則(8〜48 節点)
+   を使う。指数的に収束し相対 1e-5 以下、計算も速い。既定の方法では GSAS-II との差が
+   低角で最大 1e-3 程度になるが、これは GSAS-II 側の求積誤差である。
 5. **スケール因子の定義。** GSAS-II の強度は 1/V を陽に含み、プロファイルは centideg あたりで
    規格化されている。kaisetsu は 1/V を含み、プロファイルは deg あたりで規格化するので
    S_here = S_hist·S_phase/100。中性子では F の単位(fm vs 10^-12 cm)でさらに 1/100。

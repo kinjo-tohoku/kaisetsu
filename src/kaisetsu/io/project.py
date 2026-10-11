@@ -178,6 +178,7 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
                 "excluded": [list(e) for e in h.excluded],
                 "weight_factor": h.weight_factor,
                 "kalpha2_mode": h.kalpha2_mode,
+                "fcj_method": h.fcj_method,
                 "d_min": h.d_min,
                 "d_min_margin_deg": h.d_min_margin_deg,
             }
@@ -256,6 +257,7 @@ def project_from_dict(d: dict[str, Any]) -> Project:
         )
         h.d_min = hd.get("d_min")
         h.d_min_margin_deg = hd.get("d_min_margin_deg", 2.0)
+        h.fcj_method = hd.get("fcj_method", "accurate")
         for n, cd in hd["contributions"].items():
             pc = h.contributions[n]
             pc.scale = cd["scale"]

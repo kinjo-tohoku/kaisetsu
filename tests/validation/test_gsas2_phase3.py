@@ -57,6 +57,7 @@ def _build_project(case: str) -> tuple[Project, dict]:
         bkg.coefficients[0] = 1.0  # GSAS-II の初期値 (1, 0, 0)
         h = proj.add_histogram(data, inst, sample, bkg, name=f"h{i}", kalpha2_mode="gsas")
         h.d_min_margin_deg = 0.0
+        h.fcj_method = "gsas"
         pc = proj.phase_contribution(i, "PbSO4")
         pc.size_um, pc.strain_e6 = 1.0, 1000.0  # GSAS-II の既定
         pc.scale = 1.0 / 100.0 / (100.0 if inst.radiation.is_neutron else 1.0)

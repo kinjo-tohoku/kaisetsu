@@ -44,13 +44,13 @@ def _half_gauss_legendre(n: int) -> tuple[FloatArray, FloatArray]:
     return np.ascontiguousarray(x[pos]), np.ascontiguousarray(w[pos])
 
 
-def quadrature_order(two_theta: float, two_phi_min: float, fwhm_l: float) -> int:
-    """GSAS と同じ規則で求積点数を選ぶ。"""
+def quadrature_order(two_theta: float, two_phi_min: float, fwhm: float) -> int:
+    """GSAS 流の求積点数: [2φ_min, 2θ] を幅 fwhm(GSAS では Γ_L)の 1/3 以下の間隔で刻む。"""
     span = abs(two_theta - two_phi_min)
-    if fwhm_l <= 0.0:
+    if fwhm <= 0.0:
         k = int(span * 200.0)
     else:
-        k = int(3.0 * span / fwhm_l)
+        k = int(3.0 * span / fwhm)
     for n in _NTERMS:
         if k <= n:
             return n
@@ -143,6 +143,7 @@ def fcj_pseudo_voigt(
     s_l: float,
     h_l: float,
     n_quad: int | None = None,
+    method: str = "accurate",
 ) -> FloatArray:
     """FCJ 非対称 pseudo-Voigt(面積 ≈ 1)。
 
@@ -151,13 +152,34 @@ def fcj_pseudo_voigt(
         pos: ピーク位置 2θ_B [deg]
         fwhm_g, fwhm_l: ガウス・ローレンツ成分の FWHM [deg]
         s_l, h_l: 試料長 S / 検出器スリット長 H を試料-検出器距離 L で割ったもの
-        n_quad: 求積点数(偶数)。None なら GSAS と同じ規則で自動選択。
+        n_quad: 求積点数。None なら自動選択。
+        method: 'accurate'(変数変換で特異点を除いた Gauss-Legendre、既定)または
+            'gsas'(GSAS-II と同じ正の半分の節点)。詳細は fcj_batch モジュール参照。
     """
     xa = np.ascontiguousarray(np.asarray(x, dtype=np.float64).ravel())
     if s_l <= 0.0 and h_l <= 0.0:
         return np.asarray(_pv_kernel(xa, float(pos), float(fwhm_g), float(fwhm_l))).reshape(
             np.shape(x)
         )
+    if method == "accurate":
+        from kaisetsu.profile.fcj_batch import fcj_profile_batch
+
+        n_pts = len(xa)
+        out, _, _ = fcj_profile_batch(
+            xa,
+            np.array([float(pos)]),
+            np.array([float(fwhm_g)]),
+            np.array([float(fwhm_l)]),
+            np.array([1.0]),
+            np.array([0], dtype=np.int64),
+            np.array([n_pts], dtype=np.int64),
+            float(s_l),
+            float(h_l),
+            method="accurate",
+        )
+        return np.asarray(out).reshape(np.shape(x))
+    if method != "gsas":
+        raise ValueError(f"FCJ の積分法は 'accurate' か 'gsas' です: {method!r}")
     s_l = max(float(s_l), 0.0)
     h_l = max(float(h_l), 0.0)
     two_phi_min, two_phi_infl = fcj_limits(float(pos), s_l, h_l)

@@ -133,6 +133,7 @@ class HistogramEntry:
     excluded: list[tuple[float, float]] = field(default_factory=list)
     weight_factor: float = 1.0
     kalpha2_mode: str = "exact"
+    fcj_method: str = "accurate"
     d_min: float | None = None
     d_min_margin_deg: float = 2.0
     anomalous: dict[str, complex] | None = None
@@ -541,6 +542,7 @@ class Project:
             h.background,
             d_min=h.effective_d_min(),
             kalpha2_mode=h.kalpha2_mode,
+            fcj_method=h.fcj_method,
             anomalous=h.anomalous,
             scattering_override=h.scattering_override,
         )
