@@ -14,7 +14,7 @@
 | Phase 4 GUI | v2 (2026-10-11) | PySide6: プロジェクトツリー・パターン図・パラメータ表・ログ、装置プリセット、精密化スレッド(中止可)、標準レシピ、ウィザード、保存・CSV/CIF 出力。v2 で追加: PDF 表示と読み込み/変換/標準手順、MEM ダイアログ(断面、VESTA 出力、MPF)、相の設定(Le Bail/Pawley、選択配向軸、異方性 U、Brindley)、構造 3D 表示(QPainter)、χ² 推移、図の PNG/SVG 保存、背景の種類(Chebyshev/固定点)とハンプ、Kβ。PyInstaller の spec と build スクリプト(`packaging/`)。`docs/user-guide/getting-started.md`。逐次精密化のダイアログ、英語 UI(`--lang en`、主要メニューのみ辞書翻訳)、.npz 分離保存。残課題: 身内での試用、説明文の英語化、PyInstaller 配布物の実機確認 |
 | Phase 5 PDF | 完了 (2026-10-11) | 5b 実空間フィット(PDFfit2 の定式化: δ1/δ2、Q_damp/Q_broad、球状粒子、Q_max 終端効果、異方性 U)は diffpy.pdffit2 1.6.0 と Ni の X 線・中性子で全パラメータ 0.2σ 以内、Rw 一致。5a I(Q)→G(r) は PDFgetX3 型のアドホック多項式補正(容器差引・偏光・吸収・Lorch 窓)。Rietveld と同じ `Project` / `ParameterSet` に `g{i}:` のデータセットとして入り、粉末との同時精密化も可。記録: `docs/validation/phase5_pdf.md`。残課題: Compton 散乱の明示的な補正(表が必要)、GSAS-II の PDF 出力との比較 |
 | Phase 6 MEM | 完了 (2026-10-11) | `kaisetsu.mem`: FFT で F を計算する MEM(L-BFGS、変数 v = 2√m、λ は割線法で C = 1 に合わせる)、Sakata-Sato の ZSPA(検算用)、負の散乱長の 2 チャンネル(正負エントロピーで 1 変数に還元)、対称操作で反射を展開、CCP4/XPLOR/VESTA grd 書き出し、断面・線分。Rietveld 分配の F_obs と σ から MEM を作る `mem_from_project`、MPF(`run_mpf`: MEM の |F| を固定した表でパターンフィッティング→再分配→再 MEM)。Pawley 法(`start_pawley`: 残差評価ごとに強度を非負線形最小二乗で解く、完全重なりは現在比で分配、σ と相関)。検証: NaCl・ルチルの合成 F で原子位置の極大と電子数を回収、PbSO4 実データで Pb に最大密度。記録: `docs/validation/phase6_mem.md`。重なり反射の G 拘束(`overlap_groups`、GUI の選択肢)も実装。残課題: Dysnomia との数値比較 |
-| Phase 7(将来項目) | 一部完了 (2026-10-12) | TOF 中性子(GSAS 型プロファイル、波長依存吸収、`docs/validation/phase7_tof.md`)、Sabine 消衰補正(GSAS-II と一致)、Stephens 異方的歪み、一軸異方的な結晶子サイズ(GSAS-II の uniaxial と同じ)、球面調和関数の集合組織(円筒対称、ラウエ群不変な調和関数を射影で自動生成)、逐次精密化、英語 UI(主要メニュー)を実装。未着手: 磁気構造、2D 画像積分(pyFAI)、インストーラとコード署名 |
+| Phase 7(将来項目) | 一部完了 (2026-10-12) | TOF 中性子(GSAS 型プロファイル、numba 一括計算、波長依存吸収、POWGEN NAC の精密化で GSAS-II と Rwp 8.40 vs 8.47%・全パラメータ 3σ 以内、`docs/validation/phase7_tof.md`)、Sabine 消衰補正(GSAS-II と一致)、Stephens 異方的歪み、一軸異方的な結晶子サイズ(GSAS-II の uniaxial と同じ)、球面調和関数の集合組織(円筒対称、ラウエ群不変な調和関数を射影で自動生成)、逐次精密化、英語 UI(主要メニュー)を実装。未着手: 磁気構造、2D 画像積分(pyFAI)、インストーラとコード署名 |
 
 ---
 
@@ -270,7 +270,7 @@ Phase 0〜6 は完了(進捗表参照)。この先の優先順位:
 
 1. 身内 2〜3 名での試用と、つまずいた点の修正(入門ガイドの改訂)。研究室の回折装置のファイルを 1 つ受け取って
    リーダーを確認する(Bruker RAW4.00 は合成テストのみ)。
-2. TOF 中性子は実装済み(吸収・消衰・複数バンクも)。残りは GSAS-II との精密化結果の比較。
+2. TOF 中性子は実装済み(吸収・消衰・複数バンク・GSAS-II との精密化比較も)。残りは磁気構造など。
 3. Dysnomia との MEM の数値比較(例題データが要る)。磁気構造。結晶子サイズの楕円体モデル。
 4. 説明文・ダイアログ本文の英語化(主要メニューは `--lang en` で済んでいる)、PyInstaller 配布物の実機確認、
    コード署名。

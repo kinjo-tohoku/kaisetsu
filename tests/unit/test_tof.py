@@ -25,10 +25,14 @@ from kaisetsu.io.project import load_project, save_project
 def test_read_tof_gsa(data_dir: Path) -> None:
     d = read_powder_data(data_dir / "nac" / "PG3_22048.gsa")
     assert d.metadata["xunit"] == "tof_us" and d.metadata["binning"] == "SLOG"
-    assert len(d) == 6825 and d.x[0] == pytest.approx(6777.08, abs=0.01)
+    # ビン端 → ビン中心(最後の点は落ちる)、強度と esd はビン幅で割る(GSAS-II の読み方と同じ)
+    assert len(d) == 6824 and d.x[0] == pytest.approx(6778.4370, abs=0.001)
     assert d.x[-1] > 100000
     assert np.all(np.diff(d.x) > 0)
-    assert d.weight is not None and d.weight[0] == pytest.approx(1 / 5.2528**2, rel=1e-3)
+    cw0 = 6779.79237452 - 6777.0815419
+    assert d.y[0] == pytest.approx(117.13886376 / cw0, rel=1e-6)
+    assert d.weight is not None and d.weight[0] == pytest.approx(cw0**2 / 5.2528**2, rel=1e-3)
+    assert d.metadata["yunit"] == "counts/us"
 
 
 def test_instrument_from_instprm(data_dir: Path) -> None:

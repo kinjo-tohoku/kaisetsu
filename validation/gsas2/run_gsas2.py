@@ -109,6 +109,31 @@ CASES: dict[str, dict[str, object]] = {
         "instprm": DATA / "nac" / "POWGEN_1066.instprm",
         "phase_name": "NAC",
     },
+    # TOF の精密化比較(背景+スケール → 格子+ゼロ点 → sig-1 → beta-0 → 座標 → U)。
+    # alpha は装置校正値のまま(動かすと GSAS-II では発散して 2e8 になった)。
+    # 試料広がりはガウスのみ(--lgmix 0): GSAS-II の複素指数積分は近似なのでローレンツ裾を外す
+    "nac_tof_fit": {
+        "cif": DATA / "nac" / "NAC.cif",
+        "data": DATA / "nac" / "PG3_22048.gsa",
+        "instprm": DATA / "nac" / "POWGEN_1066.instprm",
+        "phase_name": "NAC",
+        "extra": [
+            "--lgmix",
+            "0",
+            "--refine",
+            "bkg:3,scale",
+            "--refine",
+            "cell,zero",
+            "--refine",
+            "sig1",
+            "--refine",
+            "beta0",
+            "--refine",
+            "xyz",
+            "--refine",
+            "uiso",
+        ],
+    },
     # 中性子: 円筒試料の吸収と Debye-Scherrer の試料変位
     "pbso4_neutron_abs": {
         "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",

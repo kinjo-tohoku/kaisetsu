@@ -138,6 +138,15 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
 
     if len(x) > nchan:
         x, y, w = x[:nchan], y[:nchan], w[:nchan]
+    xa, ya, wa = np.array(x), np.array(y), np.array(w)
+    if is_tof and len(xa) > 1:
+        # GSAS 形式の TOF データは x がビンの左端で、強度はビンあたりの計数。
+        # ビン幅が変わる(SLOG 等)とプロファイル(μs あたりで規格化)と合わないので、
+        # GSAS-II と同じくビン中心に移し、強度と esd をビン幅で割って counts/μs にする
+        cw = np.diff(xa)
+        xa = xa[:-1] + 0.5 * cw
+        ya = ya[:-1] / cw
+        wa = wa[:-1] * cw * cw
     meta: dict[str, object] = {
         "format": "GSAS",
         "subformat": fmt,
@@ -148,8 +157,9 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
         "xunit": "tof_us" if is_tof else "two_theta_deg",
     }
     if is_tof:
+        meta["yunit"] = "counts/us"
         # Mantid の出力はコメントに DIFC や 2θ を書く(装置設定の目安)
         for line in lines[:start_idx]:
             if "DIFC" in line and "tth" in line:
                 meta["comment"] = line.strip("# ").strip()
-    return PowderData(np.array(x), np.array(y), np.array(w), name=p.stem, metadata=meta)
+    return PowderData(xa, ya, wa, name=p.stem, metadata=meta)

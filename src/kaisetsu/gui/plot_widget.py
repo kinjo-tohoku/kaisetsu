@@ -122,8 +122,10 @@ class PatternPlot(QWidget):
         self._difc = difc
         if difc is not None:
             self.plot.setLabel("bottom", "TOF (μs)")
+            self.plot.setLabel("left", "強度 (counts/μs)")
         else:
             self.plot.setLabel("bottom", "2θ (deg)")
+            self.plot.setLabel("left", "強度 (counts)")
 
     # ------------------------------------------------------------------
     def set_data(self, data: PowderData | None, wavelength: float | None = None) -> None:

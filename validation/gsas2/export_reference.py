@@ -9,6 +9,7 @@
          | --simulate TMIN TMAX TSTEP --instprm INST)
         --out ref.json [--phase-name NAME]
         [--set-inst KEY=VAL ...] [--set-sample KEY=VAL ...] [--md R H K L] [--size S] [--mustrain M]
+        [--lgmix F]
         [--refine STAGE ...] [--cycles N]
 
 --refine を与えなければ 0 サイクル(計算のみ)。与えた場合は各 STAGE を順に実行する。
@@ -56,7 +57,13 @@ def to_jsonable(obj, depth=0):
     return repr(obj)
 
 
-_INST_TOKENS = {"zero": "Zero", "u": "U", "v": "V", "w": "W", "x": "X", "y": "Y", "shl": "SH/L"}
+_INST_TOKENS = {
+    "zero": "Zero", "u": "U", "v": "V", "w": "W", "x": "X", "y": "Y", "shl": "SH/L",
+    # TOF(GSAS-II の名前そのまま)
+    "difc": "difC", "difa": "difA", "difb": "difB",
+    "sig0": "sig-0", "sig1": "sig-1", "sig2": "sig-2", "sigq": "sig-q",
+    "alpha": "alpha", "beta0": "beta-0", "beta1": "beta-1", "betaq": "beta-q",
+}  # fmt: skip
 _SAMPLE_TOKENS = {
     "scale": "Scale",
     "shift": "Shift",
@@ -191,6 +198,9 @@ def main() -> int:
     ap.add_argument("--md", nargs=4, type=float, metavar=("R", "H", "K", "L"))
     ap.add_argument("--size", type=float)
     ap.add_argument("--mustrain", type=float)
+    ap.add_argument(
+        "--lgmix", type=float, help="サイズ・歪み広がりのローレンツ割合(0 でガウスのみ)"
+    )
     ap.add_argument("--refine", action="append", default=[], metavar="STAGE")
     ap.add_argument("--cycles", type=int, default=10)
     args = ap.parse_args()
@@ -254,6 +264,9 @@ def main() -> int:
             hap["Size"][1][0] = float(args.size)
         if args.mustrain is not None:
             hap["Mustrain"][1][0] = float(args.mustrain)
+        if args.lgmix is not None:
+            hap["Size"][1][2] = float(args.lgmix)
+            hap["Mustrain"][1][2] = float(args.lgmix)
 
     stages_log = []
     if args.refine:

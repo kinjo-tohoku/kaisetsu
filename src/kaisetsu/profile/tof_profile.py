@@ -85,6 +85,9 @@ def tof_peak(
     y2 = (beta * sig_p - d) / sq
     ex = -0.5 * d * d / sig_p
     tg = norm * (_h(ex, y1) + _h(ex, y2))
+    if eta < 1e-6:
+        # ローレンツ成分が無い(X = Y = Z = 0 の装置)ときは複素指数積分を省く(計算時間の大半)
+        return np.asarray(tg)
     half = 0.5 * fwhm
     z = d - 1j * half
     ea = _exp_e1(np.asarray(alpha * z, dtype=np.complex128))

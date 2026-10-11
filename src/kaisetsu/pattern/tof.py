@@ -33,7 +33,8 @@ from kaisetsu.pattern.calculator import (
 )
 from kaisetsu.pattern.instrument import SampleGeometry
 from kaisetsu.profile.corrections import cylinder_absorption_array
-from kaisetsu.profile.tof_profile import tof_peak, tof_peak_fwhm
+from kaisetsu.profile.tof_batch import tof_profile_batch
+from kaisetsu.profile.tof_profile import tof_peak_fwhm
 from kaisetsu.reflections.hkl import generate_reflections
 from kaisetsu.reflections.structure_factor import structure_factors
 from kaisetsu.scattering.radiation import Radiation
@@ -265,23 +266,31 @@ def calculate_pattern_tof(
         sig2 = sig2 + add_g2
         gam = gam + add_l
         n_refl = len(refl)
-        w_start = np.zeros(n_refl, dtype=np.int64)
-        w_stop = np.zeros(n_refl, dtype=np.int64)
+        fwhm_all = np.array(
+            [
+                tof_peak_fwhm(float(alpha[k]), float(beta[k]), float(sig2[k]), float(gam[k]))
+                for k in range(n_refl)
+            ]
+        )
+        ok = np.isfinite(pos) & (inten > 0.0)
+        pos_safe = np.where(ok, pos, 0.0)
+        lo = pos_safe - window_widths * fwhm_all
+        hi = pos_safe + window_widths * fwhm_all * 1.5  # 減衰側に長い裾
+        i0 = np.searchsorted(xa, lo).astype(np.int64)
+        i1 = np.searchsorted(xa, hi).astype(np.int64)
+        i1 = np.where(ok & (i1 > i0), i1, i0)
+        out, offsets, lengths = tof_profile_batch(
+            xa, pos_safe, alpha, beta, sig2, gam, inten, i0, i1
+        )
+        w_start = np.where(lengths > 0, i0, 0).astype(np.int64)
+        w_stop = np.where(lengths > 0, i1, 0).astype(np.int64)
         contrib: list[FloatArray] = []
-        fwhm_all = np.zeros(n_refl)
         for k in range(n_refl):
-            width = tof_peak_fwhm(float(alpha[k]), float(beta[k]), float(sig2[k]), float(gam[k]))
-            fwhm_all[k] = width
-            lo = pos[k] - window_widths * width
-            hi = pos[k] + window_widths * width * 1.5  # 減衰側に長い裾
-            i0 = int(np.searchsorted(xa, lo))
-            i1 = int(np.searchsorted(xa, hi))
-            if i1 <= i0 or inten[k] <= 0 or not np.isfinite(pos[k]):
+            if lengths[k] <= 0:
                 contrib.append(np.zeros(0))
                 continue
-            part = inten[k] * tof_peak(xa[i0:i1] - pos[k], alpha[k], beta[k], sig2[k], gam[k])
-            yp[i0:i1] += part
-            w_start[k], w_stop[k] = i0, i1
+            part = out[offsets[k] : offsets[k] + lengths[k]]
+            yp[i0[k] : i1[k]] += part
             contrib.append(part)
         tables.append(
             PeakTable(
