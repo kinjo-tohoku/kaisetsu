@@ -1,0 +1,47 @@
+# Fluorapatite Ca5(PO4)3F, P 63/m. Crystallography Open Database entry 9001232
+# (Hughes, Cameron & Crowley, Am. Mineral. 74, 870 (1989); from AMCSD).
+# kaisetsu 用に異方性変位パラメータ U_ij を等方性 U_eq に置き換えた出発構造。
+# 元のエントリ: https://www.crystallography.net/cod/9001232.html
+data_Fluorapatite
+_pd_phase_name 'Fluorapatite'
+_cell_length_a 9.397300
+_cell_length_b 9.397300
+_cell_length_c 6.878200
+_cell_angle_alpha 90.00000
+_cell_angle_beta 90.00000
+_cell_angle_gamma 120.00000
+_cell_volume 526.0313
+_space_group_IT_number 176
+_space_group_name_H-M_alt 'P 63/m'
+loop_
+_space_group_symop_id
+_space_group_symop_operation_xyz
+1 'x,y,z'
+2 '-x+y,-x,-z+1/2'
+3 '-y,x-y,z'
+4 'x,y,-z+1/2'
+5 '-x+y,-x,z'
+6 '-y,x-y,-z+1/2'
+7 'x-y,x,z+1/2'
+8 'y,-x+y,-z'
+9 '-x,-y,z+1/2'
+10 'x-y,x,-z'
+11 'y,-x+y,z+1/2'
+12 '-x,-y,-z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_adp_type
+_atom_site_U_iso_or_equiv
+_atom_site_symmetry_multiplicity
+Ca1 Ca 0.666670 0.333330 0.001000 1.0000 Uiso 0.01145 4
+Ca2 Ca -0.007120 0.242270 0.250000 1.0000 Uiso 0.00962 6
+P P 0.368950 0.398500 0.250000 1.0000 Uiso 0.00747 6
+O1 O 0.484900 0.327300 0.250000 1.0000 Uiso 0.01345 6
+O2 O 0.466700 0.587500 0.250000 1.0000 Uiso 0.01464 6
+O3 O 0.257500 0.342100 0.070500 1.0000 Uiso 0.01782 12
+F F 0.000000 0.000000 0.250000 1.0000 Uiso 0.00824 2

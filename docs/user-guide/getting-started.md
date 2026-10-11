@@ -15,13 +15,27 @@ GUI を使わずスクリプトで動かすこともできます(`examples/refin
 
 | もの | 形式 | 例 |
 |---|---|---|
-| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、GSAS 形式(.gsa, .fxye, .raw 等) | `data/public/pbso4/PBSO4.XRA` |
-| 結晶構造 | CIF(格子定数、空間群、原子座標) | `data/public/pbso4/PbSO4-Wyckoff.cif` |
+| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、Bruker .raw(RAW1.01 ほか)、GSAS 形式(.gsa, .fxye, .raw 等) | `data/public/fap/FAP.XRA` |
+| 結晶構造 | CIF(格子定数、空間群、原子座標) | `data/public/fap/fluorapatite_COD9001232.cif` |
 | 装置の情報 | ターゲット(Cu など)または波長、光学系(反射か透過か)、だいたいのピーク幅 | プリセットから選べる |
 
 CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約があれば)、Materials Project、
 論文の補足資料。VESTA で開いて書き出した CIF も読めます。空間群(記号か対称操作)・格子定数・原子座標が
-入っていれば十分です。Bruker の .raw/.brml は未対応なので、装置ソフトで xy か txt に書き出してください。
+入っていれば十分です。COD の CIF は元素記号の列が無いものや `La0` のような表記のものもありますが、
+そのまま読めます。Bruker の .brml は未対応なので、装置ソフトで .raw か xy/txt に書き出してください。
+
+### まず試せるサンプルデータ
+
+`data/public/` に練習用の公開データと CIF を入れてあります(出典は同フォルダの README.md)。
+ウィザードでデータと CIF を選ぶだけで動きます。
+
+| フォルダ | 試料・装置 | 選ぶ装置プリセット | 目安 |
+|---|---|---|---|
+| `fap/` | 蛍石燐灰石、実験室 Cu Kα(Bragg-Brentano) | 実験室 X 線 Cu Kα(モノクロメータ) | 最初に試す。Rwp 8〜9% |
+| `lab6/` | LaB6、Bruker D8 .raw、Cu Kα | 実験室 X 線 Cu Kα(Ni フィルタ)、半径 250 mm | 「表面粗さ」を付けると Rwp 4% |
+| `garnet/` | Y3(Fe,Al)5O12、D1A 中性子 1.909 Å | 中性子、波長 1.909、Debye-Scherrer | 混合サイトの占有率も動かす。Rwp 6〜7% |
+| `nac/` | NAC + CaF2、放射光 11-BM 0.4139 Å | その他、波長 0.413909、偏光 0.99、Debye-Scherrer | 2 相。点数が多いので時間がかかる |
+| `pbso4/` | PbSO4、Cu Kα と D1A 中性子 | 実験室 X 線 Cu Kα(モノクロメータ)/ 中性子 | GSAS-II との比較に使ったデータ |
 
 ### Cu Kα など放射線の指定
 
@@ -99,7 +113,7 @@ CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約が
 相:サイト:x|y|z                      分率座標(特殊位置の拘束は自動)
 相:サイト:occ, uiso, u11..u23       占有率、変位パラメータ
 h0:inst:zero|u|v|w|p|x|y|z|s_l|h_l|pol   装置(h0 は 1 番目のデータ)
-h0:sample:displacement|mu_eff|disp_x|disp_y|mu_r   試料
+h0:sample:displacement|transparency|disp_x|disp_y|mu_r   試料
 h0:bkg:0,1,2,…                      背景(Chebyshev 係数)
 h0:相:scale|md_r|size|strain        スケール、選択配向 r、結晶子サイズ(μm)、微小歪み
 ```
@@ -115,4 +129,10 @@ h0:相:scale|md_r|size|strain        スケール、選択配向 r、結晶子�
 - **ピークが細すぎる / 太すぎる**: 装置設定で W(全角に効く)を観測の FWHM² の目安に合わせる。
   Cu Kα の実験室装置なら W ≈ 0.003〜0.01 deg²。
 - **強度比が合わない**: 選択配向(`h0:相:md_r`、配向軸は板状結晶の面)、占有率、U_iso の順に疑う。
+- **U_iso が負になる**: 吸収の強い試料を平板に詰めたときの表面粗さ効果が典型(LaB6 のサンプルで再現できる)。
+  「標準の手順」で「表面粗さを動かす」を付けるか、`h0:sample:rough_a`, `rough_b` を動かす。
+  背景が高すぎる・偏光係数が合っていないときにも起こる。精密化のあとに出る「注意:」のログも参考にする。
+- **占有率を動かすと esd が巨大になる**: 占有率 1 で混合でもないサイトの占有率はスケール因子と区別
+  できない。「標準の手順」の占有率は混合サイトと部分占有サイトだけを動かす。混合サイトは占有率の和が
+  自動で保たれる(後に書かれた種が従属)。
 - **CIF が読めない**: 空間群の記号か対称操作が必要です。VESTA 等で書き出し直すと読めることが多い。

@@ -1,0 +1,30 @@
+data_YIAG_start
+# イットリウム鉄アルミニウムガーネット Y3(Fe,Al)5O12 の初期構造。
+# GSAS-II チュートリアル "CW Neutron Powder Data"(garnet.raw, ILL D1A, 1.909 Å)の
+# 出発値をもとに kaisetsu 用に書いた。16a と 24d は Fe/Al の混合サイト。
+# 占有率の初期値は 0.5/0.5(精密化で決める。チュートリアルの結果は
+# 16a: Fe 0.577 / Al 0.423、24d: Al 0.701 / Fe 0.299、a = 12.1817 Å)。
+_chemical_name_common            'Y3Fe2Al3O12 garnet'
+_chemical_formula_sum            'Al3 Fe2 O12 Y3'
+_cell_length_a                   12.18
+_cell_length_b                   12.18
+_cell_length_c                   12.18
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+_space_group_IT_number           230
+_space_group_name_H-M_alt        'I a -3 d'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_U_iso_or_equiv
+Y1   Y   0.125   0.0     0.25    1.0  0.005
+Fe1  Fe  0.0     0.0     0.0     0.5  0.005
+Al1  Al  0.0     0.0     0.0     0.5  0.005
+Al2  Al  0.375   0.0     0.25    0.5  0.005
+Fe2  Fe  0.375   0.0     0.25    0.5  0.005
+O1   O  -0.030   0.050   0.150   1.0  0.005
