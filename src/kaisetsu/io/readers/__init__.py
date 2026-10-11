@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 from kaisetsu.io.readers.bruker import is_bruker_raw, read_bruker_raw
-from kaisetsu.io.readers.gsas import is_gsas_file, read_gsas
+from kaisetsu.io.readers.gsas import gsas_bank_count, is_gsas_file, read_gsas
 from kaisetsu.io.readers.vendors import is_ras_text, read_ras, read_rasx, read_xrdml
 from kaisetsu.io.readers.xy import read_xy
 from kaisetsu.pattern.histogram import PowderData
@@ -16,6 +16,14 @@ SUPPORTED_EXTENSIONS = (
     ".gsa", ".gsas", ".fxye", ".raw", ".xra", ".cwn",
     ".ras", ".rasx", ".xrdml",
 )  # fmt: skip
+
+
+def bank_count(path: str | Path) -> int:
+    """複数バンク(GSAS 形式)なら BANK の数、それ以外は 1。"""
+    p = Path(path)
+    if p.exists() and is_gsas_file(p):
+        return max(gsas_bank_count(p), 1)
+    return 1
 
 
 def read_powder_data(path: str | Path, **kwargs: object) -> PowderData:

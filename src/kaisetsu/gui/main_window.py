@@ -657,9 +657,31 @@ class MainWindow(QMainWindow):
         instrument: CWInstrument | TOFInstrument | None = None,
         sample: SampleGeometry | None = None,
         n_background: int = 8,
+        bank: int | None = None,
     ) -> None:
+        kwargs: dict[str, object] = {}
+        if bank is not None:
+            kwargs["bank"] = bank
+        elif instrument is None:
+            from kaisetsu.io.readers import bank_count
+
+            n_banks = bank_count(path)
+            if n_banks > 1:
+                from PySide6.QtWidgets import QInputDialog
+
+                chosen, ok = QInputDialog.getInt(
+                    self,
+                    "バンクの選択",
+                    f"このファイルには {n_banks} 個の BANK があります。読み込む番号:",
+                    1,
+                    1,
+                    n_banks,
+                )
+                if not ok:
+                    return
+                kwargs["bank"] = chosen
         try:
-            data = read_powder_data(path)
+            data = read_powder_data(path, **kwargs)
         except Exception as exc:
             QMessageBox.critical(self, "読み込みエラー", f"データを読み込めませんでした:\n{exc}")
             return

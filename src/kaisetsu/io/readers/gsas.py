@@ -48,6 +48,17 @@ def _sint(s: str) -> int:
     return int(s) if s else 0
 
 
+def gsas_bank_count(path: str | Path) -> int:
+    """GSAS 形式ファイルの BANK の数(GSAS 形式でなければ 0)。"""
+    p = Path(path)
+    try:
+        return sum(
+            1 for line in p.read_text(encoding="latin-1").splitlines() if line.startswith("BANK")
+        )
+    except OSError:
+        return 0
+
+
 def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
     """GSAS 形式を読む。複数 BANK があれば bank 番号(1 始まり)で選ぶ。"""
     p = Path(path)
