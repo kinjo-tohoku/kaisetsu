@@ -22,6 +22,8 @@
 ## 品質
 - 型ヒント必須。`uv run ruff check . && uv run ruff format --check . && uv run mypy` をクリーンに保つ。
 - テストは pytest。`uv run pytest` が常に通る状態でコミットする。
+  速く回したいときは `uv run pytest -m "not slow"`(精密化の統合テストと GSAS-II 精密化比較を除く)。
+- Windows のコンソールで日本語を出すコマンドには `PYTHONUTF8=1` を付ける(cp932 で落ちる)。
 - 外部ソフト(GSAS-II 等)との突き合わせは `tests/validation/` に置き、`@pytest.mark.validation` を付ける。
   参照値 JSON は `validation/gsas2/` のスクリプトで生成し、`validation/reference/` に保存する。
 - 検証結果の記録(バージョン・日付・差分)は `docs/validation/` に残す。

@@ -65,6 +65,10 @@ class PhaseContribution:
     strain_e6: float = 0.0
     size_lorentz_fraction: float = 1.0
     strain_lorentz_fraction: float = 1.0
+    #: Le Bail / Pawley 用: 代表 hkl → |F|^2。None なら構造から計算する。
+    f2_table: dict[tuple[int, int, int], float] | None = None
+    #: f2_table に無い反射に使う |F|^2
+    f2_default: float = 1.0
 
     def sample_broadening(
         self, two_theta: FloatArray, wavelength: float
@@ -126,6 +130,15 @@ class PeakTable:
     fwhm: FloatArray  # 全 FWHM [deg]
     fwhm_gauss: FloatArray
     fwhm_lorentz: FloatArray
+    #: 全波長成分を合わせた積分強度(λ1 成分 × (1 + Kα2 比))
+    intensity_total: FloatArray = field(default_factory=lambda: np.zeros(0))
+    #: 反射ごとの寄与の窓 [start, stop) と寄与配列(全波長成分の和)
+    window_start: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    window_stop: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    contributions: list[FloatArray] = field(default_factory=list)
+
+    def windows(self) -> list[tuple[int, int]]:
+        return [(int(a), int(b)) for a, b in zip(self.window_start, self.window_stop, strict=True)]
 
 
 @dataclass
@@ -223,16 +236,26 @@ def calculate_pattern(
             y_phases.append(yp)
             peak_tables.append(_empty_peak_table())
             continue
-        f = structure_factors(
-            st,
-            refl.hkl,
-            rad,
-            xray_table=xray_table,
-            anomalous=anomalous,
-            override=scattering_override,
-        )
-        f2 = np.abs(f) ** 2
+        if ph.f2_table is not None:
+            f2 = np.array(
+                [ph.f2_table.get((int(h), int(k), int(l)), ph.f2_default) for h, k, l in refl.hkl]
+            )
+        else:
+            f = structure_factors(
+                st,
+                refl.hkl,
+                rad,
+                xray_table=xray_table,
+                anomalous=anomalous,
+                override=scattering_override,
+            )
+            f2 = np.abs(f) ** 2
         volume = st.lattice.volume
+        n_refl = len(refl)
+        w_start = np.zeros(n_refl, dtype=np.int64)
+        w_stop = np.zeros(n_refl, dtype=np.int64)
+        contrib: list[FloatArray | None] = [None] * n_refl
+        inten_total = np.zeros(n_refl)
 
         po = march_dollase(
             refl.hkl, st.lattice, st.spacegroup, ph.march_dollase_axis, ph.march_dollase_r
@@ -295,7 +318,20 @@ def calculate_pattern(
                     instrument.s_l,
                     instrument.h_l,
                 )
-                yp[i0:i1] += inten[i] * prof
+                part = inten[i] * prof
+                yp[i0:i1] += part
+                inten_total[i] += inten[i]
+                prev = contrib[i]
+                if prev is None:
+                    w_start[i], w_stop[i] = i0, i1
+                    contrib[i] = part
+                else:
+                    s0, s1 = min(int(w_start[i]), i0), max(int(w_stop[i]), i1)
+                    merged = np.zeros(s1 - s0)
+                    merged[w_start[i] - s0 : w_stop[i] - s0] += prev
+                    merged[i0 - s0 : i1 - s0] += part
+                    w_start[i], w_stop[i] = s0, s1
+                    contrib[i] = merged
             if table is None:
                 table = PeakTable(
                     hkl=refl.hkl,
@@ -308,6 +344,11 @@ def calculate_pattern(
                     fwhm_gauss=fg,
                     fwhm_lorentz=fl,
                 )
+        if table is not None:
+            table.intensity_total = inten_total
+            table.window_start = w_start
+            table.window_stop = w_stop
+            table.contributions = [c if c is not None else np.zeros(0) for c in contrib]
         y_phases.append(yp)
         y_total += yp
         peak_tables.append(table if table is not None else _empty_peak_table())

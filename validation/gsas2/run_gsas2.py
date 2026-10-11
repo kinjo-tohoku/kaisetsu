@@ -21,6 +21,16 @@ EXPORT = Path(__file__).with_name("export_reference.py")
 
 DEFAULT_G2_PYTHON = r"C:\Users\KatsukiKinjo\gsas2main\python.exe"
 
+# 精密化の段階(kaisetsu 側の検証テストと同じ順序)
+_FIT_STAGES = [
+    "--refine", "bkg:6,scale",
+    "--refine", "cell,zero",
+    "--refine", "w",
+    "--refine", "u,v,x,y",
+    "--refine", "xyz",
+    "--refine", "uiso",
+]  # fmt: skip
+
 CASES: dict[str, dict[str, object]] = {
     "pbso4_xray": {
         "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
@@ -70,6 +80,28 @@ CASES: dict[str, dict[str, object]] = {
             "2000",
         ],
     },
+    # Phase 3: GSAS-II に実際に精密化させる(段階的にフラグを増やす)
+    "pbso4_xray_fit": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": DATA / "pbso4" / "PBSO4.XRA",
+        "instprm": DATA / "pbso4" / "INST_XRY.PRM",
+        "phase_name": "PbSO4",
+        "extra": [*_FIT_STAGES, "--refine", "uiso", "--refine", "uiso", "--cycles", "30"],
+    },
+    "pbso4_neutron_fit": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": DATA / "pbso4" / "PBSO4.CWN",
+        "instprm": DATA / "pbso4" / "inst_d1a.prm",
+        "phase_name": "PbSO4",
+        "extra": [*_FIT_STAGES, "--refine", "uiso", "--refine", "uiso", "--cycles", "30"],
+    },
+    "pbso4_combined_fit": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": [DATA / "pbso4" / "PBSO4.XRA", DATA / "pbso4" / "PBSO4.CWN"],
+        "instprm": [DATA / "pbso4" / "INST_XRY.PRM", DATA / "pbso4" / "inst_d1a.prm"],
+        "phase_name": "PbSO4",
+        "extra": [*_FIT_STAGES, "--refine", "uiso", "--refine", "uiso", "--cycles", "30"],
+    },
     # 中性子: 円筒試料の吸収と Debye-Scherrer の試料変位
     "pbso4_neutron_abs": {
         "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
@@ -114,16 +146,18 @@ def run_case(name: str) -> Path:
         str(EXPORT),
         "--cif",
         str(case["cif"]),
-        "--instprm",
-        str(case["instprm"]),
         "--out",
         str(out),
         "--phase-name",
         str(case["phase_name"]),
     ]
+    instprms = case["instprm"] if isinstance(case["instprm"], list) else [case["instprm"]]
     if "data" in case:
-        cmd += ["--data", str(case["data"])]
+        datas = case["data"] if isinstance(case["data"], list) else [case["data"]]
+        for d, ip in zip(datas, instprms, strict=True):
+            cmd += ["--data", str(d), "--instprm", str(ip)]
     else:
+        cmd += ["--instprm", str(instprms[0])]
         cmd += ["--simulate", *(str(v) for v in case["simulate"])]  # type: ignore[union-attr]
     cmd += [str(v) for v in case.get("extra", [])]  # type: ignore[union-attr]
     env = dict(os.environ)

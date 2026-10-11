@@ -10,7 +10,7 @@
 | Phase 0 基盤 | 完了 (2026-10-11) | uv / ruff / mypy / pytest、GSAS-II 参照値スクリプト、PbSO4 公開データ |
 | Phase 1 結晶学コア | 完了 (2026-10-11) | 反射リスト完全一致、\|F\|^2 一致。記録: `docs/validation/phase1_structure_factors.md` |
 | Phase 2 パターン計算 | 完了 (2026-10-11) | 5 ケースで GSAS-II の ycalc と相対差 1e-4 以下。記録: `docs/validation/phase2_pattern.md` |
-| Phase 3 精密化エンジン | 未着手 | |
+| Phase 3 精密化エンジン | 完了 (2026-10-11) | PbSO4 X線・中性子・同時で GSAS-II と Rwp 差 0.2% 以内、構造パラメータ 3σ 以内。記録: `docs/validation/phase3_refinement.md`。残課題: 速度(FCJ、ヤコビアン並列化)、Pawley 法 |
 | Phase 4 GUI | 未着手 | |
 | Phase 5 PDF | 未着手 | |
 | Phase 6 MEM | 未着手 | |

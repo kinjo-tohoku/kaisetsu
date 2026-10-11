@@ -9,9 +9,12 @@
 
 - Phase 0(基盤)、Phase 1(結晶学コア: 格子・空間群・CIF・散乱因子・反射生成・構造因子)、
   Phase 2(パターン計算: TCH pseudo-Voigt、FCJ 非対称、Kα 二重線、LP・選択配向・吸収・試料変位、
-  Chebyshev 背景、GSAS 形式リーダー)が完了。
+  Chebyshev 背景、GSAS 形式リーダー)、Phase 3(精密化エンジン: パラメータと対称拘束、
+  最小二乗、R 因子、Le Bail、レシピ、プロジェクトファイル、スクリプト API)が完了。
 - GSAS-II 5.7.4 との突き合わせ結果:
-  [Phase 1](docs/validation/phase1_structure_factors.md)、[Phase 2](docs/validation/phase2_pattern.md)
+  [Phase 1](docs/validation/phase1_structure_factors.md)、[Phase 2](docs/validation/phase2_pattern.md)、
+  [Phase 3](docs/validation/phase3_refinement.md)
+- 実行例: `uv run python examples/refine_pbso4.py`(PbSO4 の X 線データを標準レシピで精密化)
 
 ## 使い方(開発者向け)
 
@@ -24,23 +27,39 @@ uv run python validation/gsas2/run_gsas2.py   # GSAS-II で参照値を再生成
 
 Windows のコンソールで日本語が化ける場合は `$env:PYTHONUTF8 = "1"` を設定する。
 
-### スクリプト例
+### スクリプト例(Rietveld 精密化)
 
 ```python
-import numpy as np
-from kaisetsu.crystal import Structure
-from kaisetsu.io import read_powder_data
-from kaisetsu.pattern import CWInstrument, PhaseContribution, SampleGeometry, calculate_pattern
-from kaisetsu.profile import ChebyshevBackground
-from kaisetsu.scattering import Radiation
+from kaisetsu.api import (
+    CWInstrument,
+    Project,
+    Radiation,
+    SampleGeometry,
+    Structure,
+    read_powder_data,
+)
+from kaisetsu.refine.recipe import standard_recipe
 
 st = Structure.from_cif("data/public/pbso4/PbSO4-Wyckoff.cif")
 data = read_powder_data("data/public/pbso4/PBSO4.XRA")  # GSAS 形式 / xy / xye
-inst = CWInstrument(Radiation.characteristic("Cu"), w=0.003, s_l=0.02, h_l=0.02, polarization=0.7)
-bkg = ChebyshevBackground([150.0], data.x[0], data.x[-1])
-res = calculate_pattern(data.x, [PhaseContribution(st, scale=2.0)], inst, SampleGeometry(), bkg)
-print(res.y_calc[:5], res.peaks[0].two_theta[:3])
+inst = CWInstrument(
+    Radiation.xray(1.5405, 1.5443, 0.5), w=0.003, s_l=0.01, h_l=0.01, polarization=0.7
+)
+
+proj = Project("PbSO4")
+proj.add_phase(st, name="PbSO4")
+proj.add_histogram(data, inst, SampleGeometry(), n_background=6)
+standard_recipe("PbSO4", "h0").run(proj)  # スケール/背景 → 格子 → 幅 → 座標 → U_iso
+print(proj.summary())  # Rwp, χ², R_Bragg, パラメータと esd
+
+# 個別に動かす場合
+proj.vary("PbSO4:O3:*", "h0:inst:s_l")
+proj.refine()
 ```
+
+パラメータ名は `相:cell:a`、`相:サイト:x|y|z|occ|uiso`、`h0:inst:zero|u|v|w|x|y|s_l|h_l`、
+`h0:bkg:0..`、`h0:相:scale|md_r|size|strain` の形で、glob(`*`)で選べる。
+特殊位置の座標拘束(例 y = x、y = 1/4 固定)と晶系による格子定数拘束は自動で付く。
 
 ## ライセンス
 

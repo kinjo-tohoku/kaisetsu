@@ -23,3 +23,6 @@ validation/reference/*.log
 .vscode/
 .idea/
 Thumbs.db
+
+# 実行例の出力
+examples/output/
