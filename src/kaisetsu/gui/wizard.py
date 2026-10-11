@@ -160,6 +160,17 @@ class StartWizard(QWizard):
         self.setButtonText(QWizard.WizardButton.BackButton, "< 戻る")
         self.setButtonText(QWizard.WizardButton.FinishButton, "完了(精密化を開始)")
         self.setButtonText(QWizard.WizardButton.CancelButton, "キャンセル")
+        self.page_data.edit.textChanged.connect(self._apply_data_hints)
+
+    def _apply_data_hints(self, path: str) -> None:
+        """データファイルにターゲット・波長があれば装置ページに反映する。"""
+        if not path:
+            return
+        try:
+            meta = read_powder_data(path).metadata
+        except Exception:
+            return
+        self.page_inst.dialog.apply_hints(meta)
 
     def accept(self) -> None:
         inst, smp = self.page_inst.dialog.result_instrument()

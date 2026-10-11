@@ -51,7 +51,8 @@ from kaisetsu.refine.recipe import Recipe
 log = logging.getLogger(__name__)
 
 DATA_FILTER = (
-    "回折データ (*.xy *.xye *.dat *.txt *.gsa *.gsas *.fxye *.raw *.xra *.cwn *.csv);;すべて (*)"
+    "回折データ (*.xy *.xye *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
+    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)"
 )
 CIF_FILTER = "CIF (*.cif);;すべて (*)"
 PROJECT_FILTER = "kaisetsu プロジェクト (*.kaisetsu.json *.json);;すべて (*)"
@@ -495,6 +496,12 @@ class MainWindow(QMainWindow):
         if instrument is None:
             dlg = InstrumentDialog(None, None, self)
             dlg.setWindowTitle("このデータの装置と試料の設定")
+            dlg.apply_hints(data.metadata)
+            if data.metadata.get("target"):
+                self.log(
+                    f"ファイルから読み取り: ターゲット {data.metadata.get('target')}, "
+                    f"λ1 = {data.metadata.get('wavelength')} Å"
+                )
             if dlg.exec() != InstrumentDialog.DialogCode.Accepted:
                 return
             instrument, sample = dlg.result_instrument()

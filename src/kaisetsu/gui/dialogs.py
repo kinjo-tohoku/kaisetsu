@@ -91,12 +91,20 @@ class InstrumentDialog(QDialog):
         layout.addLayout(top)
 
         # 放射線
-        g_rad = QGroupBox("放射線")
+        g_rad = QGroupBox("放射線(X 線源・波長)")
         f_rad = QFormLayout(g_rad)
         self.kind = QComboBox()
         self.kind.addItems(["X 線", "中性子"])
         self.kind.setCurrentIndex(1 if inst.radiation.is_neutron else 0)
         f_rad.addRow("種類", self.kind)
+        self.target = QComboBox()
+        for t in CHARACTERISTIC_WAVELENGTHS:
+            self.target.addItem(f"{t} Kα", t)
+        self.target.addItem("その他(波長を直接入力: 放射光・中性子など)", "")
+        self.target.setToolTip("実験室 X 線の対陰極。選ぶと Kα1・Kα2 の波長が自動で入ります")
+        self._set_target_from_wavelength(inst.radiation.wavelength, inst.radiation.is_neutron)
+        self.target.currentIndexChanged.connect(self._apply_target)
+        f_rad.addRow("ターゲット(対陰極)", self.target)
         self.lam1 = _spin(inst.radiation.wavelength, 0.1, 10.0, 6, 0.0001)
         f_rad.addRow("波長 λ1 [Å]", self.lam1)
         self.use_ka2 = QCheckBox("Kα2 あり")
@@ -174,6 +182,51 @@ class InstrumentDialog(QDialog):
         if idx >= 0:
             self.preset.setCurrentIndex(idx)
 
+    def _set_target_from_wavelength(self, wavelength: float, neutron: bool = False) -> None:
+        """波長に合うターゲットを選ぶ(合わなければ「その他」)。"""
+        chosen = self.target.count() - 1
+        if not neutron:
+            for i in range(self.target.count()):
+                t = self.target.itemData(i)
+                if t and abs(CHARACTERISTIC_WAVELENGTHS[t][0] - wavelength) < 2e-4:
+                    chosen = i
+                    break
+        self.target.blockSignals(True)
+        self.target.setCurrentIndex(chosen)
+        self.target.blockSignals(False)
+
+    def _apply_target(self, idx: int) -> None:
+        t = self.target.itemData(idx)
+        if not t:
+            return
+        l1, l2 = CHARACTERISTIC_WAVELENGTHS[str(t)]
+        self.kind.setCurrentIndex(0)
+        self.lam1.setValue(l1)
+        self.lam2.setValue(l2)
+        self.use_ka2.setChecked(True)
+
+    def apply_hints(self, meta: dict[str, object] | None) -> None:
+        """データファイルから読めた情報(ターゲット・波長)を反映する。"""
+        if not meta:
+            return
+        target = str(meta.get("target", "") or "").strip().capitalize()
+        lam1 = meta.get("wavelength")
+        lam2 = meta.get("wavelength2")
+        if target in CHARACTERISTIC_WAVELENGTHS:
+            i = self.target.findData(target)
+            if i >= 0:
+                self.target.setCurrentIndex(i)
+        if isinstance(lam1, int | float) and lam1 > 0:
+            self.kind.setCurrentIndex(0)
+            self.lam1.setValue(float(lam1))
+            self._set_target_from_wavelength(float(lam1))
+        if isinstance(lam2, int | float) and lam2 > 0:
+            self.lam2.setValue(float(lam2))
+            self.use_ka2.setChecked(True)
+            ratio = meta.get("ratio2")
+            if isinstance(ratio, int | float) and ratio > 0:
+                self.ratio2.setValue(float(ratio))
+
     def _apply_preset(self, idx: int) -> None:
         if idx <= 0:
             return
@@ -187,9 +240,11 @@ class InstrumentDialog(QDialog):
             self.lam2.setValue(l2)
             self.use_ka2.setChecked(bool(p.get("kalpha2", True)))
             self.ratio2.setValue(float(p.get("ratio2", 0.5)))
+            self._set_target_from_wavelength(l1)
         else:
             self.lam1.setValue(float(p["wavelength"]))
             self.use_ka2.setChecked(False)
+            self._set_target_from_wavelength(float(p["wavelength"]), neutron)
         self.pol.setValue(float(p["polarization"]))
         for key in ("u", "v", "w", "x", "y", "s_l", "h_l"):
             getattr(self, key).setValue(float(p[key]))
