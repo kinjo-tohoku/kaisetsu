@@ -151,7 +151,8 @@ def test_two_channel_neutron() -> None:
     """Ti(b < 0)を含む TiO2 ルチルの核密度: 負の散乱長の位置が負の密度になる。"""
     inp, _ = _synthetic_input(_rutile(), 0.8, 16, 0.01, neutron=True)
     assert inp.two_channel
-    res = run_mem(inp, max_outer=15)
+    # 探索回数は既定(25)。15 回だと GitHub Actions の Windows で C = 0.93 で上限に達した
+    res = run_mem(inp)
     assert res.chi2 == pytest.approx(1.0, abs=0.05)
     assert res.density_negative is not None and np.all(res.density_negative >= 0)
     n = 16
@@ -197,3 +198,12 @@ def test_write_formats(tmp_path: Path) -> None:
     d, v = line_profile(res.density, st.lattice, [0, 0, 0], [0.5, 0.5, 0.5], 50)
     assert d[-1] == pytest.approx(5.64 * np.sqrt(3) / 2)
     assert v[0] == pytest.approx(res.density[0, 0, 0])
+
+
+def test_mem_returns_closest_to_target_when_search_exhausted() -> None:
+    """λ の探索が上限に達したら、最後の λ ではなく目標 χ² に最も近かった解を返す。"""
+    inp, _ = _synthetic_input(_nacl(), 1.0, 16, 0.02)
+    res = run_mem(inp, max_outer=3)
+    assert "上限" in res.message
+    best = min(res.history, key=lambda lc: abs(np.log(lc[1])))
+    assert res.lam == best[0] and res.chi2 == best[1]

@@ -485,6 +485,8 @@ def run_mem(
     n_iter = 0
     msg = ""
     near_target = False
+    # 目標に最も近かった (|log(C/目標)|, λ, C, x)。探索が上限に達したときはこれを返す
+    best: tuple[float, float, float, FloatArray] | None = None
     for outer in range(max_outer):
         used = 0
         budget = max_inner if near_target else max(max_inner // 5, 100)
@@ -512,6 +514,9 @@ def run_mem(
         m_eff = x if two else to_m(x)
         chi2 = model.chi2(model.f_calc_eq(m_eff))
         history.append((lam, chi2))
+        dist = abs(math.log(max(chi2, 1e-300) / target_chi2))
+        if best is None or dist < best[0]:
+            best = (dist, lam, chi2, x.copy())
         if progress is not None:
             progress(outer + 1, lam, chi2)
         if abs(chi2 - target_chi2) <= chi2_tol * target_chi2 and near_target:
@@ -525,7 +530,15 @@ def run_mem(
         pts.append((math.log(lam), math.log(max(chi2, 1e-300))))
         lam = _next_lambda(pts, lo, hi, target_chi2)
     else:
-        msg = f"λ の探索が上限に達しました: C = {chi2:.4f}(目標 {target_chi2})"
+        # 内側の最小化が打ち切りのときは C が λ について単調でなく、最後の λ が最良とは
+        # 限らない(GitHub Actions の Windows で同じ入力が C = 0.93 で終わった)。
+        # 目標に最も近かった λ の解を返す
+        assert best is not None
+        _, lam, chi2, x = best
+        msg = (
+            f"λ の探索が上限に達しました。目標 {target_chi2} に最も近い C = {chi2:.4f}"
+            f"(λ = {lam:.3g})の解を返します"
+        )
     density_negative: FloatArray | None = None
     if two:
         assert tau_neg is not None
