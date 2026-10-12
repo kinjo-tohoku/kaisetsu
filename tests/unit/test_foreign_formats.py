@@ -108,7 +108,8 @@ def test_fullprof_detector_pairs(tmp_path: Path) -> None:
     assert detect_fullprof(p.read_text()) == "pairs"
     d = read_powder_data(p)
     assert len(d) == 7
-    assert d.y[0] == pytest.approx(123 / 3) and d.weight[0] == pytest.approx(9 / 123)
+    # 強度は I のまま、分散は I/n(GSAS の STD と同じ扱い)
+    assert d.y[0] == pytest.approx(123) and d.weight[0] == pytest.approx(3 / 123)
     old = _write(
         tmp_path,
         "pbso4.dat",

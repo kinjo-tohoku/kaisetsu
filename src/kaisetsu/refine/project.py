@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from collections.abc import Callable, Iterable, Sequence
@@ -425,8 +426,9 @@ class Project:
         h = HistogramEntry(
             name=name or data.name or f"h{len(self.histograms)}",
             data=data,
-            instrument=instrument,
-            sample=sample if sample is not None else SampleGeometry(),
+            # 呼び出し側のオブジェクトを使い回しても別のプロジェクトに影響しないようコピーする
+            instrument=copy.deepcopy(instrument),
+            sample=copy.deepcopy(sample) if sample is not None else SampleGeometry(),
             background=background,
             contributions=contributions,
             x_min=float(data.x[0]) if x_min is None else x_min,
