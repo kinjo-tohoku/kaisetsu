@@ -1,9 +1,16 @@
-# kaisetsu(仮称)
+# kaisetsu
 
 初心者向け・日本語対応の粉末回折解析プログラム。Rietveld 解析から始めて、PDF(二体分布関数)解析と MEM(最大エントロピー法)密度解析まで同じ構造モデル・同じ精密化エンジンで扱うことを目標にしている。
 
 計画と設計: [docs/ROADMAP.md](docs/ROADMAP.md)
 開発規約: [CLAUDE.md](CLAUDE.md)
+
+## ダウンロード
+
+- Windows: **[kaisetsu-windows-setup.exe](https://github.com/kinjo-tohoku/kaisetsu/releases/latest/download/kaisetsu-windows-setup.exe)**(インストーラ、管理者権限不要)
+- 手順と「Windows によって PC が保護されました」が出たときの対処: [インストール](docs/user-guide/install.md)
+- 使い方: [はじめに](docs/user-guide/getting-started.md)
+- ライセンス: MIT([LICENSE](LICENSE))。同梱ライブラリのライセンスは配布物の `THIRD_PARTY_LICENSES.txt`
 
 ## 現在の状態
 
@@ -94,7 +101,7 @@ write_ccp4(mem.density, mem.lattice, mem.spacegroup, "pbso4_mem.ccp4")  # VESTA 
 uv sync --extra gui        # PySide6 / pyqtgraph / matplotlib を入れる(開発環境では uv sync で入る)
 uv run kaisetsu-gui        # または uv run python -m kaisetsu.gui
 uv run kaisetsu-gui --lang en   # 主要メニューを英語にする
-./packaging/build_windows.ps1   # PyInstaller で配布用フォルダ(dist/kaisetsu)と zip を作る
+./packaging/build_windows.ps1   # PyInstaller + Inno Setup でインストーラと zip を作る(dist/)
 ```
 
 「データ → はじめての精密化(ウィザード)」で、回折データ・CIF・装置プリセットを選ぶだけで

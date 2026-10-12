@@ -2,9 +2,12 @@
 
 ## 1. 準備
 
+Windows ならインストーラを入れてスタートメニューから起動する([インストール](install.md))。
+ソースから動かすときは:
+
 ```powershell
-git clone <このリポジトリ>
-cd RietveldProgram
+git clone https://github.com/kinjo-tohoku/kaisetsu
+cd kaisetsu
 uv sync --extra gui
 uv run kaisetsu-gui
 ```

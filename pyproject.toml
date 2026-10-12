@@ -4,6 +4,19 @@ version = "0.1.0"
 description = "初心者向け・日本語対応の粉末回折解析プログラム(Rietveld / PDF / MEM)"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Katsuki Kinjo" }]
+keywords = ["rietveld", "powder diffraction", "pdf", "mem", "crystallography"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Japanese",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "gemmi>=0.7.5",
     "h5py>=3.16.0",
@@ -101,6 +114,12 @@ skip_covered = true
 
 [project.scripts]
 kaisetsu-gui = "kaisetsu.gui.app:main"
+
+[project.urls]
+Homepage = "https://github.com/kinjo-tohoku/kaisetsu"
+Repository = "https://github.com/kinjo-tohoku/kaisetsu"
+Issues = "https://github.com/kinjo-tohoku/kaisetsu/issues"
+Download = "https://github.com/kinjo-tohoku/kaisetsu/releases"
 
 [[tool.mypy.overrides]]
 module = ["kaisetsu.gui", "kaisetsu.gui.*"]

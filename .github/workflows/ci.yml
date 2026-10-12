@@ -1,0 +1,90 @@
+# テストと静的検査。push と pull request のたびに走る。
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: "3.14"
+            full: true
+          - os: ubuntu-latest
+            python: "3.12"
+            full: false
+          - os: macos-latest
+            python: "3.13"
+            full: false
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - name: Qt の実行に必要なライブラリ(Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libopengl0 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0 \
+            libxcb-cursor0 fonts-noto-cjk
+
+      - name: 依存のインストール
+        run: uv sync --extra gui
+
+      - name: ruff / mypy
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy
+
+      - name: pytest(高速)
+        if: ${{ !matrix.full }}
+        run: uv run pytest -m "not slow" -q
+
+      - name: pytest(全部)
+        if: ${{ matrix.full }}
+        run: uv run pytest -q
+
+  build-check:
+    name: Windows 配布物のビルド確認
+    runs-on: windows-latest
+    needs: test
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: 依存のインストール
+        run: uv sync --extra gui --group build
+      - name: PyInstaller + Inno Setup
+        shell: pwsh
+        run: .\packaging\build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaisetsu-windows
+          path: |
+            dist/*-setup.exe
+            dist/*.zip
+          retention-days: 14

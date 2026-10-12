@@ -1,0 +1,78 @@
+# タグ v* を push すると Windows のインストーラと zip を作って GitHub Release に載せる。
+#   git tag v0.1.0 && git push origin v0.1.0
+# ダウンロード URL(常に最新):
+#   https://github.com/kinjo-tohoku/kaisetsu/releases/latest/download/kaisetsu-windows-setup.exe
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows インストーラ
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: 依存のインストール
+        run: uv sync --extra gui --group build
+
+      - name: バージョンとタグの一致を確認
+        shell: pwsh
+        run: |
+          $version = (uv run python -c "import kaisetsu; print(kaisetsu.__version__)").Trim()
+          $tag = "${{ github.ref_name }}"
+          Write-Host "kaisetsu.__version__ = $version, tag = $tag"
+          if ($tag.StartsWith("v") -and $tag -ne "v$version") {
+            throw "タグ $tag と kaisetsu.__version__ ($version) が一致しません"
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: PyInstaller + Inno Setup(起動確認を含む)
+        shell: pwsh
+        run: .\packaging\build_windows.ps1
+
+      - name: wheel と sdist
+        run: uv build
+
+      - name: Release に載せる
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          # バージョン無しの名前も置いて、/releases/latest/download/ の URL を固定にする
+          Copy-Item "dist\kaisetsu-$env:VERSION-windows-setup.exe" "dist\kaisetsu-windows-setup.exe"
+          Copy-Item "dist\kaisetsu-$env:VERSION-windows.zip" "dist\kaisetsu-windows.zip"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "kaisetsu $env:VERSION" --generate-notes
+          }
+          gh release upload $tag --clobber `
+            "dist\kaisetsu-$env:VERSION-windows-setup.exe" `
+            "dist\kaisetsu-windows-setup.exe" `
+            "dist\kaisetsu-$env:VERSION-windows.zip" `
+            "dist\kaisetsu-windows.zip" `
+            (Get-ChildItem dist\*.whl, dist\*.tar.gz | ForEach-Object { $_.FullName })
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        with:
+          name: kaisetsu-windows
+          path: |
+            dist/*-setup.exe
+            dist/*.zip
+            dist/*.whl

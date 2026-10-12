@@ -4,6 +4,7 @@
     uv run --group build pyinstaller packaging/kaisetsu.spec --noconfirm
 
 出力は dist/kaisetsu/kaisetsu.exe。data/public(サンプルデータ)も同梱する。
+インストーラまで作るときは packaging/build_windows.ps1 を使う。
 PyInstaller 自体は GPL(ブートローダ例外付き)で、生成した配布物にはその制約は及ばない
 (配布物のライセンスは kaisetsu と依存ライブラリのものになる)。
 """
@@ -53,7 +54,7 @@ exe = EXE(  # noqa: F821
     strip=False,
     upx=False,
     console=False,
-    icon=None,
+    icon=str(ROOT / "packaging" / "kaisetsu.ico"),
 )
 coll = COLLECT(  # noqa: F821
     exe,

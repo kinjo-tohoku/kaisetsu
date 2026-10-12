@@ -33,5 +33,11 @@
   参照値生成は `uv run python validation/gsas2/run_gsas2.py ...` が内部で gsas2main の Python を subprocess で呼ぶ。
   GSAS-II をこのパッケージの依存にしてはいけない。
 
+## 配布
+- 自作コードは MIT(`LICENSE`)。配布物には `packaging/collect_licenses.py` が作る依存のライセンス一覧を同梱する。
+- Windows 配布物は `.\packaging\build_windows.ps1`(PyInstaller → `--smoke-test` で起動確認 → Inno Setup → zip)。
+- GitHub(kinjo-tohoku/kaisetsu)にタグ `v<version>` を push すると `.github/workflows/release.yml` が Release を作る。
+  タグは `kaisetsu.__version__` と一致させる。
+
 ## コミット
 - 変更はまとまりごとにコミットする。メッセージは日本語でよい。
