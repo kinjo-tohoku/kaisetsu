@@ -12,6 +12,11 @@ J. Appl. Cryst. 32, 36-50 (1999) の推奨順序に準拠):
     6. (必要なら)占有率、選択配向、異方性変位
 
 各段階では前の段階で動かしたパラメータも動かし続ける(累積)。
+
+Le Bail 相があるときは、最初に強度の更新を 5 回回してから始め、各段階の精密化でも
+強度の更新を 3 回ずつ回す(`Project.refine(le_bail_cycles=3)`)。段階ごとに 1 回しか
+更新しないと、幅が合わないうちに抽出強度が崩れて Rietveld より悪い Le Bail になる
+(opXRD の実験室データ 2 本で Rwp 23.6% → 11.1%、23.6% → 11.9%)。
 """
 
 from __future__ import annotations
@@ -64,6 +69,10 @@ class Recipe:
         """レシピを順に実行する。reset=True なら最初に全パラメータを固定に戻す。"""
         if reset:
             project.fix_all()
+        lb_cycles = 3 if _has_le_bail(project) else 0
+        if lb_cycles:
+            for _ in range(5):
+                project.le_bail_update()
         results: list[FitResult] = []
         for step in self.steps:
             available: list[str] = []
@@ -80,7 +89,11 @@ class Recipe:
             if not project.params.free():
                 continue
             snapshot = {q.name: q.value for q in project.params}
-            res = project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
+            res = project.refine(
+                max_cycles=step.max_cycles,
+                progress=iteration_progress,
+                le_bail_cycles=lb_cycles,
+            )
             if self.guard_widths:
                 res = self._guard_widths(project, step, snapshot, res, iteration_progress)
             project.log.append(
@@ -138,7 +151,15 @@ class Recipe:
             f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅(Γ_G² または σ²)がデータの一部で"
             f"負になったので {', '.join(fixed)} を段階前の値に固定してやり直します"
         )
-        return project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
+        return project.refine(
+            max_cycles=step.max_cycles,
+            progress=iteration_progress,
+            le_bail_cycles=3 if _has_le_bail(project) else 0,
+        )
+
+
+def _has_le_bail(project: Project) -> bool:
+    return any(ph.le_bail and ph.f2_update for ph in project.phases.values())
 
 
 def _is_phase_param(project: Project, p: Parameter) -> bool:

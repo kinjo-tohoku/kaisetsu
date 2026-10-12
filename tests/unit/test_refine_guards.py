@@ -146,3 +146,30 @@ def test_standard_recipe_varies_tof_alpha(data_dir: Path) -> None:
     assert {"h0:inst:sig1", "h0:inst:alpha", "h0:inst:beta0", "h0:inst:beta1"} <= set(step.patterns)
     step2 = next(s for s in r.steps if s.name.startswith("ピーク幅 U"))
     assert "h0:inst:sig0" in step2.patterns and "h0:inst:alpha" not in step2.patterns
+
+
+def test_recipe_iterates_le_bail_intensities(data_dir: Path) -> None:
+    """Le Bail 相があるレシピは、最初に 5 回、各段階で 3 回ずつ強度を更新する。"""
+    from kaisetsu.refine.recipe import Recipe
+
+    st = Structure.from_cif(str(data_dir / "pbso4" / "PbSO4-Wyckoff.cif"))
+    data = read_powder_data(data_dir / "pbso4" / "PBSO4.XRA").cropped(20.0, 40.0)
+    inst = CWInstrument(Radiation.xray(1.5405, 1.5443, 0.5), w=0.003, s_l=0.01, h_l=0.01)
+    proj = Project("lb")
+    proj.add_phase(st, name="PbSO4", le_bail=True)
+    proj.add_histogram(data, inst, SampleGeometry(), n_background=3)
+    proj.build_parameters()
+    calls = {"n": 0}
+    orig = proj.le_bail_update
+
+    def counted() -> None:
+        calls["n"] += 1
+        orig()
+
+    proj.le_bail_update = counted  # type: ignore[method-assign]
+    r = Recipe("t")
+    r.add("bkg", ["h0:bkg:*"], 2)
+    r.add("cell", ["PbSO4:cell:*"], 2)
+    r.run(proj)
+    # 5(最初)+ 3 × 2 段階
+    assert calls["n"] == 5 + 3 * 2
