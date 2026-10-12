@@ -114,6 +114,7 @@ RietveldProgram/
 |---|---|---|---|
 | 数値計算 | numpy, scipy | BSD-3 | 最小二乗は scipy.optimize.least_squares から始め、必要なら自前 LM に置換 |
 | 高速化 | numba | BSD-2 | Python 3.14 で 0.68 が解決済み |
+| 対称性の検出(P1 → 空間群と非対称単位) | spglib | BSD-3 | `crystal/symmetry.py`。opXRD や DFT 出力の全原子セルから空間群を求める |
 | CIF・空間群・異常分散 | gemmi | MPL-2.0 | `read_small_structure`, `SpaceGroup.operations()`, `cromer_liberman(z, energy)` を実機確認済み |
 | 対称性(補助) | spglib | BSD-3 | 対称性検出・標準化が必要になった場合 |
 | 原子散乱因子 f0 | 自前テーブル | - | Waasmaier-Kirfel (1995) / Cromer-Mann 係数を BSD 系ソース(cctbx 等)から出典明記で取り込む。gemmi 0.7.5 の Python API には IT92 テーブルが露出していないため |
