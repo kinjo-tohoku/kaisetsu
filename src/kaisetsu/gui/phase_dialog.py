@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
 from kaisetsu.refine.project import Project
 
 
@@ -154,6 +155,7 @@ class PhaseDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        fit_dialog_to_screen(self, buttons)
 
     def apply(self) -> list[str]:
         """設定をプロジェクトに反映し、ログに出す行を返す。"""

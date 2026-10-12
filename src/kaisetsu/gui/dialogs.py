@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import polarization_from_monochromator
 from kaisetsu.refine.recipe import Recipe, standard_recipe
@@ -89,6 +90,13 @@ class InstrumentDialog(QDialog):
         self.preset.currentIndexChanged.connect(self._apply_preset)
         top.addWidget(self.preset, 1)
         layout.addLayout(top)
+        # 2 列(左: 放射線と試料、右: ピーク幅)にして、ノート PC でも画面に収める
+        cols = QHBoxLayout()
+        left = QVBoxLayout()
+        right = QVBoxLayout()
+        cols.addLayout(left, 1)
+        cols.addLayout(right, 1)
+        layout.addLayout(cols)
 
         # 放射線
         g_rad = QGroupBox("放射線(X 線源・波長)")
@@ -137,7 +145,7 @@ class InstrumentDialog(QDialog):
             "0.5: 無偏光(フィルタ)、1/(1+cos²2θm): 回折側モノクロメータ、1: 放射光(鉛直散乱)"
         )
         f_rad.addRow("偏光係数 P", self.pol)
-        layout.addWidget(g_rad)
+        left.addWidget(g_rad)
 
         # プロファイル
         g_prof = QGroupBox(
@@ -167,7 +175,8 @@ class InstrumentDialog(QDialog):
         self.h_l = _spin(inst.h_l, 0.0, 0.2, 4, 0.001)
         f_prof.addRow("軸発散 S/L", self.s_l)
         f_prof.addRow("軸発散 H/L", self.h_l)
-        layout.addWidget(g_prof)
+        right.addWidget(g_prof)
+        right.addStretch(1)
 
         # 試料
         g_smp = QGroupBox("試料・光学系")
@@ -182,7 +191,8 @@ class InstrumentDialog(QDialog):
         f_smp.addRow("試料高さずれ [mm] (BB)", self.displacement)
         self.mu_r = _spin(smp.mu_r, 0.0, 20.0, 3, 0.1)
         f_smp.addRow("円筒試料 μR (DS)", self.mu_r)
-        layout.addWidget(g_smp)
+        left.addWidget(g_smp)
+        left.addStretch(1)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -190,6 +200,7 @@ class InstrumentDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        fit_dialog_to_screen(self, self.buttons)
 
     def apply_preset_by_name(self, name: str) -> None:
         idx = self.preset.findText(name)

@@ -124,23 +124,32 @@ class MainWindow(QMainWindow):
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("絞り込み(例: *cell*, h0:inst:*, Pb)")
         self.only_free = QCheckBox(tr("精密化中のみ"))
+        self.show_advanced = QCheckBox(tr("詳細も表示"))
+        self.show_advanced.setToolTip(
+            "普段は使わない量(装置の P と Z、表面粗さ b など)も表に出します。"
+            "動かしている量は常に表示されます"
+        )
         filt.addWidget(self.filter_edit, 1)
         filt.addWidget(self.only_free)
+        filt.addWidget(self.show_advanced)
         v.addLayout(filt)
         quick = QHBoxLayout()
-        for label, pat in (
-            ("全て", "*"),
-            ("格子", "*:cell:*"),
-            ("原子", "*:*:[xyz]"),
-            ("U", "*:*:u*"),
-            ("装置", "h*:inst:*"),
-            ("背景", "h*:bkg:*"),
-            ("スケール", "*:*:scale"),
-            ("PDF", "g*:*"),
+        # (表示名, glob, 種類)。種類で相の量とヒストグラムの量を区別する
+        # (例: 「U」で装置の U まで出ないように)
+        for label, pat, scope in (
+            ("全て", "*", "all"),
+            ("格子", "*:cell:*", "phase"),
+            ("原子", "*:*:[xyz]", "phase"),
+            ("U", "*:*:u*", "phase"),
+            ("装置", "h*:inst:*", "hist"),
+            ("試料", "h*:sample:*", "hist"),
+            ("背景", "h*:bkg:*", "hist"),
+            ("スケール", "*:*:scale", "all"),
+            ("PDF", "g*:*", "hist"),
         ):
             b = QPushButton(tr(label))
             b.setFlat(True)
-            b.clicked.connect(lambda _=False, p=pat: self.filter_edit.setText(p))
+            b.clicked.connect(lambda _=False, p=pat, s=scope: self._quick_filter(p, s))
             quick.addWidget(b)
         quick.addStretch(1)
         v.addLayout(quick)
@@ -182,8 +191,9 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         dock.setMinimumWidth(480)
         self.param_dock = dock
-        self.filter_edit.textChanged.connect(self.param_filter.set_pattern)
+        self.filter_edit.textChanged.connect(self._on_filter_text)
         self.only_free.toggled.connect(self.param_filter.set_only_free)
+        self.show_advanced.toggled.connect(self.param_filter.set_show_advanced)
 
         # 構造の 3D 表示(ドック)
         self.structure_dock = QDockWidget(tr("構造"), self)
@@ -390,6 +400,7 @@ class MainWindow(QMainWindow):
         self.tree.expandAll()
 
     def _refresh_params(self) -> None:
+        self.param_filter.set_phase_names(self.project.phases.keys())
         self.param_model.set_params(self.project.params)
 
     def _refresh_plot(self) -> None:
@@ -479,6 +490,15 @@ class MainWindow(QMainWindow):
             self.current_phase = str(ref)
             self._refresh_structure()
             self.filter_edit.setText(f"{ref}:*")
+
+    def _on_filter_text(self, text: str) -> None:
+        """絞り込み欄を手で書き換えたら種類フィルタは外す(クイックボタンは後で付け直す)。"""
+        self.param_filter.set_scope("all")
+        self.param_filter.set_pattern(text)
+
+    def _quick_filter(self, pattern: str, scope: str) -> None:
+        self.filter_edit.setText(pattern)
+        self.param_filter.set_scope(scope)
 
     def _set_vary_shown(self, flag: bool) -> None:
         for r in range(self.param_filter.rowCount()):

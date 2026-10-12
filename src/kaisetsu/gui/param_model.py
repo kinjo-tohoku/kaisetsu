@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import math
+from collections.abc import Iterable
 from typing import Any
 
 from PySide6.QtCore import (
@@ -176,12 +177,23 @@ class ParameterModel(QAbstractTableModel):
 
 
 class ParameterFilter(QSortFilterProxyModel):
-    """名前の glob と「精密化中のみ」でフィルタする。"""
+    """名前の glob、種類(相 / ヒストグラム)、「精密化中のみ」、「詳細も表示」でフィルタする。
+
+    glob だけでは `*:*:u*` が原子の U_iso と装置の U の両方に当たるので、
+    クイックボタンは種類(scope)も指定する:
+        'all'   … すべて
+        'phase' … 相のパラメータ(名前の先頭が相の名前)だけ
+        'hist'  … ヒストグラム・PDF のパラメータだけ
+    詳細パラメータ(Parameter.advanced)は、動かしているか効いている値のときだけ出す。
+    """
 
     def __init__(self, parent: Any = None) -> None:
         super().__init__(parent)
         self._pattern = "*"
         self._only_free = False
+        self._scope = "all"
+        self._phase_names: frozenset[str] = frozenset()
+        self._show_advanced = False
 
     def set_pattern(self, pattern: str) -> None:
         pattern = pattern.strip() or "*"
@@ -194,6 +206,25 @@ class ParameterFilter(QSortFilterProxyModel):
         self._only_free = flag
         self._refilter()
 
+    def set_scope(self, scope: str) -> None:
+        """'all' / 'phase' / 'hist'。"""
+        if scope not in ("all", "phase", "hist"):
+            raise ValueError(f"未知の scope: {scope}")
+        self._scope = scope
+        self._refilter()
+
+    def scope(self) -> str:
+        return self._scope
+
+    def set_phase_names(self, names: Iterable[str]) -> None:
+        """種類フィルタで「相のパラメータ」を見分けるための相の名前。"""
+        self._phase_names = frozenset(names)
+        self._refilter()
+
+    def set_show_advanced(self, flag: bool) -> None:
+        self._show_advanced = flag
+        self._refilter()
+
     def filterAcceptsRow(
         self, source_row: int, source_parent: QModelIndex | QPersistentModelIndex
     ) -> bool:
@@ -203,6 +234,13 @@ class ParameterFilter(QSortFilterProxyModel):
         p = model.parameter(source_row)
         if self._only_free and not p.is_free:
             return False
+        if p.advanced and not self._show_advanced and not p.vary:
+            if p.neutral_value is None or p.value == p.neutral_value:
+                return False
+        if self._scope != "all":
+            is_phase = p.name.split(":", 1)[0] in self._phase_names
+            if is_phase != (self._scope == "phase"):
+                return False
         return fnmatch.fnmatchcase(p.name, self._pattern)
 
     def _refilter(self) -> None:

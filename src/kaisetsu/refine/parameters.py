@@ -51,6 +51,9 @@ class Parameter:
         locked: 真なら対称性等の理由で動かせない(vary を立てても無視)
         unit: 表示用の単位
         description: 表示用の説明(日本語)
+        advanced: 真なら「詳細」扱い(GUI の表では既定で隠す)
+        neutral_value: 詳細パラメータがこの値のときは効いていない(隠してよい)。
+            None なら値によらず隠す
     """
 
     name: str
@@ -65,6 +68,8 @@ class Parameter:
     locked: bool = False
     unit: str = ""
     description: str = ""
+    advanced: bool = False
+    neutral_value: float | None = None
 
     @property
     def is_free(self) -> bool:

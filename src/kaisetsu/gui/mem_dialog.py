@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.mem.core import MEMInput, MEMResult, run_mem
 from kaisetsu.mem.io import density_slice, write_ccp4, write_grd, write_xplor
@@ -241,6 +242,7 @@ class MEMDialog(QDialog):
             self.log.appendPlainText(
                 "先に粉末データと相を読み込み、Rietveld 精密化を行ってください"
             )
+        fit_dialog_to_screen(self, buttons)
 
     def _suggest_grid(self) -> None:
         name = self.phase.currentData()

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.pattern.instrument import GeometryKind, SampleGeometry
 from kaisetsu.pattern.tof import TOFInstrument
@@ -105,6 +106,7 @@ class TOFInstrumentDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        fit_dialog_to_screen(self, self.buttons)
 
     def load_instprm(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

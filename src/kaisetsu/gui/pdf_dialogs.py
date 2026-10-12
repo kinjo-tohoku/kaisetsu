@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.pdf.data import PDFData
@@ -221,6 +222,7 @@ class TransformDialog(QDialog):
         self._fq = self.plot_fq.plot([], [], pen=pg.mkPen("r"), name="補正後")
         self._poly = self.plot_fq.plot([], [], pen=pg.mkPen("g", width=1), name="多項式")
         self._gr = self.plot_gr.plot([], [], pen=pg.mkPen("k"))
+        fit_dialog_to_screen(self, buttons)
 
     def _browse(self, edit: QLineEdit) -> None:
         path, _ = QFileDialog.getOpenFileName(
