@@ -69,7 +69,7 @@ class TOFInstrumentDialog(QDialog):
             "読み込んでください。\n幅のパラメータは GSAS-II の TOF プロファイル(type 3)と同じ定義です。"
         ))  # fmt: skip
         row = QHBoxLayout()
-        b = QPushButton("GSAS-II の .instprm を読む…")
+        b = QPushButton("装置ファイルを読む(.instprm / .zDiffractometer)…")
         b.clicked.connect(self.load_instprm)
         row.addWidget(b)
         row.addStretch(1)
@@ -110,12 +110,15 @@ class TOFInstrumentDialog(QDialog):
 
     def load_instprm(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "GSAS-II の装置パラメータ", last_dir(), "instprm (*.instprm);;すべて (*)"
+            self,
+            "装置パラメータ(GSAS-II .instprm / Z-Rietveld .zDiffractometer)",
+            last_dir(),
+            "装置パラメータ (*.instprm *.zDiffractometer);;すべて (*)",
         )
         if not path:
             return
         try:
-            inst = TOFInstrument.from_instprm(path)
+            inst = TOFInstrument.from_instrument_file(path)
         except Exception as exc:
             QMessageBox.critical(self, "読み込みエラー", str(exc))
             return

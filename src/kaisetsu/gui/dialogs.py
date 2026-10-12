@@ -96,8 +96,8 @@ class InstrumentDialog(QDialog):
         top.addWidget(self.preset, 1)
         self.btn_load = QPushButton("装置ファイルを読む…")
         self.btn_load.setToolTip(
-            "GSAS-II の .instprm、または GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている"
-            "装置パラメータ)から波長・ピーク幅・非対称・偏光を取り込みます"
+            "GSAS-II の .instprm、GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている装置"
+            "パラメータ)、Z-Rietveld の .zDiffractometer から波長・ピーク幅・非対称・偏光を取り込みます"
         )
         self.btn_load.clicked.connect(self.load_instrument_file)
         top.addWidget(self.btn_load)
@@ -249,7 +249,7 @@ class InstrumentDialog(QDialog):
             self,
             "GSAS / GSAS-II の装置パラメータ",
             last_dir(),
-            "装置パラメータ (*.instprm *.prm *.inst *.iparm);;すべて (*)",
+            "装置パラメータ (*.instprm *.prm *.inst *.iparm *.zDiffractometer);;すべて (*)",
         )
         if not path:
             return

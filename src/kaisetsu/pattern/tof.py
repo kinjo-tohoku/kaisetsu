@@ -126,6 +126,42 @@ class TOFInstrument:
         return cls.from_gsas2({k: _num(v) for k, v in vals.items() if _is_num(v)})
 
     @classmethod
+    def from_zdiffractometer(cls, path: str | Path) -> TOFInstrument:
+        """Z-Rietveld の .zDiffractometer(TOF)を読む。
+
+        [Conversion parameters] の c0, c1, c2(TOF = c0 + c1 d + c2 d²)をゼロ点・DIFC・DIFA に、
+        [Diffraction angle] をバンクの 2θ にする。プロファイル(Type0m の σ², γ, α, β)は単位と
+        定義が GSAS 流と異なるので取り込まず、既定値のままにする。
+        """
+        from kaisetsu.io.readers.zrietveld import parse_zdiffractometer
+
+        p = Path(path)
+        z = parse_zdiffractometer(p)
+        if not z.is_tof:
+            kind = z.method or "種類不明"
+            raise ValueError(f"{p.name}: TOF の装置ファイルではありません({kind})")
+        c = z.conversion
+        if len(c) < 2 or c[1] <= 0:
+            raise ValueError(f"{p.name}: [Conversion parameters](DIFC)が読めません")
+        return cls(
+            difc=c[1],
+            difa=c[2] if len(c) > 2 else 0.0,
+            zero=c[0],
+            two_theta=z.two_theta if z.two_theta is not None else 90.0,
+        )
+
+    @classmethod
+    def from_instrument_file(cls, path: str | Path) -> TOFInstrument:
+        """GSAS-II の .instprm か Z-Rietveld の .zDiffractometer かを中身で判定して読む。"""
+        from kaisetsu.io.readers.zrietveld import is_zdiffractometer
+
+        p = Path(path)
+        head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+        if is_zdiffractometer(head):
+            return cls.from_zdiffractometer(p)
+        return cls.from_instprm(p)
+
+    @classmethod
     def from_gsas2(cls, inst: Mapping[str, object]) -> TOFInstrument:
         """GSAS-II の辞書(値のみ、または [初期値, 現在値, フラグ])から構築する。"""
 

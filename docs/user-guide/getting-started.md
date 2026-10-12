@@ -44,7 +44,7 @@ CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約が
 
 「装置と試料の設定」ダイアログ(ツールバーの「装置設定」、Ctrl+I、データ読込時にも自動で開く)の
 「放射線」欄で、**ターゲット**(Cu / Co / Cr / Fe / Mo / Ag)を選ぶと Kα1・Kα2 の波長が入ります。
-放射光や中性子は「その他」にして波長を直接入れます。GSAS-II の .instprm や GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている装置ファイル)があれば「装置ファイルを読む…」で波長・ピーク幅・非対称・偏光を取り込めます。.ras/.rasx/.xrdml ならファイル内の
+放射光や中性子は「その他」にして波長を直接入れます。GSAS-II の .instprm や GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている装置ファイル)があれば「装置ファイルを読む…」で波長・ピーク幅・非対称・偏光を取り込めます。Z-Rietveld の .zDiffractometer も読めます(波長・ゼロ点・U, V, W, X, Y。非対称は既定値)。.ras/.rasx/.xrdml ならファイル内の
 ターゲットと波長を読んで自動で設定します。偏光係数 P は、Ni フィルタなら 0.5、回折側グラファイト
 モノクロメータなら 0.56(Cu)、放射光なら 0.98〜1.0 が目安です。
 
@@ -204,7 +204,7 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 
 飛行時間データ(GSAS 形式の .gsa / .fxye で、BANK 行が SLOG など CONST 以外のもの)を読み込むと、
 TOF 装置パラメータのダイアログが開きます。装置から受け取った GSAS-II の .instprm があれば
-「.instprm を読む」で入れます(無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
+「装置ファイルを読む」で入れます(Z-Rietveld の .zDiffractometer からは換算係数 c₀, c₁, c₂ とバンク角を取り込みます。無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
 パラメータ名は `h0:inst:difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z`。
 標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、幅は `sig1`, `alpha`, `beta0` から)。
 試すなら `data/public/nac/PG3_22048.gsa` と `POWGEN_1066.instprm`、相は `NAC.cif`。

@@ -15,6 +15,7 @@ from kaisetsu.io import read_powder_data
 from kaisetsu.io.readers.fullprof import detect_fullprof
 from kaisetsu.io.readers.rietan import is_rietan_block
 from kaisetsu.pattern.instrument import CWInstrument
+from kaisetsu.pattern.tof import TOFInstrument
 
 
 def _write(tmp_path: Path, name: str, text: str) -> Path:
@@ -228,3 +229,113 @@ def test_gsas_instprm_cw_and_tof_rejection(tmp_path: Path) -> None:
     tof = _write(tmp_path, "tof.instprm", "Type:PNT\ndifC:22600\nsig-1:50\n")
     with pytest.raises(ValueError, match="定波長"):
         CWInstrument.from_instrument_file(tof)
+
+
+_ZD_CW = "\r".join(
+    [
+        "[File format version] 1",
+        "[Diffracto meter format version] 1",
+        "# [Beam type]",
+        "[Beam type] X-Ray",
+        "[Measurement method] Dispersive Conventional Slit",
+        "[Intensity correction parameters]",
+        "\t[Wave length ratio]",
+        "\t\t[Value] 0.7",
+        "\t\t[ID] Fix",
+        "\t[Wave length ratio]",
+        "\t\t[Value] 0.3",
+        "\t\t[ID] Vary",
+        "\t[End]",
+        "[End]",
+        "\t[Wave length]",
+        "\t\t[Value] 1.54056",
+        "\t[Wave length]",
+        "\t\t[Value] 1.5444",
+        "\t[End]",
+        "\t[Ds]",
+        "\t\t[Value] 0.087478",
+        "\t\t[ID] Vary",
+        "\t[End]",
+        "\t[Z]",
+        "\t\t[Value] -0.035934",
+        "\t\t[ID] Fix",
+        "\t[End]",
+        "[Profile function initial value]",
+        "\t[Identifier] TypeA1FCJ",
+        "\t[U]",
+        "\t\t[Value] 0.000362",
+        "\t\t[ID] Phase",
+        "\t[End]",
+        "\t[V]",
+        "\t\t[Value] -0.001312",
+        "\t[End]",
+        "\t[W]",
+        "\t\t[Value] 0.001297",
+        "\t[End]",
+        "\t[X]",
+        "\t\t[Value] 0.007895",
+        "\t[End]",
+        "\t[Y]",
+        "\t\t[Value] 0.088818",
+        "\t[End]",
+        "\t[H/L]",
+        "\t\t[Value] 0.028000",
+        "\t[End]",
+        "\t[S/L]",
+        "\t\t[Value] 0.001000",
+        "\t[End]",
+        "[End]",
+    ]
+)
+_ZD_TOF = "\r".join(
+    [
+        "[File format version] 1",
+        "[Beam type] Neutron",
+        "[Measurement method] Time Of Flight",
+        "[Intensity correction parameters]",
+        "\t[Diffraction angle] 155",
+        "[End]",
+        "[Conversion parameters]",
+        "\t[Value] -1.780187",
+        "\t[ID] Fix",
+        "[Conversion parameters]",
+        "\t[Value] 14174.077891",
+        "\t[ID] Fix",
+        "[Conversion parameters]",
+        "\t[Value] -0.642576",
+        "\t[ID] Fix",
+        "[End]",
+    ]
+)
+
+
+def test_zdiffractometer_cw(tmp_path: Path) -> None:
+    from kaisetsu.io.readers.zrietveld import parse_zdiffractometer
+
+    p = _write(tmp_path, "LabXRD.zDiffractometer", _ZD_CW)
+    z = parse_zdiffractometer(p)
+    assert z.beam == "X-Ray" and not z.is_tof
+    assert z.wavelengths == [1.54056, 1.5444] and z.wavelength_ratios == [0.7, 0.3]
+    assert z.misc["Z"] == pytest.approx(-0.035934)
+    assert z.profiles["TypeA1FCJ"]["U"] == pytest.approx(0.000362)
+    inst = CWInstrument.from_instrument_file(p)
+    rad = inst.radiation
+    assert rad.wavelength == pytest.approx(1.54056) and rad.wavelength2 == pytest.approx(1.5444)
+    assert rad.ratio2 == pytest.approx(0.3 / 0.7)
+    # U, V, W は σ² → FWHM²(× 8 ln2)、X(1/cosθ)は y、Y(tanθ)は x
+    assert inst.u == pytest.approx(8 * np.log(2) * 0.000362)
+    assert inst.y == pytest.approx(0.007895) and inst.x == pytest.approx(0.088818)
+    assert inst.sh_l == pytest.approx(0.04) and inst.zero == pytest.approx(-0.035934)
+    with pytest.raises(ValueError, match="TOF"):
+        TOFInstrument.from_instrument_file(p)
+
+
+def test_zdiffractometer_tof(tmp_path: Path) -> None:
+    p = _write(tmp_path, "imateria.zDiffractometer", _ZD_TOF)
+    inst = TOFInstrument.from_instrument_file(p)
+    assert inst.difc == pytest.approx(14174.077891)
+    assert inst.difa == pytest.approx(-0.642576)
+    assert inst.zero == pytest.approx(-1.780187)
+    assert inst.two_theta == pytest.approx(155.0)
+    with pytest.raises(ValueError, match="TOF"):
+        CWInstrument.from_instrument_file(p)

@@ -241,10 +241,21 @@ def standard_recipe(
         )
     else:
         r.add("格子定数とピーク位置", [f"{phase}:cell:*", f"{hist}:inst:zero"], 10)
-    r.add("ピーク幅 W", [f"{hist}:inst:w"], 10)
+    # TOF では sig1(σ² の d² の係数)が W に相当する
+    r.add("ピーク幅 W", [f"{hist}:inst:w", f"{hist}:inst:sig1"], 10)
     r.add(
         "ピーク幅 U, V, X, Y",
-        [f"{hist}:inst:u", f"{hist}:inst:v", f"{hist}:inst:x", f"{hist}:inst:y"],
+        [
+            f"{hist}:inst:u",
+            f"{hist}:inst:v",
+            f"{hist}:inst:x",
+            f"{hist}:inst:y",
+            # TOF: σ² の定数項と d⁴ の係数、減衰 β(立ち上がり α は発散しやすいので動かさない)
+            f"{hist}:inst:sig0",
+            f"{hist}:inst:sig2",
+            f"{hist}:inst:beta0",
+            f"{hist}:inst:beta1",
+        ],
         15,
     )
     if asymmetry:

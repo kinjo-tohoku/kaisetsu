@@ -205,10 +205,55 @@ class CWInstrument:
         return cls.from_gsas2(d)
 
     @classmethod
+    def from_zdiffractometer(cls, path: str | Path) -> CWInstrument:
+        """Z-Rietveld の .zDiffractometer(定波長)を読む。
+
+        波長(Kα1, Kα2 とその比)、TypeA1 / TypeA1FCJ の U, V, W, P, X, Y, S/L, H/L(deg², deg と
+        見なす)、ゼロ点 Z を取り込む。偏光係数は無いので 0.5(X 線)。
+        """
+        from kaisetsu.io.readers.zrietveld import parse_zdiffractometer
+
+        p = Path(path)
+        z = parse_zdiffractometer(p)
+        if z.is_tof:
+            raise ValueError(f"{p.name}: TOF の装置ファイルです(TOF 装置の設定で読んでください)")
+        if not z.wavelengths:
+            raise ValueError(f"{p.name}: 波長 [Wave length] がありません")
+        lam = z.wavelengths
+        if z.is_neutron:
+            rad = Radiation.neutron(lam[0])
+        else:
+            lam2 = lam[1] if len(lam) > 1 and lam[1] > 0 and abs(lam[1] - lam[0]) > 1e-6 else None
+            r = z.wavelength_ratios
+            ratio = r[1] / r[0] if len(r) >= 2 and r[0] > 0 else 0.5
+            rad = Radiation.xray(lam[0], lam2, ratio if lam2 else 0.5)
+        prof = z.profiles.get("TypeA1FCJ") or z.profiles.get("TypeA1") or {}
+        # Z-Rietveld の TypeA1 は U, V, W がガウス分散 σ² [deg²](FWHM² = 8 ln2 σ²)、
+        # X が 1/cosθ、Y が tanθ のローレンツ幅 [deg](サンプルの LaB6 を本プログラムで精密化した
+        # 値との比較で判断)。S/L, H/L は定義が合わない(精密化値の 7 倍)ので既定値のままにする
+        return cls(
+            radiation=rad,
+            zero=z.misc.get("Z", 0.0),
+            u=EIGHT_LN2 * prof.get("U", 0.0),
+            v=EIGHT_LN2 * prof.get("V", 0.0),
+            w=EIGHT_LN2 * prof.get("W", 0.004 / EIGHT_LN2),
+            p=EIGHT_LN2 * prof.get("P", 0.0),
+            x=max(prof.get("Y", 0.0), 0.0),
+            y=max(prof.get("X", 0.0), 0.0),
+            s_l=0.02,
+            h_l=0.02,
+            polarization=0.0 if z.is_neutron else 0.5,
+        )
+
+    @classmethod
     def from_instrument_file(cls, path: str | Path, bank: int = 1) -> CWInstrument:
-        """GSAS-II の .instprm か GSAS の .prm/.inst かを中身で判定して読む。"""
+        """GSAS-II .instprm、GSAS .prm/.inst、Z-Rietveld .zDiffractometer を中身で判定して読む。"""
+        from kaisetsu.io.readers.zrietveld import is_zdiffractometer
+
         p = Path(path)
         head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+        if is_zdiffractometer(head):
+            return cls.from_zdiffractometer(p)
         if "INS   HTYPE" in head or head.lstrip().startswith("INS"):
             return cls.from_gsas_prm(p, bank)
         return cls.from_instprm(p)
