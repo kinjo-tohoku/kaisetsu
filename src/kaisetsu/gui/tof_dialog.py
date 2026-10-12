@@ -46,7 +46,7 @@ _FIELDS: tuple[tuple[str, str, int, float, float, str], ...] = (
     ("sigq", "sig-q [μs²/Å]", 3, -1e6, 1e6, ""),
     ("x", "X [μs/Å]", 4, 0.0, 1e4, "ローレンツ幅 γ = X d + Y d² + Z"),
     ("y", "Y [μs/Å²]", 4, 0.0, 1e4, ""),
-    ("z", "Z [μs]", 4, 0.0, 1e4, ""),
+    ("z", "Z [μs]", 4, -1e4, 1e4, ""),
 )
 
 
@@ -65,8 +65,11 @@ class TOFInstrumentDialog(QDialog):
         self._sample = sample or SampleGeometry(kind=GeometryKind.DEBYE_SCHERRER)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            "パルス中性子(J-PARC、SNS、ISIS)の飛行時間データ。装置の .instprm(GSAS-II 形式)があれば"
-            "読み込んでください。\n幅のパラメータは GSAS-II の TOF プロファイル(type 3)と同じ定義です。"
+            "パルス中性子(J-PARC、SNS、ISIS)の飛行時間データ。装置の .instprm(GSAS-II)か"
+            " .zDiffractometer(Z-Rietveld)があれば読み込んでください。\n"
+            "幅のパラメータは GSAS-II の TOF プロファイル(type 3)と同じ定義です。Z-Rietveld からは"
+            "換算係数とガウス分散 σ²・ローレンツ幅 γ を取り込み、立ち上がり α と減衰 β は"
+            "標準の手続きがデータから求めます。"
         ))  # fmt: skip
         row = QHBoxLayout()
         b = QPushButton("装置ファイルを読む(.instprm / .zDiffractometer)…")

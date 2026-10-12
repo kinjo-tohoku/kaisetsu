@@ -204,9 +204,19 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 
 飛行時間データ(GSAS 形式の .gsa / .fxye で、BANK 行が SLOG など CONST 以外のもの)を読み込むと、
 TOF 装置パラメータのダイアログが開きます。装置から受け取った GSAS-II の .instprm があれば
-「装置ファイルを読む」で入れます(Z-Rietveld の .zDiffractometer からは換算係数 c₀, c₁, c₂ とバンク角を取り込みます。無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
+「装置ファイルを読む」で入れます(無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
+Z-Rietveld の .zDiffractometer(J-PARC の iMATERIA、SuperHRPD など)からは換算係数 c₀, c₁, c₂、
+バンク角、Type0m / Type0 のガウス分散 σ²(SigmaSquare0〜2)とローレンツ幅 γ(Gamma0〜2)を
+取り込みます。立ち上がり α と減衰 β は Z-Rietveld と関数形が違う(Ikeda-Carpenter 系)ので
+取り込まず、標準の手続きがデータから求めます。
 パラメータ名は `h0:inst:difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z`。
-標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、幅は `sig1`, `alpha`, `beta0` から)。
+標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、幅は `sig1`, `alpha`, `beta0`, `beta1` を
+同時に動かしてから `sig0`, `sig2`, `x`, `y`)。立ち上がりが分解能より速い装置(iMATERIA など)では
+α が上限 10 付近で「決まっていません」と出ますが、フィットには害がないのでそのままで構いません。
+注意: Z-Rietveld の DIFC(c₁)は Ikeda-Carpenter 型の関数でピーク位置を定義して校正されているので、
+本プログラムの back-to-back 指数関数で使うと格子定数が 10⁻⁴ 程度ずれます(CeO2 で 5.4120 に対し
+5.4093 Å)。格子定数を精密に求めるには、標準試料(Si、CeO2)で DIFC とゼロ点を本プログラムで
+精密化し直してください。
 試すなら `data/public/nac/PG3_22048.gsa` と `POWGEN_1066.instprm`、相は `NAC.cif`。
 
 - **強度の単位**: GSAS 形式の TOF データはビン幅で割って counts/μs にして扱います(GSAS-II と同じ。

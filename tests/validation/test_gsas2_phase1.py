@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 import pytest
@@ -23,7 +23,8 @@ pytestmark = pytest.mark.validation
 
 
 def _cif_for(ref: dict) -> Path:
-    name = Path(ref["case"]["cif"]).name
+    # 参照値 JSON には生成した Windows の絶対パスが入っているので、どの OS でもファイル名だけ取る
+    name = PureWindowsPath(ref["case"]["cif"]).name
     hits = list(DATA_DIR.rglob(name))
     assert hits, f"{name} が data/public にありません"
     return hits[0]

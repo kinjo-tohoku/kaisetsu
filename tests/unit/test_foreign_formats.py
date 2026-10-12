@@ -305,6 +305,53 @@ _ZD_TOF = "\r".join(
         "\t[Value] -0.642576",
         "\t[ID] Fix",
         "[End]",
+        "[Global fitting range]",
+        "\t[Exclude range]",
+        "\t\t[Min] MIN",
+        "\t\t[Max] 4500",
+        "\t[Exclude range]",
+        "\t\t[Min] 68000",
+        "\t\t[Max] MAX",
+        "\t[End]",
+        "[End]",
+        "[Default profile model function identifier] Type0m",
+        "[Profile function]",
+        "\t[Identifier] Type0m",
+        "\t[SigmaSquare0]",
+        "\t\t[Value] 0.534758",
+        "\t\t[ID] Phase",
+        "\t[End]",
+        "\t[SigmaSquare1]",
+        "\t\t[Value] 33.711887",
+        "\t[End]",
+        "\t[Gamma0]",
+        "\t\t[Value] 0.171790",
+        "\t[End]",
+        "\t[Gamma1]",
+        "\t\t[Value] 2.307367",
+        "\t[End]",
+        "\t[Gamma2]",
+        "\t\t[Value] -0.298098",
+        "\t[End]",
+        "\t[Alpha1]",
+        "\t\t[Value] 5.257580",
+        "\t[End]",
+        "[End]",
+        "[Profile function initial value]",
+        "\t[Identifier] Type2",
+        "\t[Sigma01]",
+        "\t\t[Value] 3.08718E-01",
+        "\t[End]",
+        "[End]",
+        "[Profile function initial value]",
+        "\t[Identifier] Type0m",
+        "\t[SigmaSquare1]",
+        "\t\t[Value] 42.474641",
+        "\t[End]",
+        "\t[Gamma2e]",
+        "\t\t[Value] 0",
+        "\t[End]",
+        "[End]",
     ]
 )
 
@@ -317,7 +364,7 @@ def test_zdiffractometer_cw(tmp_path: Path) -> None:
     assert z.beam == "X-Ray" and not z.is_tof
     assert z.wavelengths == [1.54056, 1.5444] and z.wavelength_ratios == [0.7, 0.3]
     assert z.misc["Z"] == pytest.approx(-0.035934)
-    assert z.profiles["TypeA1FCJ"]["U"] == pytest.approx(0.000362)
+    assert z.profile("TypeA1FCJ")["U"] == pytest.approx(0.000362)
     inst = CWInstrument.from_instrument_file(p)
     rad = inst.radiation
     assert rad.wavelength == pytest.approx(1.54056) and rad.wavelength2 == pytest.approx(1.5444)
@@ -331,11 +378,39 @@ def test_zdiffractometer_cw(tmp_path: Path) -> None:
 
 
 def test_zdiffractometer_tof(tmp_path: Path) -> None:
+    from kaisetsu.io.readers.zrietveld import parse_zdiffractometer
+
     p = _write(tmp_path, "imateria.zDiffractometer", _ZD_TOF)
+    z = parse_zdiffractometer(p)
+    assert z.default_profile == "Type0m"
+    assert z.excluded == [(None, 4500.0), (68000.0, None)]
+    assert z.profiles["Type0m"]["Alpha1"] == pytest.approx(5.25758)
+    assert z.profiles_initial["Type2"]["Sigma01"] == pytest.approx(0.308718)
+    # 同じ名前の初期値ブロックがあっても [Profile function] の値が勝つ
+    assert z.profile("Type0m")["SigmaSquare1"] == pytest.approx(33.711887)
+    assert z.profile("Type0m")["Gamma2e"] == 0.0
     inst = TOFInstrument.from_instrument_file(p)
     assert inst.difc == pytest.approx(14174.077891)
     assert inst.difa == pytest.approx(-0.642576)
     assert inst.zero == pytest.approx(-1.780187)
     assert inst.two_theta == pytest.approx(155.0)
+    # Type0m の σ², γ は GSAS type 3 と同じ形なのでそのまま写す
+    assert inst.sig0 == pytest.approx(0.534758) and inst.sig1 == pytest.approx(33.711887)
+    assert inst.sig2 == 0.0
+    assert inst.z == pytest.approx(0.17179) and inst.x == pytest.approx(2.307367)
+    assert inst.y == pytest.approx(-0.298098)
+    # 立ち上がり・減衰は既定値のまま
+    assert inst.alpha == TOFInstrument(difc=1.0).alpha
+    # SuperHRPD のように σ² が d⁴ の項だけでも取り込む
+    p2 = _write(
+        tmp_path,
+        "bl08.zDiffractometer",
+        _ZD_TOF.replace("[Value] 33.711887", "[Value] 0").replace(
+            "\t[SigmaSquare0]\r\t\t[Value] 0.534758",
+            "\t[SigmaSquare2]\r\t\t[Value] 0.0321731",
+        ),
+    )
+    inst2 = TOFInstrument.from_instrument_file(p2)
+    assert inst2.sig0 == 0.0 and inst2.sig1 == 0.0 and inst2.sig2 == pytest.approx(0.0321731)
     with pytest.raises(ValueError, match="TOF"):
         CWInstrument.from_instrument_file(p)

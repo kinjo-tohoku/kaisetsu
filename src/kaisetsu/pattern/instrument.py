@@ -227,7 +227,7 @@ class CWInstrument:
             r = z.wavelength_ratios
             ratio = r[1] / r[0] if len(r) >= 2 and r[0] > 0 else 0.5
             rad = Radiation.xray(lam[0], lam2, ratio if lam2 else 0.5)
-        prof = z.profiles.get("TypeA1FCJ") or z.profiles.get("TypeA1") or {}
+        prof = z.profile("TypeA1FCJ", "TypeA1")
         # Z-Rietveld の TypeA1 は U, V, W がガウス分散 σ² [deg²](FWHM² = 8 ln2 σ²)、
         # X が 1/cosθ、Y が tanθ のローレンツ幅 [deg](サンプルの LaB6 を本プログラムで精密化した
         # 値との比較で判断)。S/L, H/L は定義が合わない(精密化値の 7 倍)ので既定値のままにする

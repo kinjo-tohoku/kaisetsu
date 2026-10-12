@@ -778,7 +778,7 @@ class Project:
             ("sigq", "sigq", 1e-1, -1e6, 1e6, "μs²/Å", "σ² の d の係数"),
             ("x", "x", 1e-2, 0.0, 1e4, "μs/Å", "ローレンツ幅 γ の d の係数(歪み)"),
             ("y", "y", 1e-2, 0.0, 1e4, "μs/Å²", "γ の d² の係数(サイズ)"),
-            ("z", "z", 1e-2, 0.0, 1e4, "μs", "γ の定数項"),
+            ("z", "z", 1e-2, -1e4, 1e4, "μs", "γ の定数項(Z-Rietveld の Gamma0 は負のことがある)"),
         ]  # fmt: skip
         for nm, attr, step, lo, hi, unit, desc in spec:
             ps.add(

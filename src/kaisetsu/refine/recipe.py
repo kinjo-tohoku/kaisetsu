@@ -6,6 +6,7 @@ J. Appl. Cryst. 32, 36-50 (1999) の推奨順序に準拠):
     1. スケール因子とバックグラウンド
     2. 格子定数とゼロ点(または試料変位)
     3. ピーク幅 W → U, V → ローレンツ成分 X, Y → 非対称
+       (TOF では sig1 と立ち上がり α・減衰 β → sig0, sig2, X, Y)
     4. 原子座標
     5. 等方性変位パラメータ
     6. (必要なら)占有率、選択配向、異方性変位
@@ -44,7 +45,8 @@ class Step:
 class Recipe:
     name: str
     steps: list[Step] = field(default_factory=list)
-    #: 真なら、段階の後でガウス幅 Γ_G² が負(境界)になっていたら U を固定してやり直す
+    #: 真なら、段階の後でガウス幅 Γ_G²(TOF では σ²)が負(境界)になっていたら
+    #: U(TOF では sig0, sig2、それらが固定なら sig1)を固定してやり直す
     guard_widths: bool = True
 
     def add(self, name: str, patterns: Iterable[str], max_cycles: int = 15, **kw: object) -> Recipe:
@@ -97,20 +99,32 @@ class Recipe:
         res: FitResult,
         iteration_progress: Callable[[int, float], None] | None,
     ) -> FitResult:
-        """ガウス幅 Γ_G² が負になったら、段階の前の値に戻して U を固定しやり直す。
+        """ガウス幅 Γ_G²(TOF では σ²)が負になったら、段階の前の値に戻して固定しやり直す。
 
         負の範囲はガウス成分を 0 として計算される(GSAS-II と同じ)ので精密化は通るが、
         U < 0 に流れていく解は装置の特性として意味を失う。U を初期値に固定しても Rwp は
         ほとんど変わらない(PbSO4 9.88 → 9.86%、LaB6 は同じ)ので、初心者向けに固定する。
         それでも V, W の組み合わせで負が残ることはあり、その場合は diagnostics が知らせる。
+
+        TOF では σ² = sig0 + sig1 d² + sig2 d⁴ が負になったら、動いている sig0, sig2 を固定する。
+        sig1 だけが動いている段階(「ピーク幅 W」)で負になるのは、立ち上がり α や減衰 β が
+        合っていなくて幅の辻褄を σ² < 0 で合わせようとしたときなので、sig1 を段階前の値に
+        固定して次の段階(α, β も動く)に進む(iMATERIA の CeO2 で α の既定値のまま sig1 を
+        動かすと σ² = −4000 μs² まで流れた)。
         """
         from kaisetsu.refine.width_check import width_violations
 
         fixed: list[str] = []
         for v in width_violations(project):
-            name = f"h{v.hist}:inst:u"
-            if v.kind == "gauss" and name in project.params and project.params[name].is_free:
-                fixed.append(name)
+            if v.kind == "gauss":
+                cands = [f"h{v.hist}:inst:u"]
+            elif v.kind == "tof_sigma2":
+                cands = [f"h{v.hist}:inst:sig0", f"h{v.hist}:inst:sig2"]
+                if not any(n in project.params and project.params[n].is_free for n in cands):
+                    cands = [f"h{v.hist}:inst:sig1"]
+            else:
+                continue
+            fixed.extend(n for n in cands if n in project.params and project.params[n].is_free)
         if not fixed:
             return res
         for q in project.params:
@@ -121,8 +135,8 @@ class Recipe:
         for name in fixed:
             project.fix(name)
         project.log.append(
-            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅 Γ_G² がデータの一部で負になった"
-            f"ので {', '.join(fixed)} を段階前の値に固定してやり直します"
+            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅(Γ_G² または σ²)がデータの一部で"
+            f"負になったので {', '.join(fixed)} を段階前の値に固定してやり直します"
         )
         return project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
 
@@ -241,8 +255,21 @@ def standard_recipe(
         )
     else:
         r.add("格子定数とピーク位置", [f"{phase}:cell:*", f"{hist}:inst:zero"], 10)
-    # TOF では sig1(σ² の d² の係数)が W に相当する
-    r.add("ピーク幅 W", [f"{hist}:inst:w", f"{hist}:inst:sig1"], 10)
+    # TOF では sig1(σ² の d² の係数)が W に相当する。立ち上がり α と減衰 β も一緒に動かす:
+    # α は装置ごとに桁で違い(POWGEN 0.13、iMATERIA は 5 以上)、α, β が合わないまま sig1 だけ
+    # 動かすと幅の辻褄を σ² < 0 で合わせようとして流れる(iMATERIA の CeO2 で σ² = −4000 μs²)。
+    # 立ち上がりが分解能より速い装置では α が上限側で決まらなくなる(esd が大きい)が害はない
+    r.add(
+        "ピーク幅 W",
+        [
+            f"{hist}:inst:w",
+            f"{hist}:inst:sig1",
+            f"{hist}:inst:alpha",
+            f"{hist}:inst:beta0",
+            f"{hist}:inst:beta1",
+        ],
+        10,
+    )
     r.add(
         "ピーク幅 U, V, X, Y",
         [
@@ -250,11 +277,9 @@ def standard_recipe(
             f"{hist}:inst:v",
             f"{hist}:inst:x",
             f"{hist}:inst:y",
-            # TOF: σ² の定数項と d⁴ の係数、減衰 β(立ち上がり α は発散しやすいので動かさない)
+            # TOF: σ² の定数項と d⁴ の係数(x, y は TOF のローレンツ幅にも一致する)
             f"{hist}:inst:sig0",
             f"{hist}:inst:sig2",
-            f"{hist}:inst:beta0",
-            f"{hist}:inst:beta1",
         ],
         15,
     )

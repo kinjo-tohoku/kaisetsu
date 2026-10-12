@@ -130,8 +130,15 @@ class TOFInstrument:
         """Z-Rietveld の .zDiffractometer(TOF)を読む。
 
         [Conversion parameters] の c0, c1, c2(TOF = c0 + c1 d + c2 d²)をゼロ点・DIFC・DIFA に、
-        [Diffraction angle] をバンクの 2θ にする。プロファイル(Type0m の σ², γ, α, β)は単位と
-        定義が GSAS 流と異なるので取り込まず、既定値のままにする。
+        [Diffraction angle] をバンクの 2θ にする。
+
+        プロファイル Type0m / Type0 のうち、ガウス分散 σ² = SigmaSquare0 + SigmaSquare1 d²
+        + SigmaSquare2 d⁴ [μs²] と、ローレンツ幅 γ = Gamma0 + Gamma1 d + Gamma2 d² [μs] は
+        GSAS の type 3 と同じ形なので sig0, sig1, sig2 と z, x, y に写す(Z-Rietveld の
+        クイックガイドにある iMATERIA BS の s1² = 45 μs² と、配布ファイルの 33.7 が整合する)。
+        立ち上がり・減衰(Alpha1, Alpha2, Beta0_0, Beta0_1, Beta1_0, r01〜r03)は
+        Ikeda-Carpenter 系で本プログラムの back-to-back 指数関数と対応しないので取り込まず、
+        既定値から精密化する(標準手順が alpha, beta0, beta1 を動かす)。
         """
         from kaisetsu.io.readers.zrietveld import parse_zdiffractometer
 
@@ -143,12 +150,29 @@ class TOFInstrument:
         c = z.conversion
         if len(c) < 2 or c[1] <= 0:
             raise ValueError(f"{p.name}: [Conversion parameters](DIFC)が読めません")
-        return cls(
+        prof = z.profile("Type0m", "Type0", "Type1")
+        # Type0 / Type1 は "sigma square 0" のような名前なので Type0m の名前に揃える
+        prof = {
+            k.replace("sigma square ", "SigmaSquare").replace("gamma ", "Gamma"): v
+            for k, v in prof.items()
+        }
+        inst = cls(
             difc=c[1],
             difa=c[2] if len(c) > 2 else 0.0,
             zero=c[0],
             two_theta=z.two_theta if z.two_theta is not None else 90.0,
         )
+        sig = [prof.get(k, 0.0) for k in ("SigmaSquare0", "SigmaSquare1", "SigmaSquare2")]
+        if any(k in prof for k in ("SigmaSquare0", "SigmaSquare1", "SigmaSquare2")) and (
+            max(sig) > 0
+        ):
+            # SuperHRPD(BL08)の配布ファイルは σ² が d⁴ の項だけ(ローレンツ幅が主)
+            inst.sig0, inst.sig1, inst.sig2 = sig
+        if any(k in prof for k in ("Gamma0", "Gamma1", "Gamma2")):
+            inst.z = prof.get("Gamma0", 0.0)
+            inst.x = prof.get("Gamma1", 0.0)
+            inst.y = prof.get("Gamma2", 0.0)
+        return inst
 
     @classmethod
     def from_instrument_file(cls, path: str | Path) -> TOFInstrument:
