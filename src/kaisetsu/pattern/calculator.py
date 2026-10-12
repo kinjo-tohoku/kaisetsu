@@ -23,6 +23,7 @@ import numpy as np
 import numpy.typing as npt
 
 from kaisetsu.crystal.structure import Structure
+from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.instrument import EIGHT_LN2, CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import (
     axis_cos2,
@@ -247,6 +248,24 @@ def default_d_max(x_min: float, wavelength: float) -> float:
     return wavelength / (2.0 * math.sin(math.radians(tt / 2.0)))
 
 
+#: ピーク窓の点数の合計(全相・全波長)の上限。幅が発散したときにメモリを使い尽くす前に
+#: 止める(1e8 点で寄与配列 1 本が 800 MB。正常なら放射光の大きな格子でも 1e6 程度)
+MAX_WINDOW_POINTS = 100_000_000
+
+
+def window_size_message(
+    n: int, limit: int, n_refl: int, n_points: int, width: FloatArray, unit: str
+) -> str:
+    """ピーク窓が上限を超えたときの説明(`PatternSizeError` の本文)。"""
+    med = float(np.median(width)) if len(width) else float("nan")
+    return (
+        f"ピーク窓の点数の合計が {n:.2e} 点になり上限 {limit:.1e} 点を超えました"
+        f"(反射 {n_refl} 本、データ {n_points} 点、幅の中央値 {med:.3g} {unit})。"
+        "ピーク幅(U, V, W, X, Y や試料の幅)が発散している可能性があります。"
+        "幅のパラメータを確かめるか固定してください"
+    )
+
+
 def peak_window(
     pos: float, fwhm: float, s_l: float, h_l: float, low_fwhm: float, high_fwhm: float
 ) -> tuple[float, float]:
@@ -277,6 +296,7 @@ def calculate_pattern(
     anomalous: Mapping[str, complex] | None = None,
     scattering_override: Mapping[str, complex] | None = None,
     fcj_method: str = "accurate",
+    max_window_points: int = MAX_WINDOW_POINTS,
 ) -> PatternResult:
     """パターンを計算する。
 
@@ -293,6 +313,8 @@ def calculate_pattern(
         xray_table: X 線 f0 テーブル
         anomalous: 散乱種 → f' + i f'' の上書き(検証用)
         scattering_override: 散乱種 → 散乱因子そのものの上書き(検証用、中性子の b など)
+        max_window_points: ピーク窓の点数の合計の上限。超えたら `PatternSizeError`
+            (ピーク幅の発散)
     """
     xa = np.asarray(x, dtype=np.float64).ravel()
     if sample is None:
@@ -310,6 +332,7 @@ def calculate_pattern(
     y_total = y_bkg.copy()
     y_phases: list[FloatArray] = []
     peak_tables: list[PeakTable] = []
+    n_window = 0
 
     for ph in phases:
         st = ph.structure
@@ -391,6 +414,11 @@ def calculate_pattern(
             i1 = np.searchsorted(xa, pos_safe + hi_w).astype(np.int64)
             use = ok & (inten > 0.0) & (i1 > i0)
             i1 = np.where(use, i1, i0)
+            n_window += int(np.sum(i1 - i0))
+            if n_window > max_window_points:
+                raise PatternSizeError(
+                    window_size_message(n_window, max_window_points, n_refl, len(xa), width, "°")
+                )
             out, offsets, lengths = fcj_profile_batch(
                 xa,
                 pos_safe,

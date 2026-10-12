@@ -40,11 +40,14 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.calculator import (
+    MAX_WINDOW_POINTS,
     PatternResult,
     PeakTable,
     PhaseContribution,
     _empty_peak_table,
+    window_size_message,
 )
 from kaisetsu.pattern.instrument import SampleGeometry
 from kaisetsu.profile.corrections import cylinder_absorption_array
@@ -340,6 +343,7 @@ def calculate_pattern_tof(
     anomalous: Mapping[str, complex] | None = None,
     scattering_override: Mapping[str, complex] | None = None,
     sample: SampleGeometry | None = None,
+    max_window_points: int = MAX_WINDOW_POINTS,
 ) -> PatternResult:
     """TOF パターンを計算する。x は TOF [μs](昇順)。
 
@@ -360,6 +364,7 @@ def calculate_pattern_tof(
     tables: list[PeakTable] = []
     sin_theta = math.sin(math.radians(instrument.two_theta / 2.0))
     rad = instrument.radiation
+    n_window = 0
     for ph in phases:
         st = ph.structure
         refl = generate_reflections(st.lattice, st.spacegroup, dmin, dmax)
@@ -416,6 +421,11 @@ def calculate_pattern_tof(
         i0 = np.searchsorted(xa, lo).astype(np.int64)
         i1 = np.searchsorted(xa, hi).astype(np.int64)
         i1 = np.where(ok & (i1 > i0), i1, i0)
+        n_window += int(np.sum(i1 - i0))
+        if n_window > max_window_points:
+            raise PatternSizeError(
+                window_size_message(n_window, max_window_points, n_refl, len(xa), fwhm_all, "μs")
+            )
         if instrument.is_zrietveld:
             # Type0m: 短い裾(β₁)と長い裾(β₀)の両側指数を R で混ぜる
             out, offsets, lengths = tof_profile_batch(

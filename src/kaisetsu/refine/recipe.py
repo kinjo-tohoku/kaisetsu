@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.instrument import GeometryKind
 
 if TYPE_CHECKING:
@@ -89,11 +90,25 @@ class Recipe:
             if not project.params.free():
                 continue
             snapshot = {q.name: q.value for q in project.params}
-            res = project.refine(
-                max_cycles=step.max_cycles,
-                progress=iteration_progress,
-                le_bail_cycles=lb_cycles,
-            )
+            try:
+                res = project.refine(
+                    max_cycles=step.max_cycles,
+                    progress=iteration_progress,
+                    le_bail_cycles=lb_cycles,
+                )
+            except PatternSizeError as exc:
+                # 格子定数や幅が発散した。発散した値のまま残さず、段階前の値に戻して知らせる
+                for q in project.params:
+                    if q.name in snapshot:
+                        q.value = snapshot[q.name]
+                project.params.evaluate_ties()
+                project.params.apply_all()
+                msg = (
+                    f"レシピ '{self.name}' 段階 '{step.name}' でパラメータが発散したので、"
+                    f"段階前の値に戻して止めました。{exc}"
+                )
+                project.log.append(msg)
+                raise PatternSizeError(msg) from exc
             if self.guard_widths:
                 res = self._guard_widths(project, step, snapshot, res, iteration_progress)
             project.log.append(

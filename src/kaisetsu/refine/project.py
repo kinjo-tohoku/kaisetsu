@@ -647,12 +647,16 @@ class Project:
         names = lattice_parameter_names()
         for k, nm in enumerate(names):
             unit = "Å" if k < 3 else "deg"
+            v0 = float(ph._cell[k])
+            # 格子定数は初期値の 0.5〜2 倍に限る。Le Bail は反射が増えるほど合うので、強度が
+            # 崩れると格子が大きくなる方向に止まらず(opXRD 416 で体積 6 倍)、反射の数と
+            # メモリが増え続ける。Rietveld で格子が 2 倍動くことは無い
             p = Parameter(
                 f"{pre}:cell:{nm}",
-                float(ph._cell[k]),
+                v0,
                 step=1e-5 if k < 3 else 1e-4,
-                min=0.1 if k < 3 else 10.0,
-                max=1000.0 if k < 3 else 170.0,
+                min=0.5 * v0 if k < 3 else 10.0,
+                max=2.0 * v0 if k < 3 else 170.0,
                 setter=_cell_setter(ph, k),
                 unit=unit,
                 description=f"格子定数 {nm}",

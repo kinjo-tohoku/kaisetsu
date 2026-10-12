@@ -19,6 +19,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.optimize import least_squares
 
+from kaisetsu.errors import PatternSizeError
 from kaisetsu.refine.parameters import ParameterSet
 
 FloatArray = npt.NDArray[np.float64]
@@ -135,7 +136,14 @@ def refine_least_squares(
         nonlocal n_eval
         n_eval += 1
         params.set_vector(x)
-        r = residual_fn()
+        try:
+            r = residual_fn()
+        except PatternSizeError:
+            # 格子定数や幅が発散した試行点。最初の点なら呼び出し側に知らせ、途中なら
+            # 「残差が巨大」として扱い、信頼領域を縮めて別の点を試させる
+            if state["n_data"] == 0:
+                raise
+            r = np.full(int(state["n_data"]) + n_penalty, 1e10)
         if not np.all(np.isfinite(r)):
             r = np.where(np.isfinite(r), r, 1e10)
         rd = r[: len(r) - n_penalty] if n_penalty else r

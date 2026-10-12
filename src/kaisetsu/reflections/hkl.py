@@ -19,9 +19,14 @@ import numpy.typing as npt
 
 from kaisetsu.crystal.lattice import Lattice
 from kaisetsu.crystal.spacegroup import SpaceGroup
+from kaisetsu.errors import PatternSizeError
 
 IntArray = npt.NDArray[np.int64]
 FloatArray = npt.NDArray[np.float64]
+
+#: hkl の候補(全格子点 (2h+1)(2k+1)(2l+1))の上限。格子定数が発散したときに
+#: メモリを使い尽くす前に止める(2e7 で int64 の格子が 480 MB)
+MAX_HKL_CANDIDATES = 20_000_000
 BoolArray = npt.NDArray[np.bool_]
 
 
@@ -101,6 +106,7 @@ def generate_reflections(
     d_min: float,
     d_max: float = math.inf,
     include_absent: bool = False,
+    max_candidates: int = MAX_HKL_CANDIDATES,
 ) -> ReflectionList:
     """d_min ≤ d ≤ d_max の独立反射を生成する。
 
@@ -110,6 +116,7 @@ def generate_reflections(
         d_min: 最小面間隔 [Å]
         d_max: 最大面間隔 [Å](既定は無限大)
         include_absent: 真なら消滅則で消える反射も含める(Le Bail 等で使うことは無いが検証用)
+        max_candidates: hkl の候補の上限。超えたら `PatternSizeError`(格子定数の発散)
     """
     if d_min <= 0:
         raise ValueError(f"d_min は正でなければなりません: {d_min}")
@@ -117,6 +124,14 @@ def generate_reflections(
     hmax = math.floor(lattice.a / d_min)
     kmax = math.floor(lattice.b / d_min)
     lmax = math.floor(lattice.c / d_min)
+    n_cand = (2 * hmax + 1) * (2 * kmax + 1) * (2 * lmax + 1)
+    if n_cand > max_candidates:
+        raise PatternSizeError(
+            f"hkl の候補が {n_cand:.2e} 個になり上限 {max_candidates:.1e} 個を超えました"
+            f"(a, b, c = {lattice.a:.2f}, {lattice.b:.2f}, {lattice.c:.2f} Å、"
+            f"d_min = {d_min:.3f} Å)。格子定数が発散しているか、データ範囲に対して"
+            "格子が大きすぎます。格子定数を確かめるか、2θ(d_min)の範囲を狭めてください"
+        )
     hr = np.arange(-hmax, hmax + 1, dtype=np.int64)
     kr = np.arange(-kmax, kmax + 1, dtype=np.int64)
     lr = np.arange(-lmax, lmax + 1, dtype=np.int64)
