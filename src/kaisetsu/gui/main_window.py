@@ -987,6 +987,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() != RangeDialog.DialogCode.Accepted:
             return
         x_min, x_max, ranges = dlg.values()
+        if not self._range_keeps_points(h, x_min, x_max, ranges):
+            return
         h.x_min, h.x_max = x_min, x_max
         h.set_excluded(ranges)
         self.log(
@@ -1005,6 +1007,33 @@ class MainWindow(QMainWindow):
             + ("(次の精密化から)" if flag else "")
         )
 
+    def _range_keeps_points(
+        self,
+        h: HistogramEntry,
+        x_min: float,
+        x_max: float,
+        ranges: list[tuple[float, float]],
+        minimum: int = 20,
+    ) -> bool:
+        """範囲・除外領域を変えた後もフィットに使える点が残るか。残らなければ知らせて False。"""
+        from kaisetsu.refine.project import merge_ranges
+
+        x = h.data.x
+        assert h.data.weight is not None
+        m = (x >= x_min) & (x <= x_max) & (h.data.weight > 0)
+        for lo, hi in merge_ranges(ranges):
+            m &= ~((x >= lo) & (x <= hi))
+        n = int(np.count_nonzero(m))
+        if n >= minimum:
+            return True
+        QMessageBox.warning(
+            self,
+            "データ範囲",
+            f"この設定ではフィットに使える点が {n} 点しか残りません(最低 {minimum} 点)。"
+            "範囲か除外領域を見直してください。",
+        )
+        return False
+
     def _current_histogram(self) -> tuple[int, HistogramEntry] | None:
         if not self.project.histograms or self.current_view != "hist":
             return None
@@ -1017,6 +1046,8 @@ class MainWindow(QMainWindow):
         if cur is None:
             return
         i, h = cur
+        if not self._range_keeps_points(h, h.x_min, h.x_max, [*h.excluded, (lo, hi)]):
+            return
         h.set_excluded([*h.excluded, (lo, hi)])
         self.log(f"h{i}: {lo:.3f}〜{hi:.3f} を除外しました(帯の右クリックで解除)")
         self._refresh_plot()

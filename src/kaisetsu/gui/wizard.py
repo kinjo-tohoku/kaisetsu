@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from kaisetsu.crystal.cif import read_structure
+from kaisetsu.gui.dialog_utils import available_height
 from kaisetsu.gui.dialogs import InstrumentDialog
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.io.readers import read_powder_data
@@ -153,7 +154,8 @@ class StartWizard(QWizard):
         super().__init__(main)
         self.main = main
         self.setWindowTitle("はじめての精密化")
-        self.resize(760, 640)
+        # ノート PC(有効 500〜700 px)でも「次へ」が見えるように画面の高さに合わせる
+        self.resize(760, max(420, min(640, available_height(self) - 80)))
         self.page_data = DataPage(self)
         self.page_phase = PhasePage(self)
         self.page_inst = InstrumentPage(self)

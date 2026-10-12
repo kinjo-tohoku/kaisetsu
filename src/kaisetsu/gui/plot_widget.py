@@ -97,15 +97,21 @@ class _PatternViewBox(pg.ViewBox):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._drag_region: Any = None
+        self._exclude_drag = False
 
     def mouseDragEvent(self, ev: Any, axis: int | None = None) -> None:
-        shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        if ev.button() != Qt.MouseButton.LeftButton or not shift:
+        # 押した瞬間の Shift で決め、ドラッグの最後まで保つ(途中で Shift を離しても除外になる)
+        if ev.isStart():
+            self._exclude_drag = ev.button() == Qt.MouseButton.LeftButton and bool(
+                ev.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            )
+        if not self._exclude_drag:
             super().mouseDragEvent(ev, axis)
             return
         ev.accept()
-        x0 = float(self.mapToView(ev.buttonDownPos()).x())
-        x1 = float(self.mapToView(ev.pos()).x())
+        # scene 座標から変換する(ev.pos() は配られた item の座標系で、軸の幅ぶんずれることがある)
+        x0 = float(self.mapSceneToView(ev.buttonDownScenePos()).x())
+        x1 = float(self.mapSceneToView(ev.scenePos()).x())
         lo, hi = min(x0, x1), max(x0, x1)
         if self._drag_region is None:
             self._drag_region = pg.LinearRegionItem(
@@ -116,6 +122,7 @@ class _PatternViewBox(pg.ViewBox):
         if ev.isFinish():
             self.removeItem(self._drag_region)
             self._drag_region = None
+            self._exclude_drag = False
             if hi > lo:
                 self.sigExcludeRequested.emit(lo, hi)
 
@@ -133,7 +140,9 @@ class _ExcludeRegion(pg.LinearRegionItem):
             hoverBrush=pg.mkBrush(255, 0, 0, 70),
             pen=pg.mkPen((200, 0, 0, 120)),
         )
-        self.setZValue(-10)
+        # ViewBox(z = -100)より手前に置かないとクリック・ドラッグが ViewBox に取られる
+        # (pyqtgraph は絶対 z 値の降順で配る)。半透明なので曲線の上に描いても見える
+        self.setZValue(10)
         self.setToolTip("除外領域: ドラッグで移動、端をドラッグで幅を変更、右クリックで削除")
 
     def mouseClickEvent(self, ev: Any) -> None:

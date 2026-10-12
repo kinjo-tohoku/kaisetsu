@@ -145,7 +145,10 @@ def _sample_from_dict(d: dict[str, Any]) -> SampleGeometry:
     if "mu_eff_inv_mm" in kw:  # 旧形式(有効線吸収係数)→ 侵入深さ 1/μ_eff [mm]
         mu = float(kw.pop("mu_eff_inv_mm"))
         kw["transparency_mm"] = 1.0 / mu if mu > 0 else 0.0
-    return SampleGeometry(**kw)
+    smp = SampleGeometry(**kw)
+    if smp.roughness_a == 0.0 and smp.roughness_b == 0.0:  # 旧形式の「補正なし」
+        smp.roughness_a = smp.roughness_b = 1.0
+    return smp
 
 
 def _background_to_dict(bk: BackgroundModel) -> dict[str, Any]:

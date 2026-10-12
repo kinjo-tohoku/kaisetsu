@@ -1288,6 +1288,12 @@ class Project:
         fn = self.residuals_with_penalty if with_penalty else self.residuals
         return project_jacobian(self, base, residual_fn=fn)
 
+    def n_fit_points(self) -> int:
+        """フィットに使われるデータ点の総数(範囲内・除外領域外・重み > 0、PDF も含む)。"""
+        n = sum(int(np.count_nonzero(h.mask())) for h in self.histograms)
+        n += sum(int(np.count_nonzero(g.mask())) for g in self.pdf_datasets)
+        return n
+
     def width_penalty(self) -> FloatArray:
         """ピーク幅(Γ_G², Γ_L, TOF σ²)が負になった分の罰則残差。可行なら全部 0。"""
         from kaisetsu.refine.width_check import width_penalty
@@ -1349,6 +1355,18 @@ class Project:
             raise ValueError("ヒストグラムも PDF データもありません")
         self.params.evaluate_ties()
         self.params.apply_all()
+        n_free = len(self.params.free())
+        n_data = self.n_fit_points()
+        if n_free and n_data == 0:
+            raise ValueError(
+                "フィットに使えるデータ点がありません。データ範囲(x_min, x_max)と除外領域を"
+                "確認してください"
+            )
+        if n_free > n_data:
+            raise ValueError(
+                f"動かすパラメータ({n_free} 個)がデータ点({n_data} 点)より多く、"
+                "最小二乗が決まりません。データ範囲・除外領域を広げるか、動かす量を減らしてください"
+            )
         updating = any(ph.le_bail and ph.f2_update for ph in self.phases.values())
         n_outer = max(le_bail_cycles, 1) if updating else 1
         result: FitResult | None = None

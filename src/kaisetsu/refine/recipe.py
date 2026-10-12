@@ -19,10 +19,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from kaisetsu.pattern.instrument import GeometryKind
+
 if TYPE_CHECKING:
     from kaisetsu.refine.lsq import FitResult
     from kaisetsu.refine.parameters import Parameter
-    from kaisetsu.refine.project import Project
+    from kaisetsu.refine.project import HistogramEntry, Project
 
 
 @dataclass
@@ -156,8 +158,6 @@ def _is_phase_or_pdf_param(project: Project, p: Parameter) -> bool:
 
 def _is_bragg_brentano(project: Project, p: Parameter) -> bool:
     """ヒストグラムパラメータ 'h{i}:...' の試料が Bragg-Brentano か。"""
-    from kaisetsu.pattern.instrument import GeometryKind
-
     head = p.name.split(":", 1)[0]
     if not (head.startswith("h") and head[1:].isdigit()):
         return False
@@ -167,12 +167,30 @@ def _is_bragg_brentano(project: Project, p: Parameter) -> bool:
     return project.histograms[i].sample.kind is GeometryKind.BRAGG_BRENTANO
 
 
+def _hist_of(project: Project, p: Parameter) -> HistogramEntry | None:
+    head = p.name.split(":", 1)[0]
+    if head.startswith("h") and head[1:].isdigit() and int(head[1:]) < len(project.histograms):
+        return project.histograms[int(head[1:])]
+    return None
+
+
 def _shift_matches_geometry(project: Project, p: Parameter) -> bool:
-    """試料変位パラメータをヒストグラムの光学系に合うものだけに絞る(それ以外は通す)。"""
+    """ピーク位置のパラメータをヒストグラムの種類に合うものだけに絞る(それ以外は通す)。
+
+    Bragg-Brentano は高さずれ、Debye-Scherrer は x, y ずれ、TOF は zero(試料変位は
+    TOF では意味が無く、動かすと esd が発散する)。
+    """
     tail = p.name.rsplit(":", 1)[-1]
-    if tail not in ("displacement", "disp_x", "disp_y"):
+    if tail not in ("displacement", "disp_x", "disp_y", "zero"):
         return True
-    bb = _is_bragg_brentano(project, p)
+    h = _hist_of(project, p)
+    if h is None:
+        return True
+    if h.is_tof:
+        return tail == "zero"
+    if tail == "zero":
+        return False
+    bb = h.sample.kind is GeometryKind.BRAGG_BRENTANO
     return bb if tail == "displacement" else not bb
 
 
@@ -213,6 +231,7 @@ def standard_recipe(
                 f"{hist}:sample:displacement",
                 f"{hist}:sample:disp_x",
                 f"{hist}:sample:disp_y",
+                f"{hist}:inst:zero",
             ],
             10,
             filter=_shift_matches_geometry,
