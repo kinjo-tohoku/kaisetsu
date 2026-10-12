@@ -64,11 +64,11 @@ standard_recipe("PbSO4", "h0").run(proj)  # スケール/背景 → 格子 → �
 print(proj.summary())  # Rwp, χ², R_Bragg, パラメータと esd
 
 # 個別に動かす場合
-proj.vary("PbSO4:O3:*", "h0:inst:s_l")
+proj.vary("PbSO4:O3:*", "h0:inst:sh_l")
 proj.refine()
 ```
 
-パラメータ名は `相:cell:a`、`相:サイト:x|y|z|occ|uiso`、`h0:inst:zero|u|v|w|x|y|s_l|h_l`、
+パラメータ名は `相:cell:a`、`相:サイト:x|y|z|occ|uiso`、`h0:inst:zero|u|v|w|x|y|sh_l`、
 `h0:bkg:0..`、`h0:相:scale|md_r|size|strain` の形で、glob(`*`)で選べる。
 特殊位置の座標拘束(例 y = x、y = 1/4 固定)と晶系による格子定数拘束は自動で付く。
 

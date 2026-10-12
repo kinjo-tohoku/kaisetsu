@@ -29,27 +29,27 @@ from kaisetsu.scattering.radiation import CHARACTERISTIC_WAVELENGTHS, KBETA_WAVE
 PRESETS: dict[str, dict[str, object]] = {
     "実験室 X 線 Cu Kα (Bragg-Brentano, モノクロメータ)": {
         "target": "Cu", "kalpha2": True, "ratio2": 0.5, "polarization": polarization_from_monochromator(26.6),
-        "u": 0.004, "v": -0.003, "w": 0.004, "x": 0.02, "y": 0.02, "s_l": 0.02, "h_l": 0.02,
+        "u": 0.004, "v": -0.003, "w": 0.004, "x": 0.02, "y": 0.02, "sh_l": 0.04,
         "geometry": GeometryKind.BRAGG_BRENTANO,
     },
     "実験室 X 線 Cu Kα (Bragg-Brentano, Ni フィルタ)": {
         "target": "Cu", "kalpha2": True, "ratio2": 0.5, "polarization": 0.5,
-        "u": 0.004, "v": -0.003, "w": 0.004, "x": 0.02, "y": 0.02, "s_l": 0.02, "h_l": 0.02,
+        "u": 0.004, "v": -0.003, "w": 0.004, "x": 0.02, "y": 0.02, "sh_l": 0.04,
         "geometry": GeometryKind.BRAGG_BRENTANO,
     },
     "実験室 X 線 Co Kα (Bragg-Brentano)": {
         "target": "Co", "kalpha2": True, "ratio2": 0.5, "polarization": 0.5,
-        "u": 0.005, "v": -0.004, "w": 0.005, "x": 0.02, "y": 0.02, "s_l": 0.02, "h_l": 0.02,
+        "u": 0.005, "v": -0.004, "w": 0.005, "x": 0.02, "y": 0.02, "sh_l": 0.04,
         "geometry": GeometryKind.BRAGG_BRENTANO,
     },
     "放射光 X 線 (キャピラリ, Debye-Scherrer)": {
         "wavelength": 0.5, "polarization": 0.98,
-        "u": 0.0005, "v": -0.0003, "w": 0.0005, "x": 0.005, "y": 0.005, "s_l": 0.005, "h_l": 0.005,
+        "u": 0.0005, "v": -0.0003, "w": 0.0005, "x": 0.005, "y": 0.005, "sh_l": 0.01,
         "geometry": GeometryKind.DEBYE_SCHERRER,
     },
     "定波長中性子 (Debye-Scherrer)": {
         "neutron": True, "wavelength": 1.8, "polarization": 0.0,
-        "u": 0.3, "v": -0.5, "w": 0.4, "x": 0.0, "y": 0.0, "s_l": 0.01, "h_l": 0.01,
+        "u": 0.3, "v": -0.5, "w": 0.4, "x": 0.0, "y": 0.0, "sh_l": 0.02,
         "geometry": GeometryKind.DEBYE_SCHERRER,
     },
 }  # fmt: skip
@@ -79,6 +79,7 @@ class InstrumentDialog(QDialog):
             Radiation.characteristic("Cu"), w=0.004, s_l=0.02, h_l=0.02, polarization=0.5
         )
         smp = sample or SampleGeometry()
+        self._smp = smp
 
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -148,9 +149,7 @@ class InstrumentDialog(QDialog):
         left.addWidget(g_rad)
 
         # プロファイル
-        g_prof = QGroupBox(
-            "ピーク幅(Caglioti: Γ_G² = U tan²θ + V tanθ + W + P/cos²θ、Γ_L = X tanθ + Y/cosθ + Z)"
-        )
+        g_prof = QGroupBox("ピーク幅(Caglioti: Γ_G² = U tan²θ + V tanθ + W、Γ_L = X tanθ + Y/cosθ)")
         f_prof = QFormLayout(g_prof)
         self.zero = _spin(inst.zero, -5.0, 5.0, 4, 0.001)
         f_prof.addRow("ゼロ点 [deg]", self.zero)
@@ -165,16 +164,24 @@ class InstrumentDialog(QDialog):
             ("U [deg²]", self.u),
             ("V [deg²]", self.v),
             ("W [deg²]", self.w),
-            ("P [deg²]", self.p),
+            ("P [deg²](詳細)", self.p),
             ("X [deg]", self.x),
             ("Y [deg]", self.y),
-            ("Z [deg]", self.z),
+            ("Z [deg](詳細)", self.z),
         ):
             f_prof.addRow(lab, wdg)
-        self.s_l = _spin(inst.s_l, 0.0, 0.2, 4, 0.001)
-        self.h_l = _spin(inst.h_l, 0.0, 0.2, 4, 0.001)
-        f_prof.addRow("軸発散 S/L", self.s_l)
-        f_prof.addRow("軸発散 H/L", self.h_l)
+        self.p.setToolTip("ガウス幅の 1/cos²θ 項(FullProf 流)。通常は 0 のまま")
+        self.z.setToolTip("ローレンツ幅の定数項。Y と相関 −0.996 で、実験室 X 線では不要(通常 0)")
+        self.sh_l = _spin(inst.sh_l, 0.0, 0.4, 4, 0.002)
+        self.sh_l.setToolTip(
+            "Finger-Cox-Jephcoat の軸発散非対称 SH/L = S/L + H/L(GSAS-II の SH/L と同じ)。\n"
+            "試料の長さ S と受光スリットの高さ H を試料-検出器距離 L で割った和。実験室 X 線で 0.02〜0.06 程度"
+        )
+        f_prof.addRow("軸発散 SH/L", self.sh_l)
+        self._advanced_rows: list[tuple[QFormLayout, QWidget]] = [
+            (f_prof, self.p),
+            (f_prof, self.z),
+        ]
         right.addWidget(g_prof)
         right.addStretch(1)
 
@@ -189,10 +196,30 @@ class InstrumentDialog(QDialog):
         f_smp.addRow("ゴニオメータ半径 [mm]", self.radius)
         self.displacement = _spin(smp.displacement_mm, -5.0, 5.0, 4, 0.01)
         f_smp.addRow("試料高さずれ [mm] (BB)", self.displacement)
+        self.transparency = _spin(smp.transparency_mm, 0.0, 10.0, 3, 0.01)
+        self.transparency.setToolTip(
+            "透過補正の有効侵入深さ 1/μ_eff [mm]。0 で補正なし。軽い元素の平板試料で"
+        )
+        f_smp.addRow("透過 1/μ_eff [mm] (BB)", self.transparency)
+        self.rough_a = _spin(smp.roughness_a, 0.0, 1.0, 3, 0.01)
+        self.rough_a.setToolTip(
+            "Suortti の表面粗さ補正。1 で補正なし、小さいほど低角の強度が落ちる。\n"
+            "重い元素など吸収の強い平板試料で U_iso が負になるときに動かす(h0:sample:rough_a)"
+        )
+        f_smp.addRow("表面粗さ a (BB; 1 = なし)", self.rough_a)
+        self.rough_b = _spin(smp.roughness_b, 0.01, 10.0, 2, 0.1)
+        self.rough_b.setToolTip("表面粗さの角度依存の鋭さ b。a と相関が強いので通常は 1 に固定")
+        f_smp.addRow("表面粗さ b(詳細)", self.rough_b)
         self.mu_r = _spin(smp.mu_r, 0.0, 20.0, 3, 0.1)
         f_smp.addRow("円筒試料 μR (DS)", self.mu_r)
+        self._advanced_rows.append((f_smp, self.rough_b))
         left.addWidget(g_smp)
         left.addStretch(1)
+        self.show_advanced = QCheckBox("詳細な量も表示(P, Z, 表面粗さ b)")
+        self.show_advanced.toggled.connect(self._set_advanced_visible)
+        self.show_advanced.setChecked(inst.p != 0.0 or inst.z != 0.0 or smp.roughness_b != 1.0)
+        self._set_advanced_visible(self.show_advanced.isChecked())
+        layout.addWidget(self.show_advanced)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -201,6 +228,10 @@ class InstrumentDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
         fit_dialog_to_screen(self, self.buttons)
+
+    def _set_advanced_visible(self, flag: bool) -> None:
+        for form, widget in self._advanced_rows:
+            form.setRowVisible(widget, flag)
 
     def apply_preset_by_name(self, name: str) -> None:
         idx = self.preset.findText(name)
@@ -277,7 +308,7 @@ class InstrumentDialog(QDialog):
             self.use_kb.setChecked(False)
             self._set_target_from_wavelength(float(p["wavelength"]), neutron)
         self.pol.setValue(float(p["polarization"]))
-        for key in ("u", "v", "w", "x", "y", "s_l", "h_l"):
+        for key in ("u", "v", "w", "x", "y", "sh_l"):
             getattr(self, key).setValue(float(p[key]))
         self.geometry.setCurrentIndex(1 if p["geometry"] is GeometryKind.DEBYE_SCHERRER else 0)
 
@@ -295,14 +326,18 @@ class InstrumentDialog(QDialog):
         inst = CWInstrument(
             radiation=rad, zero=self.zero.value(), u=self.u.value(), v=self.v.value(), w=self.w.value(),
             p=self.p.value(), x=self.x.value(), y=self.y.value(), z=self.z.value(),
-            s_l=self.s_l.value(), h_l=self.h_l.value(), polarization=self.pol.value(),
+            s_l=0.5 * self.sh_l.value(), h_l=0.5 * self.sh_l.value(), polarization=self.pol.value(),
         )  # fmt: skip
-        smp = SampleGeometry(
+        smp = replace(
+            self._smp,
             kind=GeometryKind.DEBYE_SCHERRER
             if self.geometry.currentIndex() == 1
             else GeometryKind.BRAGG_BRENTANO,
             radius_mm=self.radius.value(),
             displacement_mm=self.displacement.value(),
+            transparency_mm=self.transparency.value(),
+            roughness_a=self.rough_a.value(),
+            roughness_b=self.rough_b.value(),
             mu_r=self.mu_r.value(),
         )
         return inst, smp
@@ -333,7 +368,7 @@ class RecipeDialog(QDialog):
         self.disp = QCheckBox(
             "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
         )
-        self.asym = QCheckBox("ピーク非対称 (S/L, H/L) を動かす")
+        self.asym = QCheckBox("ピーク非対称 (SH/L) を動かす")
         self.po = QCheckBox("選択配向 (March-Dollase) を動かす")
         self.rough = QCheckBox(
             "表面粗さを動かす(吸収の強い試料で U が負になるとき。Bragg-Brentano)"

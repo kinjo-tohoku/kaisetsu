@@ -163,7 +163,7 @@ Python: `requires-python >= 3.12`。ローカル開発は 3.14(全依存が解�
 ### Phase 2: 粉末パターン計算(フォワードモデル)
 
 - ピーク位置: Bragg 式 + ゼロ点 + 試料変位 + 透過補正。Kα1/Kα2 二重線(強度比はパラメータ)。
-- プロファイル: pseudo-Voigt → Thompson-Cox-Hastings 型(U,V,W,P / X,Y)→ Finger-Cox-Jephcoat 軸発散非対称(S/L, H/L)。
+- プロファイル: pseudo-Voigt → Thompson-Cox-Hastings 型(U,V,W,P / X,Y)→ Finger-Cox-Jephcoat 軸発散非対称(SH/L = S/L + H/L を 1 つの量として扱う)。
 - 強度補正: Lorentz-偏光(実験室: モノクロ偏光係数、放射光: 偏光度、中性子: Lorentz のみ)、March-Dollase 選択配向、円筒試料の吸収(中性子)、表面粗さ(Bragg-Brentano)。
 - バックグラウンド: Chebyshev 多項式、固定点補間、(将来)非晶質ハンプ。
 - 多相混合、スケール因子。ピークごとに ±N·FWHM の窓で積算(numba)。

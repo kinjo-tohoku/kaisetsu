@@ -412,13 +412,16 @@ def project_from_dict(d: dict[str, Any]) -> Project:
                 if key in pd:
                     setattr(pp, key, float(pd[key]))
     proj.build_parameters()
-    for name, pd in d.get("params", {}).items():
+    for name, pd in _migrate_param_names(dict(d.get("params", {}))).items():
         if name not in proj.params:
             continue
         p = proj.params[name]
-        p.value = float(pd["value"])
-        p.min = -math.inf if pd.get("min") is None else float(pd["min"])
-        p.max = math.inf if pd.get("max") is None else float(pd["max"])
+        if pd.get("value") is not None:
+            p.value = float(pd["value"])
+        if "min" in pd:
+            p.min = -math.inf if pd["min"] is None else float(pd["min"])
+        if "max" in pd:
+            p.max = math.inf if pd["max"] is None else float(pd["max"])
         p.step = float(pd.get("step", p.step))
         p.esd = pd.get("esd")
         if p.tie is None and not p.locked:
@@ -430,6 +433,24 @@ def project_from_dict(d: dict[str, Any]) -> Project:
     proj.params.apply_all()
     proj.log = list(d.get("log", []))
     return proj
+
+
+def _migrate_param_names(params: dict[str, Any]) -> dict[str, Any]:
+    """旧バージョンのパラメータ名を今の名前に直す(h*:inst:s_l, h_l → sh_l)。
+
+    値と上下限は装置の辞書(s_l, h_l)と現在の既定から決まるので、vary だけを引き継ぐ。
+    """
+    out: dict[str, Any] = {}
+    for name, pd in params.items():
+        if name.endswith((":inst:s_l", ":inst:h_l")):
+            new = name.rsplit(":", 1)[0] + ":sh_l"
+            if new in params:
+                continue
+            cur = out.setdefault(new, {"value": None, "vary": False})
+            cur["vary"] = bool(cur.get("vary")) or bool(pd.get("vary", False))
+            continue
+        out[name] = pd
+    return out
 
 
 _ARRAY_KEYS = ("x", "y", "weight", "r", "g", "dg")

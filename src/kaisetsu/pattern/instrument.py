@@ -68,6 +68,20 @@ class CWInstrument:
     h_l: float = 0.0
     polarization: float = 0.5
 
+    @property
+    def sh_l(self) -> float:
+        """FCJ 非対称の SH/L = S/L + H/L(GSAS-II と同じ 1 つの量)。
+
+        FCJ の式は S と H の入れ替えに対称で、S/L = H/L のときは両者の微分が一致して
+        同時には決められない(FAP の実データで相関 −1.000)。精密化では和だけを動かし、
+        内部では S/L = H/L = SH/L / 2 とする。
+        """
+        return self.s_l + self.h_l
+
+    @sh_l.setter
+    def sh_l(self, value: float) -> None:
+        self.s_l = self.h_l = 0.5 * float(value)
+
     # ------------------------------------------------------------------
     def fwhm_gauss(self, two_theta: npt.ArrayLike) -> FloatArray:
         th = np.radians(np.asarray(two_theta, dtype=np.float64) / 2.0)
@@ -139,7 +153,8 @@ class SampleGeometry:
         radius_mm: ゴニオメータ半径 [mm]
         displacement_mm: (BB) 試料高さずれ [mm]
         transparency_mm: (BB) 透過補正の有効侵入深さ 1/μ_eff [mm]。0 で補正なし
-        roughness_a, roughness_b: (BB) Suortti 表面粗さ
+        roughness_a, roughness_b: (BB) Suortti 表面粗さ。a = 1 で補正なし、小さいほど粗い。
+            b は角度依存の鋭さで、a と相関が強い(FAP で −0.997)ので通常 1 に固定する
         displace_x_mm, displace_y_mm: (DS) 試料位置ずれ [mm]
         mu_r: (DS) 円筒試料の μR
     """
@@ -148,11 +163,17 @@ class SampleGeometry:
     radius_mm: float = 200.0
     displacement_mm: float = 0.0
     transparency_mm: float = 0.0
-    roughness_a: float = 0.0
-    roughness_b: float = 0.0
+    roughness_a: float = 1.0
+    roughness_b: float = 1.0
     displace_x_mm: float = 0.0
     displace_y_mm: float = 0.0
     mu_r: float = 0.0
+
+    def __post_init__(self) -> None:
+        # 旧来の「a = b = 0 で補正なし」は a = b = 1 に読み替える(a の微分が 0 にならないように)
+        if self.roughness_a == 0.0 and self.roughness_b == 0.0:
+            self.roughness_a = 1.0
+            self.roughness_b = 1.0
 
     def position_shift(self, two_theta: npt.ArrayLike) -> FloatArray:
         """試料に由来するピークシフト Δ2θ [deg]。"""

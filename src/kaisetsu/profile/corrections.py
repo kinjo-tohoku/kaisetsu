@@ -234,9 +234,16 @@ def sabine_extinction(
 
 
 def surface_roughness_suortti(a: float, b: float, two_theta: npt.ArrayLike) -> FloatArray:
-    """Suortti の表面粗さ補正(Bragg-Brentano)。a = b = 0 で 1。"""
+    """Suortti の表面粗さ補正(Bragg-Brentano)。
+
+    f(θ) = [a + (1 − a) exp(−b / sinθ)] / [a + (1 − a) exp(−b)]
+    a = 1(または a = b = 0)で補正なし。a が小さいほど低角の強度が落ちる。
+    b は角度依存の鋭さで、a と強く相関するので通常は 1 に固定して a だけ動かす。
+
+    出典: P. Suortti, J. Appl. Cryst. 5, 325-331 (1972)。GSAS-II の SurfRoughA/B と同じ式
+    """
     tt = np.asarray(two_theta, dtype=np.float64)
-    if a == 0.0 and b == 0.0:
+    if a == 1.0 or (a == 0.0 and b == 0.0):
         return np.ones_like(tt)
     sth = np.sin(np.radians(tt / 2.0))
     t1 = np.exp(-b / sth)

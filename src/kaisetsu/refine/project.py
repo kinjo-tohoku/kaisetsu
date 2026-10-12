@@ -15,7 +15,7 @@
 パラメータ名の規則:
     {相}:cell:{a|b|c|alpha|beta|gamma}      格子定数
     {相}:{サイト}:{x|y|z|occ|uiso|u11..u23}  原子
-    h{i}:inst:{zero|u|v|w|p|x|y|z|s_l|h_l|pol|kb_ratio}  装置(kb_ratio は Kβ の強度比)
+    h{i}:inst:{zero|u|v|w|x|y|sh_l|pol|kb_ratio}  装置(詳細: p, z。kb_ratio は Kβ の強度比)
     h{i}:inst:{difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z}  TOF 装置
     h{i}:sample:{displacement|transparency|rough_a|rough_b|disp_x|disp_y|mu_r}  試料
     h{i}:bkg:{k}                           バックグラウンド係数(Chebyshev または固定点の高さ)
@@ -804,14 +804,14 @@ class Project:
             ("u", "u", 1e-5, -10.0, 10.0, "deg²", "ガウス幅 U (tan²θ)"),
             ("v", "v", 1e-5, -10.0, 10.0, "deg²", "ガウス幅 V (tanθ)"),
             ("w", "w", 1e-5, -1.0, 10.0, "deg²", "ガウス幅 W"),
-            ("p", "p", 1e-5, -1.0, 10.0, "deg²", "ガウス幅 P (1/cos²θ)"),
+            ("p", "p", 1e-5, -1.0, 10.0, "deg²", "ガウス幅 P (1/cos²θ)(詳細。通常は 0)"),
             ("x", "x", 1e-4, -1.0, 5.0, "deg", "ローレンツ幅 X (tanθ, 歪み)"),
             ("y", "y", 1e-4, -1.0, 5.0, "deg", "ローレンツ幅 Y (1/cosθ, サイズ)"),
-            ("z", "z", 1e-4, -1.0, 5.0, "deg", "ローレンツ幅 Z (定数)"),
-            ("s_l", "s_l", 1e-4, 0.0, 0.2, "", "軸発散 S/L"),
-            ("h_l", "h_l", 1e-4, 0.0, 0.2, "", "軸発散 H/L"),
+            ("z", "z", 1e-4, -1.0, 5.0, "deg", "ローレンツ幅 Z (定数、詳細。通常は不要)"),
+            ("sh_l", "sh_l", 1e-4, 0.0, 0.4, "", "軸発散 SH/L (= S/L + H/L、FCJ 非対称)"),
             ("pol", "polarization", 1e-3, 0.0, 1.0, "", "偏光係数"),
         ]
+        advanced = {"p": 0.0, "z": 0.0}  # 詳細扱い(この値なら表に出さない)
         for nm, attr, step, lo, hi, unit, desc in spec:
             ps.add(
                 Parameter(
@@ -823,6 +823,8 @@ class Project:
                     setter=_attr_setter(inst, attr),
                     unit=unit,
                     description=desc,
+                    advanced=nm in advanced,
+                    neutral_value=advanced.get(nm),
                 )
             )
         if inst.radiation.wavelength3 is not None:
@@ -846,8 +848,8 @@ class Project:
         sspec: list[tuple[str, str, float, float, float, str, str]] = [
             ("displacement", "displacement_mm", 1e-4, -5.0, 5.0, "mm", "試料高さずれ (BB)"),
             ("transparency", "transparency_mm", 1e-3, 0.0, 10.0, "mm", "透過補正 1/μ_eff (BB)"),
-            ("rough_a", "roughness_a", 1e-3, 0.0, 1.0, "", "表面粗さ A (Suortti)"),
-            ("rough_b", "roughness_b", 1e-3, 0.0, 10.0, "", "表面粗さ B (Suortti)"),
+            ("rough_a", "roughness_a", 1e-3, 0.0, 1.0, "", "表面粗さ a (1 = なし、小さいほど粗い)"),
+            ("rough_b", "roughness_b", 1e-2, 0.01, 10.0, "", "表面粗さ b (詳細。通常 1 に固定)"),
             ("disp_x", "displace_x_mm", 1e-4, -5.0, 5.0, "mm", "試料位置ずれ x (DS)"),
             ("disp_y", "displace_y_mm", 1e-4, -5.0, 5.0, "mm", "試料位置ずれ y (DS)"),
             (
@@ -871,6 +873,7 @@ class Project:
                     setter=_attr_setter(smp, attr),
                     unit=unit,
                     description=desc,
+                    advanced=nm == "rough_b",
                 )
             )
         scale_y = float(np.mean(np.abs(h.data.y))) + 1e-6
@@ -1514,7 +1517,7 @@ class Project:
             if tail in adp_tags and p.value < -1e-6:
                 notes.append(
                     f"{p.name} が負({p.value:.4f} Å²)です。平板試料(Bragg-Brentano)なら"
-                    "表面粗さ(sample:rough_a, rough_b)を、キャピラリなら吸収 μR を動かして"
+                    "表面粗さ(sample:rough_a)を、キャピラリなら吸収 μR を動かして"
                     "みてください。背景が高すぎる、偏光係数が合っていないときにも起こります。"
                 )
             elif tail in adp_tags and p.value > 0.1:

@@ -83,6 +83,15 @@ class Recipe:
         return results
 
 
+def _is_phase_param(project: Project, p: Parameter) -> bool:
+    """相のパラメータ(名前の先頭が相の名前)だけに絞る。
+
+    phase='*' のとき `*:*:z` が装置の `h0:inst:z`(X, Y, Z)にも一致してしまい、
+    「原子座標」の段階で装置のローレンツ幅まで動いていた。
+    """
+    return p.name.split(":", 1)[0] in project.phases
+
+
 def _occupancy_is_refinable(project: Project, p: Parameter) -> bool:
     """占有率を動かす価値があるサイトか。
 
@@ -90,9 +99,17 @@ def _occupancy_is_refinable(project: Project, p: Parameter) -> bool:
     発散や巨大な esd の原因になる。部分占有(値 < 1)か、混合サイトの主パラメータ
     (他のサイトの占有率がこれに従属している)だけを動かす。
     """
+    if not _is_phase_param(project, p):
+        return False
     if p.value < 1.0 - 1e-6:
         return True
     return any(q.tie is not None and p.name in q.tie.masters for q in project.params)
+
+
+def _is_phase_or_pdf_param(project: Project, p: Parameter) -> bool:
+    """相のパラメータか PDF データセット(g*)のパラメータ(粉末ヒストグラムの h* は除く)。"""
+    head = p.name.split(":", 1)[0]
+    return head in project.phases or (head.startswith("g") and head[1:].isdigit())
 
 
 def _is_bragg_brentano(project: Project, p: Parameter) -> bool:
@@ -137,9 +154,10 @@ def standard_recipe(
         coordinates, adp, occupancy: 構造パラメータを動かすか
         sample_displacement: ゼロ点の代わりに試料変位を動かす(Bragg-Brentano では高さずれ、
             Debye-Scherrer では x, y ずれ)。平板試料では推奨
-        asymmetry: 軸発散 S/L, H/L を動かす
+        asymmetry: 軸発散 SH/L(FCJ 非対称)を動かす
         preferred_orientation: March-Dollase r を動かす
-        roughness: 表面粗さ(Suortti)を動かす。Bragg-Brentano のヒストグラムだけに適用。
+        roughness: 表面粗さ(Suortti の a。b は 1 に固定)を動かす。Bragg-Brentano の
+            ヒストグラムだけに適用。
             吸収の強い試料で変位パラメータが負になるときに有効
     """
     r = Recipe("標準")
@@ -166,11 +184,16 @@ def standard_recipe(
         15,
     )
     if asymmetry:
-        r.add("非対称", [f"{hist}:inst:s_l", f"{hist}:inst:h_l"], 10)
+        r.add("非対称", [f"{hist}:inst:sh_l"], 10)
     if preferred_orientation:
         r.add("選択配向", [f"{hist}:{phase}:md_r"], 10)
     if coordinates:
-        r.add("原子座標", [f"{phase}:*:x", f"{phase}:*:y", f"{phase}:*:z"], 15)
+        r.add(
+            "原子座標",
+            [f"{phase}:*:x", f"{phase}:*:y", f"{phase}:*:z"],
+            15,
+            filter=_is_phase_param,
+        )
     if adp:
         r.add(
             "変位パラメータ",
@@ -184,11 +207,12 @@ def standard_recipe(
                 f"{phase}:*:u23",
             ],
             20,
+            filter=_is_phase_param,
         )
     if roughness:
         r.add(
             "表面粗さ",
-            [f"{hist}:sample:rough_a", f"{hist}:sample:rough_b"],
+            [f"{hist}:sample:rough_a"],
             15,
             filter=_is_bragg_brentano,
         )
@@ -246,7 +270,7 @@ def pdf_recipe(
     if delta1:
         width.append(f"{dataset}:{phase}:delta1")
     if width:
-        r.add("ピーク幅(変位パラメータ、δ)", width, 15)
+        r.add("ピーク幅(変位パラメータ、δ)", width, 15, filter=_is_phase_or_pdf_param)
     inst = []
     if qdamp:
         inst.append(f"{dataset}:pdf:qdamp")
@@ -257,7 +281,12 @@ def pdf_recipe(
     if spdiameter:
         r.add("粒子径", [f"{dataset}:{phase}:spdiameter"], 10)
     if coordinates:
-        r.add("原子座標", [f"{phase}:*:x", f"{phase}:*:y", f"{phase}:*:z"], 15)
+        r.add(
+            "原子座標",
+            [f"{phase}:*:x", f"{phase}:*:y", f"{phase}:*:z"],
+            15,
+            filter=_is_phase_param,
+        )
     if occupancy:
         r.add("占有率", [f"{phase}:*:occ"], 10, filter=_occupancy_is_refinable)
     r.add("最終(全パラメータ)", [], 30)
