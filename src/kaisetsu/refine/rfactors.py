@@ -95,6 +95,20 @@ def structure_rfactor(f2_obs: npt.ArrayLike, f2_calc: npt.ArrayLike) -> float:
     return float(np.sum(np.abs(fo - fc)) / s) if s > 0 else float("nan")
 
 
+#: 分配に使う点の条件: 反射自身の寄与がその最大値のこの割合以上(擬 Voigt の ±3.5 FWHM 程度)
+PARTITION_CORE_FRACTION = 1e-2
+
+
+def _partition_mask(
+    nc: FloatArray, c: FloatArray, floor: float, core_fraction: float
+) -> npt.NDArray[np.bool_]:
+    """分配に使う点(計算の正味強度が正で、反射自身の寄与が中心部に近い点)。"""
+    ok = nc > floor
+    if core_fraction > 0 and len(c):
+        ok &= c > core_fraction * float(np.max(c))
+    return np.asarray(ok)
+
+
 def partition_intensities(
     y_obs: FloatArray,
     y_calc: FloatArray,
@@ -102,6 +116,7 @@ def partition_intensities(
     windows: list[tuple[int, int]],
     contributions: list[FloatArray],
     i_calc: FloatArray,
+    core_fraction: float = PARTITION_CORE_FRACTION,
 ) -> FloatArray:
     """Rietveld 分配による "観測" 積分強度(Hill & Howard 1987 / Rietveld 1969)。
 
@@ -110,22 +125,33 @@ def partition_intensities(
 
     c_k(i) は反射 k の点 i への寄与(I_calc,k × プロファイル)。
 
+    和は反射自身の寄与が最大値の `core_fraction` 以上の点(擬 Voigt なら中心から
+    ±3.5 FWHM ほど)に限り、Σ c_k もその範囲で取る。ピークの計算窓(低角側 50 幅、
+    高角側 75 幅)の裾まで含めると、孤立した反射では c_k / Σ c_k' ≈ 1 なので窓の中の
+    背景の誤差がそのまま強度に乗る。放射光データ(FWHM 0.025°、窓 4°)の Le Bail で
+    弱い反射が数倍に膨らみ Rwp が Rietveld より悪くなった(opXRD 794: 12.6% → 6.8%)。
+    core_fraction = 0 で従来どおり窓全体を使う。
+
     Args:
         windows: 反射ごとの (開始, 終了) 添字
         contributions: 反射ごとの寄与配列(窓内)
         i_calc: 反射ごとの計算積分強度(窓内寄与の面積)
+        core_fraction: 分配に使う点の、反射自身の寄与の下限(最大値に対する割合)
     """
     net_obs = y_obs - y_bkg
     net_calc = y_calc - y_bkg
     out = np.zeros(len(windows))
+    floor = 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
     for k, ((i0, i1), c) in enumerate(zip(windows, contributions, strict=True)):
         nc = net_calc[i0:i1]
-        ok = nc > 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
-        ratio = np.zeros_like(nc)
-        ratio[ok] = net_obs[i0:i1][ok] / nc[ok]
-        frac = float(np.sum(c * ratio))
-        total = float(np.sum(c))
-        out[k] = i_calc[k] * frac / total if total > 0 else 0.0
+        ok = _partition_mask(nc, c, floor, core_fraction)
+        total = float(np.sum(c[ok]))
+        if total <= 0:
+            # 使える点がない(窓がデータの外、または計算強度 0)なら計算値のまま
+            out[k] = i_calc[k] if len(c) and not ok.any() and np.sum(c) > 0 else 0.0
+            continue
+        frac = float(np.sum(c[ok] * net_obs[i0:i1][ok] / nc[ok]))
+        out[k] = i_calc[k] * frac / total
     return out
 
 
@@ -136,6 +162,7 @@ def partition_uncertainties(
     windows: list[tuple[int, int]],
     contributions: list[FloatArray],
     i_calc: FloatArray,
+    core_fraction: float = PARTITION_CORE_FRACTION,
 ) -> FloatArray:
     """Rietveld 分配した "観測" 積分強度の標準偏差。
 
@@ -146,16 +173,17 @@ def partition_uncertainties(
 
     Args:
         sigma_y: 観測点の標準偏差(重み 0 の点は inf でよい)
+        core_fraction: `partition_intensities` と同じ(同じ点を使う)
     """
     net_calc = y_calc - y_bkg
     out = np.zeros(len(windows))
     floor = 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
     for k, ((i0, i1), c) in enumerate(zip(windows, contributions, strict=True)):
         nc = net_calc[i0:i1]
-        total = float(np.sum(c))
+        ok = _partition_mask(nc, c, floor, core_fraction)
+        total = float(np.sum(c[ok]))
         if total <= 0:
             continue
-        ok = nc > floor
         s = sigma_y[i0:i1]
         finite = ok & np.isfinite(s)
         coef = np.zeros_like(nc)

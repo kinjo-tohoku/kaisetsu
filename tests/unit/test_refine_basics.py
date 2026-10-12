@@ -155,3 +155,24 @@ def test_partition_intensities_recovers_scaled_peaks() -> None:
     y_obs = bkg + 1.5 * (c1 + c2)
     i_obs = partition_intensities(y_obs, y_calc, bkg, [(0, len(x)), (0, len(x))], [c1, c2], i_calc)
     assert np.allclose(i_obs, 1.5 * i_calc)
+
+
+def test_partition_ignores_background_misfit_in_far_tails() -> None:
+    """窓の裾に背景の誤差があっても、分配強度は中心部で決まる(Le Bail の強度の膨らみ防止)。"""
+    x = np.linspace(-2.0, 2.0, 2001)
+    fwhm = 0.02  # 放射光並みに鋭いピーク、窓 4°(= 200 FWHM)
+    prof = 1.0 / (1.0 + (2.0 * x / fwhm) ** 2)  # ローレンツ
+    prof /= prof.sum()
+    i_true = 1.0e5  # ピーク高さ ~6400
+    bkg = np.full_like(x, 100.0)
+    y_obs = bkg + i_true * prof + 20.0  # 背景が一様に 20 カウント(高さの 0.3%)ずれている
+    c = 0.5 * i_true * prof  # 計算強度は真の半分
+    y_calc = bkg + c
+    i_calc = np.array([0.5 * i_true])
+    i_core = partition_intensities(y_obs, y_calc, bkg, [(0, len(x))], [c], i_calc)
+    i_full = partition_intensities(
+        y_obs, y_calc, bkg, [(0, len(x))], [c], i_calc, core_fraction=0.0
+    )
+    # 窓全体では 20 カウント × 2001 点 = 4e4 がそのまま乗る(+40%)
+    assert i_full[0] > 1.3 * i_true
+    assert abs(i_core[0] - i_true) < 0.05 * i_true
