@@ -41,6 +41,29 @@ a = Analysis(  # noqa: F821
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore"],
     noarchive=False,
 )
+
+
+def _keep_data(entry: tuple) -> bool:
+    """tests ディレクトリと極端に長い名前のファイルは同梱しない。
+
+    numba / scipy / matplotlib のテストデータで 100 MB 近く減る。pyqtgraph の
+    "CC0 legal code - applies to ..." は名前が長く、深いフォルダに入れると Windows の
+    パス長 260 文字を超えてインストールが失敗する(CC0 なので同梱義務は無い)。
+    """
+    dest = str(entry[0]).replace("\\", "/")
+    parts = dest.split("/")
+    if "tests" in parts[:-1] or "test" in parts[:-1]:
+        return False
+    return len(parts[-1]) <= 60
+
+
+def _keep_module(entry: tuple) -> bool:
+    name = str(entry[0])
+    return ".tests." not in name and not name.endswith(".tests") and ".tests" not in name
+
+
+a.datas = [e for e in a.datas if _keep_data(e)]
+a.pure = [e for e in a.pure if _keep_module(e)]
 pyz = PYZ(a.pure)  # noqa: F821
 
 exe = EXE(  # noqa: F821
