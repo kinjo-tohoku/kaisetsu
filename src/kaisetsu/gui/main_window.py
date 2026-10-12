@@ -298,6 +298,15 @@ class MainWindow(QMainWindow):
         m_ref.addSeparator()
         self._add_action(m_ref, tr("すべて固定(&F)"), self.fix_all)
         self._add_action(m_ref, tr("結果の要約を表示(&U)"), self.show_summary)
+        self.act_width_penalty = self._add_action(
+            m_ref, tr("ピーク幅が負にならないよう拘束する(罰則)"), self._toggle_width_penalty
+        )
+        self.act_width_penalty.setCheckable(True)
+        self.act_width_penalty.setToolTip(
+            "U, V, W(X, Y, Z、TOF の σ²)の組み合わせがデータ範囲で負にならないように精密化します。\n"
+            "既定では GSAS-II と同じく負の範囲はその成分を 0 として計算し、結果の要約で知らせます。\n"
+            "拘束すると Rwp が悪くなることがあります(装置の特性として意味のある U, V, W が要るとき用)"
+        )
         m_ref.addSeparator()
         self.act_mem = self._add_action(m_ref, tr("MEM 電子密度 / 核密度(&M)…"), self.run_mem)
 
@@ -466,6 +475,7 @@ class MainWindow(QMainWindow):
         self.structure_dock.setWindowTitle(f"構造: {name}")
 
     def _refresh_all(self) -> None:
+        self.act_width_penalty.setChecked(bool(self.project.penalize_negative_widths))
         self._refresh_tree()
         self._refresh_params()
         self._refresh_plot()
@@ -984,6 +994,16 @@ class MainWindow(QMainWindow):
             + ("、".join(f"{a:g}〜{b:g}" for a, b in h.excluded) or "なし")
         )
         self._refresh_all()
+
+    def _toggle_width_penalty(self, _checked: bool = False) -> None:
+        flag = self.act_width_penalty.isChecked()
+        self.project.penalize_negative_widths = flag
+        self.log(
+            "ピーク幅が負にならない拘束を"
+            + ("有効" if flag else "無効")
+            + "にしました"
+            + ("(次の精密化から)" if flag else "")
+        )
 
     def _current_histogram(self) -> tuple[int, HistogramEntry] | None:
         if not self.project.histograms or self.current_view != "hist":

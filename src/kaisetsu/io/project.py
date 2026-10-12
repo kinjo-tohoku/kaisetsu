@@ -309,6 +309,7 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
         "histograms": hists,
         "pdf_datasets": pdfs,
         "params": params,
+        "penalize_negative_widths": bool(proj.penalize_negative_widths),
         "log": list(proj.log),
     }
 
@@ -432,6 +433,7 @@ def project_from_dict(d: dict[str, Any]) -> Project:
     proj.params.evaluate_ties()
     proj.params.apply_all()
     proj.log = list(d.get("log", []))
+    proj.penalize_negative_widths = bool(d.get("penalize_negative_widths", False))
     return proj
 
 

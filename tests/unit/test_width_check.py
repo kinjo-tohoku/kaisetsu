@@ -83,14 +83,19 @@ def test_width_violations_reports_range(data_dir: Path) -> None:
     assert "Γ_L" in v[0].message()
 
 
-def test_width_violations_near_zero_counts_as_boundary(data_dir: Path) -> None:
+def test_width_violations_only_flags_negative(data_dir: Path) -> None:
+    """放射光では Γ_L が 0.002° 程度でも正当なので、「小さい」だけでは警告しない。"""
     proj = _project(data_dir, _good())
     inst = proj.histograms[0].instrument
     assert isinstance(inst, CWInstrument)
-    inst.u, inst.v, inst.w = 0.0, 0.0, 0.5 * G2_TOL
+    inst.u, inst.v, inst.w = 0.0, 0.0, 1e-7
+    inst.x, inst.y, inst.z = 0.0, 0.0, 1e-4
+    assert G2_TOL == 0.0
+    assert width_violations(proj) == []
+    assert np.all(width_penalty(proj) == 0.0)
+    inst.w = -1e-9
     v = width_violations(proj)
-    assert len(v) == 1 and v[0].lo == pytest.approx(20.0, abs=0.1)
-    assert np.all(width_penalty(proj) == 0.0)  # 正なので罰則は無い
+    assert len(v) == 1 and v[0].kind == "gauss" and v[0].lo == pytest.approx(20.0, abs=0.1)
 
 
 def test_tof_sigma2_violation() -> None:
@@ -120,6 +125,7 @@ def test_refine_keeps_gauss_width_nonnegative(data_dir: Path) -> None:
     inst.u = -0.02  # 60° で Γ_G² < 0 になる出発点
     proj = _project(data_dir, inst)
     assert width_violations(proj)
+    proj.penalize_negative_widths = True
     proj.vary("h0:bkg:*", "h0:PbSO4:scale", "h0:inst:u", "h0:inst:v", "h0:inst:w")
     proj.refine(max_cycles=15)
     xs = np.linspace(20.0, 60.0, 400)
@@ -131,9 +137,12 @@ def test_refine_keeps_gauss_width_nonnegative(data_dir: Path) -> None:
     assert proj.last_fit.n_data == int(np.count_nonzero(proj.histograms[0].mask()))
 
 
-def test_penalty_can_be_disabled(data_dir: Path) -> None:
+def test_penalty_is_off_by_default_and_can_be_enabled(data_dir: Path) -> None:
+    """既定は GSAS-II と同じ(負の範囲はその成分を 0 として計算)。拘束は任意。"""
     proj = _project(data_dir, _good())
-    assert proj.n_penalty_rows() == 64
-    proj.penalize_negative_widths = False
+    assert not proj.penalize_negative_widths
     assert proj.n_penalty_rows() == 0
     assert len(proj.residuals_with_penalty()) == len(proj.residuals())
+    proj.penalize_negative_widths = True
+    assert proj.n_penalty_rows() == 64
+    assert len(proj.residuals_with_penalty()) == len(proj.residuals()) + 64

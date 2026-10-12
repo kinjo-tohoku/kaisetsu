@@ -1273,8 +1273,10 @@ class Project:
         g.result = res
         return res
 
-    #: 真なら精密化でピーク幅が負になる領域に罰則をかける(`kaisetsu.refine.width_check`)
-    penalize_negative_widths: bool = True
+    #: 真なら精密化でピーク幅(Γ_G², Γ_L, TOF σ²)が負にならないよう罰則で拘束する
+    #: (`kaisetsu.refine.width_check`)。既定は偽: GSAS-II と同じく負の範囲はその成分を 0 と
+    #: して計算し、diagnostics で知らせる。拘束すると Rwp が悪くなることがある(PbSO4 で 9.9→14%)
+    penalize_negative_widths: bool = False
 
     def jacobian(self, base: FloatArray | None = None, *, with_penalty: bool = False) -> FloatArray:
         """現在のパラメータでの残差ヤコビアン(半解析的)。base は直近の残差。

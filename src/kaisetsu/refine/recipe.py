@@ -95,11 +95,12 @@ class Recipe:
         res: FitResult,
         iteration_progress: Callable[[int, float], None] | None,
     ) -> FitResult:
-        """ガウス幅 Γ_G² が負(境界)になったら、段階の前の値に戻して U を固定しやり直す。
+        """ガウス幅 Γ_G² が負になったら、段階の前の値に戻して U を固定しやり直す。
 
-        罰則のおかげで解は境界(Γ_G² = 0)で止まるが、データの端でガウス幅が 0 という装置は
-        不自然なので、初心者がボタン一つで物理的に妥当な結果を得られるように U を固定する
-        (U < 0 が負の原因であることがほとんど)。
+        負の範囲はガウス成分を 0 として計算される(GSAS-II と同じ)ので精密化は通るが、
+        U < 0 に流れていく解は装置の特性として意味を失う。U を初期値に固定しても Rwp は
+        ほとんど変わらない(PbSO4 9.88 → 9.86%、LaB6 は同じ)ので、初心者向けに固定する。
+        それでも V, W の組み合わせで負が残ることはあり、その場合は diagnostics が知らせる。
         """
         from kaisetsu.refine.width_check import width_violations
 
@@ -118,8 +119,8 @@ class Recipe:
         for name in fixed:
             project.fix(name)
         project.log.append(
-            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅 Γ_G² がデータの端で負になったので "
-            f"{', '.join(fixed)} を固定してやり直します"
+            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅 Γ_G² がデータの一部で負になった"
+            f"ので {', '.join(fixed)} を段階前の値に固定してやり直します"
         )
         return project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
 
