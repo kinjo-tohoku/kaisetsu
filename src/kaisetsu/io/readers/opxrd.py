@@ -7,6 +7,10 @@ JSON 文字列で書いたもので、phases(各相も JSON 文字列: lattice "
 xray_info {primary_wavelength, secondary_wavelength}、is_simulated、temp_K が入る。
 構造ラベルは空間群なしの全原子セルなので、Rietveld 法に使うときは
 `kaisetsu.crystal.symmetry.find_symmetry` で対称性を見つけて非対称単位に戻す。
+混合サイト(Ti/Nb など)は同じ位置に別の元素が占有率 1 で重なった形で入っている(元の CIF の
+占有率が失われている)ので、重なった原子は占有率を等分にし、`mixed_sites` に記録する
+(CNRS の 13 本中 4 本にあった。Sr(Ti,Nb)O3 で重なったままだと 111 反射が消え、Sr の
+U_iso が負になる)。
 
 出典: D. Hollarek et al., "opXRD: Open Experimental Powder X-ray Diffraction Database",
       arXiv:2503.05577 (2025)、Zenodo 10.5281/zenodo.15298026。
@@ -43,6 +47,8 @@ class OpxrdPattern:
     institution: str = ""
     contributor: str = ""
     original_format: str = ""
+    #: 同じ位置に重なっていた元素の組(占有率を等分した)
+    mixed_sites: list[list[str]] = field(default_factory=list)
 
 
 def is_opxrd(head: str) -> bool:
@@ -69,6 +75,33 @@ def _float(v: Any) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _split_coincident(sites: list[AtomSite], lattice: Lattice, tol: float = 0.1) -> list[list[str]]:
+    """同じ位置(tol [Å] 以内)の原子の占有率を等分する。重なった元素の組を返す。"""
+    m = lattice.orthogonalization_matrix
+    groups: list[list[int]] = []
+    assigned: dict[int, int] = {}
+    for i in range(len(sites)):
+        for j in range(i):
+            d = sites[i].position - sites[j].position
+            d -= np.round(d)
+            if float(np.linalg.norm(m @ d)) < tol:
+                g = assigned.get(j)
+                if g is None:
+                    groups.append([j])
+                    g = len(groups) - 1
+                    assigned[j] = g
+                groups[g].append(i)
+                assigned[i] = g
+                break
+    out: list[list[str]] = []
+    for grp in groups:
+        if sum(sites[k].occupancy for k in grp) > 1.0 + 1e-6:
+            for k in grp:
+                sites[k].occupancy = 1.0 / len(grp)
+            out.append([sites[k].species for k in grp])
+    return out
 
 
 def _structure_from_phase(ph: dict[str, Any], name: str) -> Structure | None:
@@ -105,11 +138,14 @@ def _structure_from_phase(ph: dict[str, Any], name: str) -> Structure | None:
             )
     if not sites:
         return None
+    mixed = _split_coincident(sites, lattice)
     spg = ph.get("spacegroup")
     # basis は常に全原子セル(pymatgen Structure 由来)なので、空間群番号があっても P1 で持ち、
     # 対称性は find_symmetry で求める
     _ = spg
-    return Structure(lattice, SpaceGroup.from_number(1), sites, name=name)
+    st = Structure(lattice, SpaceGroup.from_number(1), sites, name=name)
+    st.mixed_sites = mixed  # type: ignore[attr-defined]
+    return st
 
 
 def read_opxrd(path: str | Path) -> OpxrdPattern:
@@ -126,12 +162,14 @@ def read_opxrd(path: str | Path) -> OpxrdPattern:
     lam1 = _float(xi.get("primary_wavelength"))
     lam2 = _float(xi.get("secondary_wavelength"))
     structures: list[Structure] = []
+    mixed_all: list[list[str]] = []
     for k, ph_raw in enumerate(label.get("phases") or []):
         ph = _loads(ph_raw)
         if isinstance(ph, dict):
             st = _structure_from_phase(ph, name=f"{p.stem}_phase{k + 1}" if k else p.stem)
             if st is not None:
                 structures.append(st)
+                mixed_all += getattr(st, "mixed_sites", [])
     md: dict[str, object] = {
         "format": "opXRD",
         "institution": meta.get("institution") or "",
@@ -143,6 +181,8 @@ def read_opxrd(path: str | Path) -> OpxrdPattern:
         md["wavelength"] = lam1
     if lam2:
         md["wavelength2"] = lam2
+    if mixed_all:
+        md["mixed_sites"] = ["/".join(g) for g in mixed_all]
     data = PowderData(x, y, name=p.stem, metadata=md)
     sim = label.get("is_simulated")
     return OpxrdPattern(
@@ -155,6 +195,7 @@ def read_opxrd(path: str | Path) -> OpxrdPattern:
         institution=str(md["institution"]),
         contributor=str(md["contributor"]),
         original_format=str(md["original_format"]),
+        mixed_sites=mixed_all,
     )
 
 

@@ -134,3 +134,23 @@ def test_read_opxrd(tmp_path: Path) -> None:
     # 共通の読み込み口でもデータだけ読める
     d = read_powder_data(p)
     assert d.metadata.get("format") == "opXRD" and len(d.x) == 3500
+
+
+def test_read_opxrd_mixed_site(tmp_path: Path) -> None:
+    """同じ位置に Ti と Nb が占有率 1 で重なっていたら、等分にして記録する。"""
+    p = _write_opxrd(tmp_path / "pattern_1.json")
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    label = json.loads(raw["label"])
+    phase = json.loads(label["phases"][0])
+    sites = json.loads(phase["basis"])
+    sites.append(json.dumps({"x": 0.5, "y": 0.5, "z": 0.5, "occupancy": 1, "symbol": "Nb0+"}))
+    phase["basis"] = json.dumps(sites)
+    label["phases"] = [json.dumps(phase)]
+    raw["label"] = json.dumps(label)
+    p.write_text(json.dumps(raw), encoding="utf-8")
+    pat = read_opxrd(p)
+    st = pat.structures[0]
+    occ = {s.species: s.occupancy for s in st.sites}
+    assert occ == {"Na": 1.0, "Cl": 0.5, "Nb": 0.5}
+    assert pat.mixed_sites == [["Cl", "Nb"]]
+    assert pat.data.metadata["mixed_sites"] == ["Cl/Nb"]
