@@ -6,7 +6,9 @@ import zipfile
 from pathlib import Path
 
 from kaisetsu.io.readers.bruker import is_bruker_raw, read_bruker_raw
+from kaisetsu.io.readers.fullprof import detect_fullprof, read_fullprof
 from kaisetsu.io.readers.gsas import gsas_bank_count, is_gsas_file, read_gsas
+from kaisetsu.io.readers.rietan import is_rietan_block, read_rietan_block
 from kaisetsu.io.readers.vendors import is_ras_text, read_ras, read_rasx, read_xrdml
 from kaisetsu.io.readers.xy import read_xy
 from kaisetsu.pattern.histogram import PowderData
@@ -14,7 +16,7 @@ from kaisetsu.pattern.histogram import PowderData
 SUPPORTED_EXTENSIONS = (
     ".xy", ".xye", ".dat", ".txt", ".csv", ".asc",
     ".gsa", ".gsas", ".fxye", ".raw", ".xra", ".cwn",
-    ".ras", ".rasx", ".xrdml",
+    ".ras", ".rasx", ".xrdml", ".int", ".histogramigor",
 )  # fmt: skip
 
 
@@ -35,6 +37,9 @@ def read_powder_data(path: str | Path, **kwargs: object) -> PowderData:
         - Bruker / Siemens DIFFRAC .raw(バイナリ。RAW1.01 は実ファイルで確認済み)
         - Rigaku .ras(テキスト)、.rasx(zip)
         - PANalytical / Malvern Panalytical .xrdml
+        - RIETAN-FP の .int(GENERAL / IGOR / GSAS 形式と「点数 開始角 刻み」形式)
+        - FullProf の自由形式(開始角 刻み 終了角 + 強度)、D1A/D2B の検出器数と強度の組
+        - Z-Rietveld の .histogramIgor(IGOR テキスト。TOF は 4 列目の計数を無視)
 
     kwargs は形式ごとの選択肢(GSAS: bank=、Bruker: scan=)に渡す。
     """
@@ -56,4 +61,8 @@ def read_powder_data(path: str | Path, **kwargs: object) -> PowderData:
         return read_xrdml(p)
     if is_gsas_file(p):
         return read_gsas(p, **kwargs)  # type: ignore[arg-type]
+    if is_rietan_block(head):
+        return read_rietan_block(p)
+    if detect_fullprof(head) is not None:
+        return read_fullprof(p)
     return read_xy(p)

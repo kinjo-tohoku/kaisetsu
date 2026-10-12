@@ -934,6 +934,8 @@ class Project:
             )
         for pname, pc in h.contributions.items():
             ppre = f"{pre}:{pname}"
+            phase_entry = self.phases.get(pname)
+            extracted = phase_entry is not None and (phase_entry.le_bail or phase_entry.pawley)
             ps.add(
                 Parameter(
                     f"{ppre}:scale",
@@ -941,7 +943,11 @@ class Project:
                     min=0.0,
                     step=max(1e-3 * abs(pc.scale), 1e-9),
                     setter=_attr_setter(pc, "scale"),
-                    description=f"{pname} のスケール因子",
+                    # Le Bail / Pawley では抽出強度がスケールを含むので、動かすと縮退して
+                    # スケール → 0、強度 → ∞ に流れて発散する(スクロース 11-BM で確認)
+                    locked=extracted,
+                    description=f"{pname} のスケール因子"
+                    + "(Le Bail / Pawley では抽出強度に含まれるので固定)" * extracted,
                 )
             )
             ps.add(
@@ -1409,6 +1415,7 @@ class Project:
         ph.pawley = True
         ph.le_bail = False
         self._init_f2_table(phase, hist, from_structure)
+        self._lock_extracted_scale(phase)
 
     def start_le_bail(
         self, phase: str, hist: int | None = None, from_structure: bool = True
@@ -1418,6 +1425,30 @@ class Project:
         ph.le_bail = True
         ph.pawley = False
         self._init_f2_table(phase, hist, from_structure)
+        self._lock_extracted_scale(phase)
+
+    def stop_extraction(self, phase: str) -> None:
+        """Le Bail / Pawley をやめて構造からの強度計算に戻す(スケールの固定も解く)。"""
+        ph = self.phases[phase]
+        ph.le_bail = False
+        ph.pawley = False
+        ph.f2_update = True
+        self._lock_extracted_scale(phase)
+
+    def _lock_extracted_scale(self, phase: str) -> None:
+        """相のスケール因子を、Le Bail / Pawley なら固定、そうでなければ解除する。"""
+        ph = self.phases[phase]
+        extracted = ph.le_bail or ph.pawley
+        for p in self.params:
+            parts = p.name.split(":")
+            if len(parts) == 3 and parts[1] == phase and parts[2] == "scale":
+                p.locked = extracted
+                if extracted:
+                    p.vary = False
+                base = f"{phase} のスケール因子"
+                p.description = base + (
+                    "(Le Bail / Pawley では抽出強度に含まれるので固定)" if extracted else ""
+                )
 
     def _init_f2_table(
         self, phase: str, hist: int | None = None, from_structure: bool = True

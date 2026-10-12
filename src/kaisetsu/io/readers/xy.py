@@ -47,6 +47,12 @@ def read_xy(path: str | Path) -> PowderData:
         with np.errstate(divide="ignore"):
             w = np.where(y > 0, 1.0 / np.maximum(y, 1e-300), 0.0)
     order = np.argsort(x, kind="stable")
-    return PowderData(
-        x[order], y[order], w[order], name=p.stem, metadata={"format": "xy", "path": str(p)}
-    )
+    x, y, w = x[order], y[order], w[order]
+    if np.any(np.diff(x) == 0.0):
+        # 同じ 2θ が重複している(複数の走査を継いだファイルなど)→ 平均して 1 点にする
+        ux, inv = np.unique(x, return_inverse=True)
+        cnt = np.bincount(inv).astype(float)
+        y = np.bincount(inv, weights=y) / cnt
+        w = np.bincount(inv, weights=w)  # 分散は 1/Σw(重みの和)
+        x = ux
+    return PowderData(x, y, w, name=p.stem, metadata={"format": "xy", "path": str(p)})

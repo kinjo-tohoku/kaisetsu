@@ -19,6 +19,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -141,6 +142,77 @@ class CWInstrument:
             polarization=val("Polariz.", 0.5),
         )
 
+    @classmethod
+    def from_instprm(cls, path: str | Path) -> CWInstrument:
+        """GSAS-II の .instprm(``key:value`` 行、CW 用)を読む。"""
+        p = Path(path)
+        vals = read_instprm_lines(p)
+        if "C" not in vals.get("Type", ""):
+            raise ValueError(
+                f"{p.name}: 定波長(CW)の装置パラメータではありません(Type {vals.get('Type')})"
+            )
+        nums: dict[str, Any] = {k: float(v) for k, v in vals.items() if _is_number(v)}
+        nums["Type"] = vals["Type"]
+        return cls.from_gsas2(nums)
+
+    @classmethod
+    def from_gsas_prm(cls, path: str | Path, bank: int = 1) -> CWInstrument:
+        """GSAS(旧)の装置パラメータファイル(.prm / .inst / .iparm)を読む。CW(PXC / PNC)用。
+
+        APS 11-BM などが配っている形式。GSAS-II の SetPowderInstParms と同じ対応で読む:
+        ICONS 行は固定桁(λ1, λ2, ゼロ点 [cdeg]、λ2 があれば比 I2/I1 と偏光、無ければ偏光)、
+        PRCF1 行のプロファイル型が 3 なら PRCF11 = U V W、PRCF12 = X Y S/L H/L(SH/L はその和)、
+        それ以外は X = Y = 0、SH/L = 0.002。U, V, W は cdeg²、X, Y は cdeg(GSAS の単位)。
+        """
+        p = Path(path)
+        recs: dict[str, str] = {}
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("INS"):
+                recs[line[:12]] = line[12:]
+        htype = recs.get("INS   HTYPE ", "").strip()[:3]
+        if not htype or "C" not in htype:
+            raise ValueError(
+                f"{p.name}: 定波長(CW)の GSAS 装置ファイルではありません(HTYPE {htype!r})"
+            )
+        pre = f"INS{bank:3d}"
+        try:
+            s = recs[pre + " ICONS"]
+        except KeyError as exc:
+            raise ValueError(f"{p.name}: バンク {bank} の ICONS 行がありません") from exc
+        lam1 = _sfloat(s[:10])
+        lam2 = _sfloat(s[10:20])
+        zero = _sfloat(s[20:30]) / 100.0
+        d: dict[str, Any] = {"Type": htype, "Zero": zero, "Z": 0.0}
+        if lam2 > 0.0:
+            d.update({"Lam1": lam1, "Lam2": lam2, "I(L2)/I(L1)": _sfloat(s[40:50]) or 0.5})
+            d["Polariz."] = _sfloat(s[55:65])
+        else:
+            d["Lam"] = lam1
+            d["Polariz."] = _sfloat(s[40:50])
+        if "N" in htype:
+            d["Polariz."] = 0.0
+        ptype = 0
+        if pre + "PRCF1 " in recs:
+            ptype = int(float(recs[pre + "PRCF1 "].split()[0]))
+        c1 = recs.get(pre + "PRCF11", "").split()
+        c2 = recs.get(pre + "PRCF12", "").split()
+        d["U"], d["V"], d["W"] = (float(c1[i]) if i < len(c1) else 0.0 for i in range(3))
+        if ptype == 3 and len(c2) >= 4:
+            d["X"], d["Y"] = float(c2[0]), float(c2[1])
+            d["SH/L"] = float(c2[2]) + float(c2[3])
+        else:
+            d["X"], d["Y"], d["SH/L"] = 0.0, 0.0, 0.002
+        return cls.from_gsas2(d)
+
+    @classmethod
+    def from_instrument_file(cls, path: str | Path, bank: int = 1) -> CWInstrument:
+        """GSAS-II の .instprm か GSAS の .prm/.inst かを中身で判定して読む。"""
+        p = Path(path)
+        head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+        if "INS   HTYPE" in head or head.lstrip().startswith("INS"):
+            return cls.from_gsas_prm(p, bank)
+        return cls.from_instprm(p)
+
     def to_gsas2_widths(self) -> dict[str, float]:
         """GSAS-II の U, V, W, X, Y, Z, SH/L に換算する(確認用)。"""
         return {
@@ -152,6 +224,37 @@ class CWInstrument:
             "Z": self.z * 100.0,
             "SH/L": self.s_l + self.h_l,
         }
+
+
+def read_instprm_lines(path: str | Path) -> dict[str, str]:
+    """GSAS-II の .instprm(``key:value`` 行)を辞書にする(値は文字列のまま)。"""
+    vals: dict[str, str] = {}
+    for raw in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        vals[key.strip()] = val.strip()
+    return vals
+
+
+def _is_number(s: str) -> bool:
+    try:
+        float(s)
+    except ValueError:
+        return False
+    return True
+
+
+def _sfloat(s: str) -> float:
+    """空白や空文字なら 0。GSAS の固定桁フィールド用。"""
+    s = s.strip()
+    if not s:
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
 
 @dataclass

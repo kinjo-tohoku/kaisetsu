@@ -4,6 +4,9 @@
     - BANK n NCHAN NREC CONST START STEP 0 0 [STD|ESD|FXYE|FXY]
       START, STEP は centidegree。
     - TOF: BANK n NCHAN NREC SLOG|RALF|... START END STEP 0 FXYE|FXY(x は μs、そのまま使う)。
+    - ALT(ISIS の古い形式): 1 行 4 組の (TOF [1/32 μs] F8.0, 強度 F7.4, σ F5.4)。
+      RALF でも CONST でも可。
+    - CONST ビニングでも範囲が 180° を超えるなら TOF(μs)と見なす。
       metadata["xunit"] = "tof_us"。タイトル行や BANK 行が無くても 2θ か TOF かは
       ビニングの種類(CONST 以外は TOF)で判定する。
     - STD: 8 文字固定幅 (I2, F6.0) × 10 / 行。I2 は計数回数 n、強度 y、分散 y / n。
@@ -43,6 +46,18 @@ def _sfloat(s: str) -> float:
     return float(s) if s else 0.0
 
 
+def _fortran_f(s: str, decimals: int) -> float:
+    """Fortran の Fw.d 入力: 小数点が無ければ 10^d で割る。空なら 0。"""
+    t = s.strip()
+    if not t:
+        return 0.0
+    try:
+        v = float(t)
+    except ValueError:
+        return 0.0
+    return v if "." in t or decimals == 0 else v / 10**decimals
+
+
 def _sint(s: str) -> int:
     s = s.strip()
     return int(s) if s else 0
@@ -78,13 +93,29 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
     binning = header[4].upper() if len(header) > 4 else "CONST"
     is_tof = not binning.startswith("CONS")  # GSAS は "CONS" と略すこともある
     fmt = header[9].upper() if len(header) > 9 else "STD"
-    if is_tof and fmt not in ("FXYE", "FXY"):
+    if fmt == "ALT":
+        is_tof = True  # ALT 形式は ISIS の TOF でしか使われない
+    if not is_tof and len(header) > 6:
+        # CONST ビニングでも TOF(μs)のことがある(ISIS の古いファイル)。
+        # centidegree と見なして 180° を超えるなら TOF
+        span = (float(header[5]) + nchan * float(header[6])) / 100.0
+        if span > 180.0:
+            is_tof = True
+    if is_tof and fmt not in ("FXYE", "FXY", "ALT", "STD", "ESD"):
+        raise ValueError(f"{p.name}: TOF の {binning} ビニングで {fmt} 形式は読めません")
+    if is_tof and fmt in ("STD", "ESD") and not binning.startswith("CONS"):
         raise ValueError(
-            f"{p.name}: ビニング {binning} は FXYE/FXY 形式(x の値を含む)のときだけ読めます"
+            f"{p.name}: ビニング {binning} は FXYE/FXY/ALT 形式(x の値を含む)のときだけ読めます"
         )
-    start = float(header[5]) / 100.0 if not is_tof else 0.0
-    step = float(header[6]) / 100.0 if not is_tof else 0.0
-    xscale = 1.0 if is_tof else 0.01  # TOF は μs をそのまま、2θ は centidegree
+    if is_tof:
+        # CONST の TOF は μs のまま(ALT / FXYE では各点の x を使う)
+        start = float(header[5]) if len(header) > 5 else 0.0
+        step = float(header[6]) if len(header) > 6 else 0.0
+        xscale = 1.0
+    else:
+        start = float(header[5]) / 100.0
+        step = float(header[6]) / 100.0
+        xscale = 0.01  # 2θ は centidegree
 
     x: list[float] = []
     y: list[float] = []
@@ -133,6 +164,20 @@ def read_gsas(path: str | Path, bank: int = 1) -> PowderData:
                 w.append(1.0 / ei**2 if ei > 0 else 0.0)
             else:
                 w.append(1.0 / yi if yi > 0 else 0.0)
+    elif fmt == "ALT":
+        # ISIS の古い形式: 1 行に 4 組の (TOF [1/32 μs] F8.0, 強度 F7.4, σ F5.4)。
+        # Fortran の F 書式なので小数点が無ければ暗黙の小数桁で割る
+        for line in body:
+            for i in range(0, 80, 20):
+                fx = line[i : i + 8]
+                if len(fx.strip()) == 0:
+                    break
+                xi = _fortran_f(fx, 0) / 32.0
+                yi = _fortran_f(line[i + 8 : i + 15], 4)
+                ei = _fortran_f(line[i + 15 : i + 20], 4)
+                x.append(xi)
+                y.append(yi)
+                w.append(1.0 / ei**2 if ei > 0 else 0.0)
     else:
         raise ValueError(f"{p.name}: データ形式 {fmt} は未対応です")
 

@@ -131,9 +131,12 @@ def _is_phase_param(project: Project, p: Parameter) -> bool:
     """相のパラメータ(名前の先頭が相の名前)だけに絞る。
 
     phase='*' のとき `*:*:z` が装置の `h0:inst:z`(X, Y, Z)にも一致してしまい、
-    「原子座標」の段階で装置のローレンツ幅まで動いていた。
+    「原子座標」の段階で装置のローレンツ幅まで動いていた。Le Bail / Pawley の相は
+    構造パラメータが強度に効かない(特異になる)ので対象外。
     """
-    return p.name.split(":", 1)[0] in project.phases
+    head = p.name.split(":", 1)[0]
+    ph = project.phases.get(head)
+    return ph is not None and not (ph.le_bail or ph.pawley)
 
 
 def _occupancy_is_refinable(project: Project, p: Parameter) -> bool:

@@ -10,17 +10,21 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from kaisetsu.gui.dialog_utils import fit_dialog_to_screen
+from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import polarization_from_monochromator
 from kaisetsu.refine.recipe import Recipe, standard_recipe
@@ -90,6 +94,13 @@ class InstrumentDialog(QDialog):
             self.preset.addItem(name)
         self.preset.currentIndexChanged.connect(self._apply_preset)
         top.addWidget(self.preset, 1)
+        self.btn_load = QPushButton("装置ファイルを読む…")
+        self.btn_load.setToolTip(
+            "GSAS-II の .instprm、または GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている"
+            "装置パラメータ)から波長・ピーク幅・非対称・偏光を取り込みます"
+        )
+        self.btn_load.clicked.connect(self.load_instrument_file)
+        top.addWidget(self.btn_load)
         layout.addLayout(top)
         # 2 列(左: 放射線と試料、右: ピーク幅)にして、ノート PC でも画面に収める
         cols = QHBoxLayout()
@@ -232,6 +243,45 @@ class InstrumentDialog(QDialog):
     def _set_advanced_visible(self, flag: bool) -> None:
         for form, widget in self._advanced_rows:
             form.setRowVisible(widget, flag)
+
+    def load_instrument_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "GSAS / GSAS-II の装置パラメータ",
+            last_dir(),
+            "装置パラメータ (*.instprm *.prm *.inst *.iparm);;すべて (*)",
+        )
+        if not path:
+            return
+        try:
+            inst = CWInstrument.from_instrument_file(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "装置ファイル", f"読めませんでした:\n{exc}")
+            return
+        remember_dir(path)
+        self.apply_instrument(inst)
+        self.preset.setCurrentIndex(0)
+
+    def apply_instrument(self, inst: CWInstrument) -> None:
+        """CWInstrument の値をウィジェットに反映する(プリセットは触らない)。"""
+        rad = inst.radiation
+        self.kind.setCurrentIndex(1 if rad.is_neutron else 0)
+        self.lam1.setValue(rad.wavelength)
+        self.use_ka2.setChecked(rad.wavelength2 is not None)
+        if rad.wavelength2 is not None:
+            self.lam2.setValue(rad.wavelength2)
+            self.ratio2.setValue(rad.ratio2 or 0.5)
+        self.use_kb.setChecked(rad.wavelength3 is not None)
+        if rad.wavelength3 is not None:
+            self.lam3.setValue(rad.wavelength3)
+            self.ratio3.setValue(rad.ratio3 or 0.0)
+        self._set_target_from_wavelength(rad.wavelength, rad.is_neutron)
+        self.pol.setValue(inst.polarization)
+        self.zero.setValue(inst.zero)
+        for key in ("u", "v", "w", "p", "x", "y", "z", "sh_l"):
+            getattr(self, key).setValue(float(getattr(inst, key)))
+        if inst.p != 0.0 or inst.z != 0.0:
+            self.show_advanced.setChecked(True)
 
     def apply_preset_by_name(self, name: str) -> None:
         idx = self.preset.findText(name)

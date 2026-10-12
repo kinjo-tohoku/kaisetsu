@@ -166,20 +166,20 @@ class PhaseDialog(QDialog):
         was = "pawley" if ph.pawley else ("le_bail" if ph.le_bail else "structure")
         if mode != was or self.reset_table.isChecked():
             if mode == "structure":
-                ph.le_bail = False
-                ph.pawley = False
-                ph.f2_update = True
+                proj.stop_extraction(self.phase)
             elif mode == "le_bail":
                 ph.f2_update = True
                 if self.reset_table.isChecked() or not ph.f2_tables:
                     proj.start_le_bail(self.phase, from_structure=bool(ph.structure.sites))
                 else:
                     ph.le_bail, ph.pawley = True, False
+                    proj._lock_extracted_scale(self.phase)
             else:
                 if self.reset_table.isChecked() or not ph.f2_tables:
                     proj.start_pawley(self.phase, from_structure=bool(ph.structure.sites))
                 else:
                     ph.pawley, ph.le_bail = True, False
+                    proj._lock_extracted_scale(self.phase)
             notes.append(f"{self.phase}: 強度の扱いを {self.mode.currentText()} にしました")
         if proj.histograms:
             pc = proj.histograms[self.hist].contributions[self.phase]

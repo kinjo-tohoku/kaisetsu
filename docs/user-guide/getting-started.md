@@ -18,7 +18,7 @@ GUI を使わずスクリプトで動かすこともできます(`examples/refin
 
 | もの | 形式 | 例 |
 |---|---|---|
-| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、Bruker .raw(RAW1.01 ほか)、GSAS 形式(.gsa, .fxye, .raw 等) | `data/public/fap/FAP.XRA` |
+| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、Bruker .raw(RAW1.01 ほか)、GSAS 形式(.gsa, .fxye, .raw 等。ISIS の ALT も可)、RIETAN-FP の .int(GENERAL / IGOR / 「点数 開始角 刻み」)、FullProf の .dat(自由形式、D1A/D2B の組形式)、Z-Rietveld の .histogramIgor | `data/public/fap/FAP.XRA` |
 | 結晶構造 | CIF(格子定数、空間群、原子座標) | `data/public/fap/fluorapatite_COD9001232.cif` |
 | 装置の情報 | ターゲット(Cu など)または波長、光学系(反射か透過か)、だいたいのピーク幅 | プリセットから選べる |
 
@@ -44,7 +44,7 @@ CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約が
 
 「装置と試料の設定」ダイアログ(ツールバーの「装置設定」、Ctrl+I、データ読込時にも自動で開く)の
 「放射線」欄で、**ターゲット**(Cu / Co / Cr / Fe / Mo / Ag)を選ぶと Kα1・Kα2 の波長が入ります。
-放射光や中性子は「その他」にして波長を直接入れます。.ras/.rasx/.xrdml ならファイル内の
+放射光や中性子は「その他」にして波長を直接入れます。GSAS-II の .instprm や GSAS の .prm / .inst(APS 11-BM、NIST BT-1 などが配っている装置ファイル)があれば「装置ファイルを読む…」で波長・ピーク幅・非対称・偏光を取り込めます。.ras/.rasx/.xrdml ならファイル内の
 ターゲットと波長を読んで自動で設定します。偏光係数 P は、Ni フィルタなら 0.5、回折側グラファイト
 モノクロメータなら 0.56(Cu)、放射光なら 0.98〜1.0 が目安です。
 
