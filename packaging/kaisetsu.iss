@@ -1,5 +1,6 @@
 ﻿; kaisetsu の Windows インストーラ(Inno Setup 6)。
 ;   ISCC.exe /DAppVersion=0.1.0 packaging\kaisetsu.iss
+; 動作確認だけなら /DSourceDir=<小さなフォルダ> /DCompression=none で速く作れる。
 ; 入力: dist\kaisetsu(PyInstaller の出力)、LICENSE、dist\THIRD_PARTY_LICENSES.txt
 ; 出力: dist\kaisetsu-<ver>-windows-setup.exe
 ; 管理者権限なしで %LOCALAPPDATA%\Programs\kaisetsu に入れる(管理者なら Program Files も選べる)。
@@ -10,7 +11,12 @@
 #define AppName "kaisetsu"
 #define AppPublisher "Katsuki Kinjo"
 #define AppURL "https://github.com/kinjo-tohoku/kaisetsu"
-#define SourceDir "..\dist\kaisetsu"
+#ifndef SourceDir
+  #define SourceDir "..\dist\kaisetsu"
+#endif
+#ifndef Compression
+  #define Compression "lzma2/max"
+#endif
 
 [Setup]
 AppId={{B6E3F1C2-7D4A-4E7B-9C2E-5A1F0D3B8E21}
@@ -35,7 +41,7 @@ SetupIconFile=kaisetsu.ico
 UninstallDisplayIcon={app}\kaisetsu.exe
 UninstallDisplayName={#AppName} {#AppVersion}
 LicenseFile=..\LICENSE
-Compression=lzma2/max
+Compression={#Compression}
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
