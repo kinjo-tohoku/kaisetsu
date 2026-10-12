@@ -42,6 +42,8 @@ class Step:
 class Recipe:
     name: str
     steps: list[Step] = field(default_factory=list)
+    #: 真なら、段階の後でガウス幅 Γ_G² が負(境界)になっていたら U を固定してやり直す
+    guard_widths: bool = True
 
     def add(self, name: str, patterns: Iterable[str], max_cycles: int = 15, **kw: object) -> Recipe:
         self.steps.append(Step(name, tuple(patterns), max_cycles, **kw))  # type: ignore[arg-type]
@@ -73,7 +75,10 @@ class Recipe:
                 project.vary(*available)
             if not project.params.free():
                 continue
+            snapshot = {q.name: q.value for q in project.params}
             res = project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
+            if self.guard_widths:
+                res = self._guard_widths(project, step, snapshot, res, iteration_progress)
             project.log.append(
                 f"レシピ '{self.name}' 段階 '{step.name}': {project.rfactors()['total']}"
             )
@@ -81,6 +86,42 @@ class Recipe:
             if progress is not None:
                 progress(step, res)
         return results
+
+    def _guard_widths(
+        self,
+        project: Project,
+        step: Step,
+        snapshot: dict[str, float],
+        res: FitResult,
+        iteration_progress: Callable[[int, float], None] | None,
+    ) -> FitResult:
+        """ガウス幅 Γ_G² が負(境界)になったら、段階の前の値に戻して U を固定しやり直す。
+
+        罰則のおかげで解は境界(Γ_G² = 0)で止まるが、データの端でガウス幅が 0 という装置は
+        不自然なので、初心者がボタン一つで物理的に妥当な結果を得られるように U を固定する
+        (U < 0 が負の原因であることがほとんど)。
+        """
+        from kaisetsu.refine.width_check import width_violations
+
+        fixed: list[str] = []
+        for v in width_violations(project):
+            name = f"h{v.hist}:inst:u"
+            if v.kind == "gauss" and name in project.params and project.params[name].is_free:
+                fixed.append(name)
+        if not fixed:
+            return res
+        for q in project.params:
+            if q.name in snapshot:
+                q.value = snapshot[q.name]
+        project.params.evaluate_ties()
+        project.params.apply_all()
+        for name in fixed:
+            project.fix(name)
+        project.log.append(
+            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅 Γ_G² がデータの端で負になったので "
+            f"{', '.join(fixed)} を固定してやり直します"
+        )
+        return project.refine(max_cycles=step.max_cycles, progress=iteration_progress)
 
 
 def _is_phase_param(project: Project, p: Parameter) -> bool:

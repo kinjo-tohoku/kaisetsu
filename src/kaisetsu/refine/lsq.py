@@ -102,6 +102,7 @@ def refine_least_squares(
     verbose: int = 0,
     progress: Callable[[int, float], None] | None = None,
     jacobian_fn: Callable[[FloatArray], FloatArray] | None = None,
+    n_penalty: int = 0,
 ) -> FitResult:
     """ParameterSet の精密化変数を最小二乗で最適化する。
 
@@ -114,6 +115,8 @@ def refine_least_squares(
         progress: 各反復後に (反復回数, χ²) で呼ばれる関数
         jacobian_fn: 直近の残差(residual_fn の返り値)を受け取り、現在のパラメータでの
             ヤコビアン (N_resid, N_free) を返す関数。None なら前進差分
+        n_penalty: residual_fn の末尾にある罰則行の数。最適化には使うが、χ² とデータ点数
+            からは除く
     """
     free = params.free()
     if not free:
@@ -135,8 +138,9 @@ def refine_least_squares(
         r = residual_fn()
         if not np.all(np.isfinite(r)):
             r = np.where(np.isfinite(r), r, 1e10)
-        state["ssq"] = float(np.dot(r, r))
-        state["n_data"] = len(r)
+        rd = r[: len(r) - n_penalty] if n_penalty else r
+        state["ssq"] = float(np.dot(rd, rd))
+        state["n_data"] = len(rd)
         return r
 
     def reduced_chi2() -> float:
@@ -194,6 +198,8 @@ def refine_least_squares(
 
     params.set_vector(res.x)
     r = residual_fn()
+    if n_penalty:
+        r = r[: len(r) - n_penalty]
     n_data = len(r)
     n_par = len(res.x)
     dof = max(n_data - n_par, 1)

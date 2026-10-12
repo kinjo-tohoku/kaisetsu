@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -117,11 +118,18 @@ def _assemble(hist: HistogramEntry, phase: str, ratio: FloatArray) -> FloatArray
     return dy
 
 
-def project_jacobian(project: Project, numerical_residual: FloatArray | None = None) -> FloatArray:
+def project_jacobian(
+    project: Project,
+    numerical_residual: FloatArray | None = None,
+    residual_fn: Callable[[], FloatArray] | None = None,
+) -> FloatArray:
     """現在のパラメータでの残差ヤコビアン (N_resid, N_free)。
 
     呼ぶ前に `project.residuals()` が評価されていること(各ヒストグラムの result が現在の状態)。
+    residual_fn を渡すと数値微分にそれを使う(ピーク幅の罰則行を含む残差など)。
+    罰則行は背景・スケール・構造パラメータに依存しないので、解析列ではデータ行だけ埋める。
     """
+    fn = residual_fn if residual_fn is not None else project.residuals
     params = project.params
     free = params.free()
     hists = project.histograms
@@ -144,8 +152,9 @@ def project_jacobian(project: Project, numerical_residual: FloatArray | None = N
     for m in pdf_masks:
         offsets_g.append(n)
         n += int(np.count_nonzero(m))
-    jac = np.zeros((n, len(free)))
-    base = numerical_residual if numerical_residual is not None else project.residuals()
+    base = numerical_residual if numerical_residual is not None else fn()
+    assert len(base) >= n
+    jac = np.zeros((len(base), len(free)))
     for col, p in enumerate(free):
         kind, hi, phase = classify(project, p)
         if kind == "bkg" and hi is not None:
@@ -232,9 +241,9 @@ def project_jacobian(project: Project, numerical_residual: FloatArray | None = N
         if math.isfinite(p.max) and p.value + step > p.max:
             step = -step
         _perturbed(project, p, step)
-        r1 = project.residuals()
+        r1 = fn()
         _perturbed(project, p, -step)
         jac[:, col] = (r1 - base) / step
     # 数値微分で動かした結果を元に戻す(result を現在値で再計算)
-    project.residuals()
+    fn()
     return jac

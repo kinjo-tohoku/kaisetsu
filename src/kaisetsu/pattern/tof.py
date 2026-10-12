@@ -97,10 +97,12 @@ class TOFInstrument:
     def beta_of(self, d: FloatArray) -> FloatArray:
         return np.asarray(self.beta0 + self.beta1 / d**4 + self.betaq / d**2)
 
+    def sigma2_raw(self, d: FloatArray) -> FloatArray:
+        """ガウス分散 σ² [μs²]。下限で止めない生の値(負になりうる)。"""
+        return np.asarray(self.sig0 + self.sig1 * d**2 + self.sig2 * d**4 + self.sigq * d)
+
     def sigma2_of(self, d: FloatArray) -> FloatArray:
-        return np.asarray(
-            np.maximum(self.sig0 + self.sig1 * d**2 + self.sig2 * d**4 + self.sigq * d, 1e-6)
-        )
+        return np.asarray(np.maximum(self.sigma2_raw(d), 1e-6))
 
     def gamma_of(self, d: FloatArray) -> FloatArray:
         return np.asarray(np.maximum(self.x * d + self.y * d * d + self.z, 1e-5))

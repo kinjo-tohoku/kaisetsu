@@ -34,6 +34,7 @@ import logging
 import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -1272,11 +1273,38 @@ class Project:
         g.result = res
         return res
 
-    def jacobian(self, base: FloatArray | None = None) -> FloatArray:
-        """現在のパラメータでの残差ヤコビアン(半解析的)。base は直近の残差。"""
+    #: 真なら精密化でピーク幅が負になる領域に罰則をかける(`kaisetsu.refine.width_check`)
+    penalize_negative_widths: bool = True
+
+    def jacobian(self, base: FloatArray | None = None, *, with_penalty: bool = False) -> FloatArray:
+        """現在のパラメータでの残差ヤコビアン(半解析的)。base は直近の残差。
+
+        with_penalty が真なら `residuals_with_penalty` に対するヤコビアン(罰則行を含む)。
+        """
         from kaisetsu.refine.jacobian import project_jacobian
 
-        return project_jacobian(self, base)
+        fn = self.residuals_with_penalty if with_penalty else self.residuals
+        return project_jacobian(self, base, residual_fn=fn)
+
+    def width_penalty(self) -> FloatArray:
+        """ピーク幅(Γ_G², Γ_L, TOF σ²)が負になった分の罰則残差。可行なら全部 0。"""
+        from kaisetsu.refine.width_check import width_penalty
+
+        return width_penalty(self)
+
+    def n_penalty_rows(self) -> int:
+        """`width_penalty` の長さ(罰則が無効なら 0)。"""
+        from kaisetsu.refine.width_check import n_penalty_rows
+
+        return n_penalty_rows(self) if self.penalize_negative_widths else 0
+
+    def residuals_with_penalty(self) -> FloatArray:
+        """残差の末尾に幅の罰則行を付けたもの(精密化の目的関数)。"""
+        r = self.residuals()
+        if not self.penalize_negative_widths:
+            return r
+        pen = self.width_penalty()
+        return np.concatenate([r, pen]) if pen.size else r
 
     def residuals(self) -> FloatArray:
         parts = []
@@ -1327,15 +1355,19 @@ class Project:
                 use_analytic = analytic_jacobian and not any(
                     ph.pawley for ph in self.phases.values()
                 )
+                n_pen = self.n_penalty_rows()
                 result = refine_least_squares(
                     self.params,
-                    self.residuals,
+                    self.residuals_with_penalty,
                     max_cycles=max_cycles,
                     verbose=verbose,
                     progress=progress,
                     ftol=ftol,
                     xtol=xtol,
-                    jacobian_fn=self.jacobian if use_analytic else None,
+                    jacobian_fn=(
+                        partial(self.jacobian, with_penalty=n_pen > 0) if use_analytic else None
+                    ),
+                    n_penalty=n_pen,
                 )
             if updating:
                 self.le_bail_update()
@@ -1539,6 +1571,10 @@ class Project:
                     f"{p.name} は決まっていません(esd {p.esd:.3g} が値 {p.value:.3g} より大きい)。"
                     "他のパラメータと強く相関しているか、データに感度がありません。固定を検討してください。"
                 )
+        from kaisetsu.refine.width_check import width_violations
+
+        for v in width_violations(self):
+            notes.append(v.message())
         if self.histograms and self.phases:
             rf = self.rfactors()["total"]
             if rf.chi2 > 10.0 and not self.pdf_datasets:

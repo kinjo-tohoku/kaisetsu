@@ -83,16 +83,26 @@ class CWInstrument:
         self.s_l = self.h_l = 0.5 * float(value)
 
     # ------------------------------------------------------------------
-    def fwhm_gauss(self, two_theta: npt.ArrayLike) -> FloatArray:
+    def gauss_fwhm2(self, two_theta: npt.ArrayLike) -> FloatArray:
+        """Caglioti のガウス幅の 2 乗 Γ_G² [deg²]。下限で止めない生の値(負になりうる)。"""
         th = np.radians(np.asarray(two_theta, dtype=np.float64) / 2.0)
         t = np.tan(th)
-        g2 = self.u * t * t + self.v * t + self.w + self.p / np.cos(th) ** 2
-        return np.asarray(np.sqrt(np.maximum(g2, _MIN_FWHM_G**2)))
+        return np.asarray(self.u * t * t + self.v * t + self.w + self.p / np.cos(th) ** 2)
+
+    def lorentz_fwhm_raw(self, two_theta: npt.ArrayLike) -> FloatArray:
+        """ローレンツ幅 Γ_L [deg]。下限で止めない生の値(負になりうる)。"""
+        th = np.radians(np.asarray(two_theta, dtype=np.float64) / 2.0)
+        return np.asarray(self.x * np.tan(th) + self.y / np.cos(th) + self.z)
+
+    def fwhm_gauss(self, two_theta: npt.ArrayLike) -> FloatArray:
+        """ガウス幅 [deg]。Γ_G² が負のところは下限(GSAS-II と同じ)で止める。
+
+        止めた範囲があるかは `kaisetsu.refine.width_check` で点検・罰則する。
+        """
+        return np.asarray(np.sqrt(np.maximum(self.gauss_fwhm2(two_theta), _MIN_FWHM_G**2)))
 
     def fwhm_lorentz(self, two_theta: npt.ArrayLike) -> FloatArray:
-        th = np.radians(np.asarray(two_theta, dtype=np.float64) / 2.0)
-        lo = self.x * np.tan(th) + self.y / np.cos(th) + self.z
-        return np.asarray(np.maximum(lo, _MIN_FWHM_L))
+        return np.asarray(np.maximum(self.lorentz_fwhm_raw(two_theta), _MIN_FWHM_L))
 
     # ------------------------------------------------------------------
     @classmethod
