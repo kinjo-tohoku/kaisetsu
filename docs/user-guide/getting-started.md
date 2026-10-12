@@ -206,17 +206,21 @@ Rietveld 精密化のあと「精密化 → MEM 電子密度 / 核密度」。
 TOF 装置パラメータのダイアログが開きます。装置から受け取った GSAS-II の .instprm があれば
 「装置ファイルを読む」で入れます(無ければ DIFC と 2θ をヘッダから推定した値が入ります)。
 Z-Rietveld の .zDiffractometer(J-PARC の iMATERIA、SuperHRPD など)からは換算係数 c₀, c₁, c₂、
-バンク角、Type0m / Type0 のガウス分散 σ²(SigmaSquare0〜2)とローレンツ幅 γ(Gamma0〜2)を
-取り込みます。立ち上がり α と減衰 β は Z-Rietveld と関数形が違う(Ikeda-Carpenter 系)ので
-取り込まず、標準の手続きがデータから求めます。
-パラメータ名は `h0:inst:difc|difa|difb|zero|alpha|beta0|beta1|betaq|sig0|sig1|sig2|sigq|x|y|z`。
-標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、幅は `sig1`, `alpha`, `beta0`, `beta1` を
-同時に動かしてから `sig0`, `sig2`, `x`, `y`)。立ち上がりが分解能より速い装置(iMATERIA など)では
-α が上限 10 付近で「決まっていません」と出ますが、フィットには害がないのでそのままで構いません。
-注意: Z-Rietveld の DIFC(c₁)は Ikeda-Carpenter 型の関数でピーク位置を定義して校正されているので、
-本プログラムの back-to-back 指数関数で使うと格子定数が 10⁻⁴ 程度ずれます(CeO2 で 5.4120 に対し
-5.4093 Å)。格子定数を精密に求めるには、標準試料(Si、CeO2)で DIFC とゼロ点を本プログラムで
-精密化し直してください。
+バンク角、プロファイル Type0m のすべて(σ²、γ、Alpha1/2、Beta1_0、Beta0_0/1、r01〜r03)を
+取り込み、プロファイル関数を「Z-Rietveld Type0m」に切り替えて Z-Rietveld と同じ形で計算します
+(関数形は Z-Rietveld の計算曲線から逆算したもので、ピーク形状は 0.5% 以内、位置の定義も同じ。
+詳細は docs/validation/phase7_tof.md 8 節)。iMATERIA の CeO2 では装置ファイルの値をそのまま使った
+標準の手順で Rwp 8.6%、格子定数 5.41228 Å(Z-Rietveld の解 5.41197 Å)になります。
+パラメータ名は `h0:inst:difc|difa|difb|zero|sig0|sig1|sig2|sigq|x|y|z` と、GSAS type 3 なら
+`alpha|beta0|beta1|betaq`、Type0m なら `zr_alpha1|zr_alpha2|zr_beta1|zr_beta0_0|zr_beta0_1|zr_r01|zr_r02|zr_r03`
+(Z-Rietveld と同じく装置の定数として固定しておくのが普通です)。
+標準の手順はそのまま使えます(ゼロ点の代わりに `zero`、GSAS type 3 では幅 `sig1` と `alpha`,
+`beta0`, `beta1` を同時に動かしてから `sig0`, `sig2`, `x`, `y`。Type0m では `sig1` → `sig0`, `sig2`,
+`x`, `y`)。GSAS type 3 で立ち上がりが分解能より速い装置では α が上限 10 付近で
+「決まっていません」と出ますが、フィットには害がないのでそのままで構いません。
+GSAS-II の .instprm しか無い J-PARC のデータや、Type0m 以外(Type0、Type2)の装置ファイルでは
+GSAS type 3 で計算します。その場合、ピーク位置の定義の違いで格子定数が 10⁻⁴ 程度ずれるので、
+精密な格子定数が要るときは標準試料で DIFC とゼロ点を本プログラムで精密化し直してください。
 試すなら `data/public/nac/PG3_22048.gsa` と `POWGEN_1066.instprm`、相は `NAC.cif`。
 
 - **強度の単位**: GSAS 形式の TOF データはビン幅で割って counts/μs にして扱います(GSAS-II と同じ。

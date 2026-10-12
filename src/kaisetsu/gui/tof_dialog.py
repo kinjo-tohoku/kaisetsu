@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -48,6 +49,20 @@ _FIELDS: tuple[tuple[str, str, int, float, float, str], ...] = (
     ("y", "Y [μs/Å²]", 4, 0.0, 1e4, ""),
     ("z", "Z [μs]", 4, -1e4, 1e4, ""),
 )
+#: GSAS type 3 だけで使う(Type0m では無効にする)
+_GSAS3_ONLY = ("alpha", "beta0", "beta1", "betaq")
+_ZR_FIELDS: tuple[tuple[str, str, int, float, float, str], ...] = (
+    ("zr_alpha1", "Alpha1", 5, 1e-3, 100.0, "立ち上がり 1/α' = Alpha1 + Alpha2 d"),
+    ("zr_alpha2", "Alpha2", 5, -50.0, 50.0, ""),
+    ("zr_beta1", "Beta1_0", 5, 1e-3, 100.0, "短い裾の減衰 β₁'(定数)"),
+    ("zr_beta0_0", "Beta0_0", 5, 1e-3, 100.0, "長い裾の減衰 β₀' = Beta0_0 + Beta0_1 / d"),
+    ("zr_beta0_1", "Beta0_1", 5, -100.0, 100.0, ""),
+    ("zr_r01", "r01", 5, 0.0, 1.0, "長い裾の割合 R = r01 exp(−r02 / d^r03)"),
+    ("zr_r02", "r02", 5, 0.0, 100.0, ""),
+    ("zr_r03", "r03", 5, 0.0, 20.0, ""),
+    ("zr_scale0", "時定数の単位(定数項)", 4, 0.3, 3.0, "時定数 = TOF/1000 × (この値 + 次の値 × ln d)。Z-Rietveld の計算曲線から求めた校正定数"),
+    ("zr_scale1", "時定数の単位(ln d の係数)", 4, -0.5, 0.5, ""),
+)  # fmt: skip
 
 
 class TOFInstrumentDialog(QDialog):
@@ -67,9 +82,8 @@ class TOFInstrumentDialog(QDialog):
         layout.addWidget(QLabel(
             "パルス中性子(J-PARC、SNS、ISIS)の飛行時間データ。装置の .instprm(GSAS-II)か"
             " .zDiffractometer(Z-Rietveld)があれば読み込んでください。\n"
-            "幅のパラメータは GSAS-II の TOF プロファイル(type 3)と同じ定義です。Z-Rietveld からは"
-            "換算係数とガウス分散 σ²・ローレンツ幅 γ を取り込み、立ち上がり α と減衰 β は"
-            "標準の手続きがデータから求めます。"
+            "幅のパラメータは GSAS-II の TOF プロファイル(type 3)と同じ定義です。Z-Rietveld の"
+            "Type0m(J-PARC)は換算係数・σ²・γ・α・β・R をすべて取り込み、同じ関数で計算します。"
         ))  # fmt: skip
         row = QHBoxLayout()
         b = QPushButton("装置ファイルを読む(.instprm / .zDiffractometer)…")
@@ -77,6 +91,14 @@ class TOFInstrumentDialog(QDialog):
         row.addWidget(b)
         row.addStretch(1)
         layout.addLayout(row)
+        krow = QHBoxLayout()
+        krow.addWidget(QLabel("プロファイル関数"))
+        self.kind = QComboBox()
+        self.kind.addItem("GSAS type 3(両側指数 α, β ⊗ 擬 Voigt)", "gsas3")
+        self.kind.addItem("Z-Rietveld Type0m(J-PARC の装置ファイル)", "zrietveld")
+        self.kind.currentIndexChanged.connect(self._update_enabled)
+        krow.addWidget(self.kind, 1)
+        layout.addLayout(krow)
         box = QGroupBox("パラメータ")
         form = QFormLayout(box)
         self.spins: dict[str, QDoubleSpinBox] = {}
@@ -90,6 +112,21 @@ class TOFInstrumentDialog(QDialog):
             form.addRow(label, sp)
             self.spins[attr] = sp
         layout.addWidget(box)
+        self.zr_box = QGroupBox("Z-Rietveld Type0m のパラメータ(装置ファイルの値)")
+        zf = QFormLayout(self.zr_box)
+        self.zr_spins: dict[str, QDoubleSpinBox] = {}
+        for attr, label, decimals, lo, hi, tip in _ZR_FIELDS:
+            sp = QDoubleSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(decimals)
+            sp.setValue(float(getattr(inst, attr)))
+            if tip:
+                sp.setToolTip(tip)
+            zf.addRow(label, sp)
+            self.zr_spins[attr] = sp
+        layout.addWidget(self.zr_box)
+        self.kind.setCurrentIndex(max(self.kind.findData(inst.profile_kind), 0))
+        self._update_enabled()
         smp = QGroupBox("試料")
         sf = QFormLayout(smp)
         self.mu_r = QDoubleSpinBox()
@@ -128,12 +165,25 @@ class TOFInstrumentDialog(QDialog):
         remember_dir(path)
         self.set_instrument(inst)
 
+    def _update_enabled(self) -> None:
+        zr = self.kind.currentData() == "zrietveld"
+        self.zr_box.setEnabled(zr)
+        for attr in _GSAS3_ONLY:
+            self.spins[attr].setEnabled(not zr)
+
     def set_instrument(self, inst: TOFInstrument) -> None:
         for attr, sp in self.spins.items():
             sp.setValue(float(getattr(inst, attr)))
+        for attr, sp in self.zr_spins.items():
+            sp.setValue(float(getattr(inst, attr)))
+        self.kind.setCurrentIndex(max(self.kind.findData(inst.profile_kind), 0))
+        self._update_enabled()
 
     def result_instrument(self) -> TOFInstrument:
-        return TOFInstrument(**{attr: float(sp.value()) for attr, sp in self.spins.items()})
+        kw: dict[str, object] = {attr: float(sp.value()) for attr, sp in self.spins.items()}
+        kw.update({attr: float(sp.value()) for attr, sp in self.zr_spins.items()})
+        kw["profile_kind"] = str(self.kind.currentData())
+        return TOFInstrument(**kw)
 
     def result_sample(self) -> SampleGeometry:
         """試料形状(円筒、μR を更新したもの)。"""

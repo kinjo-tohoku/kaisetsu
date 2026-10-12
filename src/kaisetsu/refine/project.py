@@ -768,10 +768,29 @@ class Project:
             ("difa", "difa", 1e-3, -1e4, 1e4, "μs/Å²", "DIFA(d² の係数)"),
             ("difb", "difb", 1e-3, -1e4, 1e4, "μs·Å", "DIFB(1/d の係数)"),
             ("zero", "zero", 1e-2, -1e4, 1e4, "μs", "ゼロ点"),
-            ("alpha", "alpha", 1e-4, 1e-4, 10.0, "1/μs·Å", "立ち上がり α = alpha / d"),
-            ("beta0", "beta0", 1e-4, 0.0, 10.0, "1/μs", "減衰 β の定数項"),
-            ("beta1", "beta1", 1e-5, 0.0, 10.0, "Å⁴/μs", "減衰 β の 1/d⁴ の係数"),
-            ("betaq", "betaq", 1e-5, 0.0, 10.0, "Å²/μs", "減衰 β の 1/d² の係数"),
+        ]  # fmt: skip
+        if inst.is_zrietveld:
+            # Z-Rietveld Type0m: 時定数の係数(モジュール kaisetsu.pattern.tof の docstring)
+            spec += [
+                ("zr_alpha1", "zr_alpha1", 1e-3, 1e-3, 100.0, "", "Type0m Alpha1"),
+                ("zr_alpha2", "zr_alpha2", 1e-3, -50.0, 50.0, "1/Å", "Type0m の Alpha2"),
+                ("zr_beta1", "zr_beta1", 1e-3, 1e-3, 100.0, "", "Type0m Beta1_0(短い裾 β₁')"),
+                ("zr_beta0_0", "zr_beta0_0", 1e-3, 1e-3, 100.0, "", "Type0m Beta0_0"),
+                ("zr_beta0_1", "zr_beta0_1", 1e-3, -100.0, 100.0, "Å", "Type0m の Beta0_1"),
+                ("zr_r01", "zr_r01", 1e-3, 0.0, 1.0, "", "Type0m r01(R = r01 exp(−r02/d^r03))"),
+                ("zr_r02", "zr_r02", 1e-3, 0.0, 100.0, "Å^r03", "Type0m の r02"),
+                ("zr_r03", "zr_r03", 1e-3, 0.0, 20.0, "", "Type0m の r03"),
+                ("zr_scale0", "zr_scale0", 1e-3, 0.3, 3.0, "", "Type0m 時定数の単位(校正定数)"),
+                ("zr_scale1", "zr_scale1", 1e-3, -0.5, 0.5, "", "Type0m 時定数 ln d 係数"),
+            ]  # fmt: skip
+        else:
+            spec += [
+                ("alpha", "alpha", 1e-4, 1e-4, 10.0, "1/μs·Å", "立ち上がり α = alpha / d"),
+                ("beta0", "beta0", 1e-4, 0.0, 10.0, "1/μs", "減衰 β の定数項"),
+                ("beta1", "beta1", 1e-5, 0.0, 10.0, "Å⁴/μs", "減衰 β の 1/d⁴ の係数"),
+                ("betaq", "betaq", 1e-5, 0.0, 10.0, "Å²/μs", "減衰 β の 1/d² の係数"),
+            ]  # fmt: skip
+        spec += [
             ("sig0", "sig0", 1e-1, -1e6, 1e6, "μs²", "ガウス分散 σ² の定数項"),
             ("sig1", "sig1", 1e-1, -1e6, 1e6, "μs²/Å²", "σ² の d² の係数"),
             ("sig2", "sig2", 1e-1, -1e6, 1e6, "μs²/Å⁴", "σ² の d⁴ の係数"),
@@ -791,6 +810,7 @@ class Project:
                     setter=_attr_setter(inst, attr),
                     unit=unit,
                     description=desc,
+                    advanced=nm.startswith("zr_scale"),
                 )
             )
 

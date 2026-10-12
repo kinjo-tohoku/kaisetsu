@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -103,3 +104,33 @@ def test_project_with_tof_histogram(data_dir: Path, tmp_path: Path) -> None:
     assert isinstance(p2.histograms[0].instrument, TOFInstrument)
     assert p2.histograms[0].instrument.difc == pytest.approx(inst.difc)
     assert p2.params["h0:NAC:scale"].value == pytest.approx(proj.params["h0:NAC:scale"].value)
+
+
+def test_zrietveld_profile_in_project_round_trip(data_dir: Path, tmp_path: Path) -> None:
+    """Type0m の装置でパターン計算・パラメータ・保存と読み込みが通る。"""
+    proj = Project("NAC TOF zr")
+    proj.add_phase(read_structure(data_dir / "nac" / "NAC.cif"), name="NAC")
+    data = read_powder_data(data_dir / "nac" / "PG3_22048.gsa")
+    inst = TOFInstrument.from_instprm(data_dir / "nac" / "POWGEN_1066.instprm")
+    inst.profile_kind = "zrietveld"
+    h = proj.add_histogram(data, inst, n_background=3, x_min=10000.0, x_max=60000.0)
+    names = proj.params.names()
+    assert "h0:inst:zr_alpha1" in names and "h0:inst:zr_r03" in names
+    assert "h0:inst:alpha" not in names and "h0:inst:beta0" not in names
+    assert proj.params["h0:inst:zr_scale0"].advanced
+    res = proj.calculate(0)
+    y = res.y_calc - res.y_background
+    assert np.all(np.isfinite(y)) and y.max() > 0
+    # 面積は GSAS type 3 と同じ(同じ強度、違うのは形だけ)
+    inst_g = replace(inst, profile_kind="gsas3")
+    proj2 = Project("NAC TOF g")
+    proj2.add_phase(read_structure(data_dir / "nac" / "NAC.cif"), name="NAC")
+    proj2.add_histogram(data, inst_g, n_background=3, x_min=10000.0, x_max=60000.0)
+    y2 = proj2.calculate(0).y_calc - proj2.calculate(0).y_background
+    assert np.trapezoid(y, res.x) == pytest.approx(np.trapezoid(y2, res.x), rel=0.02)
+    path = save_project(proj, tmp_path / "zr.json", external_arrays=True)
+    p2 = load_project(path)
+    i2 = p2.histograms[0].instrument
+    assert isinstance(i2, TOFInstrument) and i2.profile_kind == "zrietveld"
+    assert i2.zr_r02 == pytest.approx(inst.zr_r02)
+    assert h.instrument is not inst  # add_histogram はコピーする

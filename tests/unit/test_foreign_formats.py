@@ -336,6 +336,27 @@ _ZD_TOF = "\r".join(
         "\t[Alpha1]",
         "\t\t[Value] 5.257580",
         "\t[End]",
+        "\t[Alpha2]",
+        "\t\t[Value] -0.817492",
+        "\t[End]",
+        "\t[Beta1_0]",
+        "\t\t[Value] 0.455222",
+        "\t[End]",
+        "\t[Beta0_0]",
+        "\t\t[Value] 2.578806",
+        "\t[End]",
+        "\t[Beta0_1]",
+        "\t\t[Value] 1.153398",
+        "\t[End]",
+        "\t[r01]",
+        "\t\t[Value] 0.144016",
+        "\t[End]",
+        "\t[r02]",
+        "\t\t[Value] 1.473727",
+        "\t[End]",
+        "\t[r03]",
+        "\t\t[Value] 5.203479",
+        "\t[End]",
         "[End]",
         "[Profile function initial value]",
         "\t[Identifier] Type2",
@@ -399,8 +420,12 @@ def test_zdiffractometer_tof(tmp_path: Path) -> None:
     assert inst.sig2 == 0.0
     assert inst.z == pytest.approx(0.17179) and inst.x == pytest.approx(2.307367)
     assert inst.y == pytest.approx(-0.298098)
-    # 立ち上がり・減衰は既定値のまま
-    assert inst.alpha == TOFInstrument(difc=1.0).alpha
+    # Type0m が揃っているので Z-Rietveld のプロファイルとして計算する
+    assert inst.profile_kind == "zrietveld" and inst.is_zrietveld
+    assert inst.zr_alpha1 == pytest.approx(5.25758) and inst.zr_alpha2 == pytest.approx(-0.817492)
+    assert inst.zr_beta1 == pytest.approx(0.455222)
+    assert inst.zr_beta0_0 == pytest.approx(2.578806) and inst.zr_beta0_1 == pytest.approx(1.153398)
+    assert (inst.zr_r01, inst.zr_r02, inst.zr_r03) == pytest.approx((0.144016, 1.473727, 5.203479))
     # SuperHRPD のように σ² が d⁴ の項だけでも取り込む
     p2 = _write(
         tmp_path,
@@ -412,5 +437,8 @@ def test_zdiffractometer_tof(tmp_path: Path) -> None:
     )
     inst2 = TOFInstrument.from_instrument_file(p2)
     assert inst2.sig0 == 0.0 and inst2.sig1 == 0.0 and inst2.sig2 == pytest.approx(0.0321731)
+    # α, β, R が揃っていなければ GSAS type 3 のまま
+    p3 = _write(tmp_path, "partial.zDiffractometer", _ZD_TOF.replace("[r03]", "[r0x]"))
+    assert TOFInstrument.from_instrument_file(p3).profile_kind == "gsas3"
     with pytest.raises(ValueError, match="TOF"):
         CWInstrument.from_instrument_file(p)
