@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from kaisetsu.pattern.calculator import PatternResult
@@ -84,14 +85,82 @@ def export_plot_image(plot: pg.PlotWidget, path: str | Path, width: int = 1600) 
     return p
 
 
+class _PatternViewBox(pg.ViewBox):
+    """Shift + 左ドラッグで除外領域を指定できる ViewBox。
+
+    通常のドラッグ(移動・拡大)はそのまま。Shift を押しながらドラッグした範囲を
+    sigExcludeRequested(開始, 終了) で知らせる。
+    """
+
+    sigExcludeRequested = Signal(float, float)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._drag_region: Any = None
+
+    def mouseDragEvent(self, ev: Any, axis: int | None = None) -> None:
+        shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if ev.button() != Qt.MouseButton.LeftButton or not shift:
+            super().mouseDragEvent(ev, axis)
+            return
+        ev.accept()
+        x0 = float(self.mapToView(ev.buttonDownPos()).x())
+        x1 = float(self.mapToView(ev.pos()).x())
+        lo, hi = min(x0, x1), max(x0, x1)
+        if self._drag_region is None:
+            self._drag_region = pg.LinearRegionItem(
+                values=(lo, hi), movable=False, brush=pg.mkBrush(255, 0, 0, 40), pen=pg.mkPen(None)
+            )
+            self.addItem(self._drag_region, ignoreBounds=True)
+        self._drag_region.setRegion((lo, hi))
+        if ev.isFinish():
+            self.removeItem(self._drag_region)
+            self._drag_region = None
+            if hi > lo:
+                self.sigExcludeRequested.emit(lo, hi)
+
+
+class _ExcludeRegion(pg.LinearRegionItem):
+    """除外領域の帯。ドラッグで動かせ、右クリックで削除を要求する。"""
+
+    sigRemoveRequested = Signal(object)
+
+    def __init__(self, lo: float, hi: float) -> None:
+        super().__init__(
+            values=(lo, hi),
+            movable=True,
+            brush=pg.mkBrush(255, 0, 0, 40),
+            hoverBrush=pg.mkBrush(255, 0, 0, 70),
+            pen=pg.mkPen((200, 0, 0, 120)),
+        )
+        self.setZValue(-10)
+        self.setToolTip("除外領域: ドラッグで移動、端をドラッグで幅を変更、右クリックで削除")
+
+    def mouseClickEvent(self, ev: Any) -> None:
+        if ev.button() == Qt.MouseButton.RightButton:
+            ev.accept()
+            self.sigRemoveRequested.emit(self)
+            return
+        super().mouseClickEvent(ev)
+
+
 class PatternPlot(QWidget):
-    """観測/計算/差/ティックを描くウィジェット。"""
+    """観測/計算/差/ティックを描くウィジェット。除外領域とフィット範囲も帯で示す。"""
+
+    #: Shift + ドラッグで新しい除外領域が指定された(開始, 終了)
+    excludeRequested = Signal(float, float)
+    #: 帯の移動・削除で除外領域の一覧が変わった(新しい一覧)
+    excludedChanged = Signal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.plot = pg.PlotWidget()
+        vb = _PatternViewBox()
+        self.plot = pg.PlotWidget(viewBox=vb)
+        vb.sigExcludeRequested.connect(self.excludeRequested)
+        self._regions: list[_ExcludeRegion] = []
+        self._range_shades: list[Any] = []
         layout.addWidget(self.plot)
         self.plot.setLabel("bottom", "2θ (deg)")
         self.plot.setLabel("left", "強度 (counts)")
@@ -204,6 +273,58 @@ class PatternPlot(QWidget):
         self._label.setText(text)
         rng = vb.viewRange()
         self._label.setPos(rng[0][0], rng[1][1])
+
+    # ------------------------------------------------------------------
+    # 除外領域とフィット範囲
+    # ------------------------------------------------------------------
+    def set_excluded(self, ranges: list[tuple[float, float]]) -> None:
+        """除外領域の帯を描き直す。"""
+        for item in self._regions:
+            self.plot.removeItem(item)
+        self._regions = []
+        for lo, hi in ranges:
+            item = _ExcludeRegion(float(lo), float(hi))
+            item.sigRegionChangeFinished.connect(self._on_region_changed)
+            item.sigRemoveRequested.connect(self._on_region_removed)
+            self.plot.addItem(item, ignoreBounds=True)
+            self._regions.append(item)
+
+    def excluded(self) -> list[tuple[float, float]]:
+        """帯の現在位置から除外領域の一覧を返す。"""
+        out: list[tuple[float, float]] = []
+        for item in self._regions:
+            lo, hi = item.getRegion()
+            out.append((float(lo), float(hi)))
+        return out
+
+    def set_fit_range(self, x_min: float, x_max: float) -> None:
+        """フィットに使わない両端(x_min より前、x_max より後)を灰色で示す。"""
+        for item in self._range_shades:
+            self.plot.removeItem(item)
+        self._range_shades = []
+        if not self._x.size:
+            return
+        x0, x1 = float(self._x[0]), float(self._x[-1])
+        for lo, hi in ((x0, x_min), (x_max, x1)):
+            if hi > lo:
+                shade = pg.LinearRegionItem(
+                    values=(lo, hi),
+                    movable=False,
+                    brush=pg.mkBrush(0, 0, 0, 25),
+                    pen=pg.mkPen(None),
+                )
+                shade.setZValue(-20)
+                self.plot.addItem(shade, ignoreBounds=True)
+                self._range_shades.append(shade)
+
+    def _on_region_changed(self, _item: Any = None) -> None:
+        self.excludedChanged.emit(self.excluded())
+
+    def _on_region_removed(self, item: Any) -> None:
+        if item in self._regions:
+            self.plot.removeItem(item)
+            self._regions.remove(item)
+        self.excludedChanged.emit(self.excluded())
 
     def update_curves(self, x: np.ndarray, y_calc: np.ndarray, y_bkg: np.ndarray) -> None:
         """精密化の途中経過: 計算・背景・差の曲線だけを差し替える(ティックはそのまま)。"""

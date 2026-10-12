@@ -209,6 +209,23 @@ class PhaseEntry:
             self._cell_dirty = False
 
 
+def merge_ranges(ranges: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
+    """区間の一覧を正規化する: 逆順は直し、幅 0 は捨て、重なる・接する区間はまとめて昇順に。"""
+    items: list[tuple[float, float]] = []
+    for a, b in ranges:
+        lo, hi = (float(a), float(b)) if a <= b else (float(b), float(a))
+        if hi > lo:
+            items.append((lo, hi))
+    items.sort()
+    out: list[tuple[float, float]] = []
+    for lo, hi in items:
+        if out and lo <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], hi))
+        else:
+            out.append((lo, hi))
+    return out
+
+
 @dataclass
 class HistogramEntry:
     """プロジェクト内の 1 ヒストグラム(観測データ + 装置 + 試料 + 背景 + 相の寄与)。"""
@@ -239,6 +256,10 @@ class HistogramEntry:
         for hmp in self.humps:
             y = y + hmp(x)
         return y
+
+    def set_excluded(self, ranges: Iterable[tuple[float, float]]) -> None:
+        """除外領域を設定する(逆順は直し、空・重なり・隣接は 1 つにまとめる)。"""
+        self.excluded = merge_ranges(ranges)
 
     def mask(self) -> BoolArray:
         x = self.data.x

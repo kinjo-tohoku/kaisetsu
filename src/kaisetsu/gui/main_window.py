@@ -94,6 +94,8 @@ class MainWindow(QMainWindow):
         self.tree.setMinimumWidth(220)
 
         self.plot = PatternPlot()
+        self.plot.excludeRequested.connect(self._on_exclude_requested)
+        self.plot.excludedChanged.connect(self._on_excluded_changed)
         self.pdf_plot = PDFPlot()
         self.plot_stack = QStackedWidget()
         self.plot_stack.addWidget(self.plot)
@@ -260,6 +262,9 @@ class MainWindow(QMainWindow):
         )
         self.act_background = self._add_action(
             m_data, tr("背景の設定(&B)…"), self.edit_background, "Ctrl+B"
+        )
+        self.act_range = self._add_action(
+            m_data, tr("データ範囲と除外領域(&E)…"), self.edit_range, "Ctrl+E"
         )
         self.act_phase = self._add_action(
             m_data, tr("相の設定(強度の扱い・選択配向軸・異方性)…"), self.edit_phase
@@ -434,6 +439,8 @@ class MainWindow(QMainWindow):
         else:
             self.plot.set_tof(None)
             self.plot.set_data(h.data, h.instrument.radiation.wavelength)
+        self.plot.set_excluded(h.excluded)
+        self.plot.set_fit_range(h.x_min, h.x_max)
         if self.project.phases:
             try:
                 res = self.project.calculate(i)
@@ -956,6 +963,52 @@ class MainWindow(QMainWindow):
         self.project.build_parameters()
         self.log("装置パラメータを更新しました")
         self._refresh_all()
+
+    def edit_range(self) -> None:
+        """データ範囲と除外領域を数値で編集する。"""
+        if not self.project.histograms:
+            QMessageBox.information(self, "データ範囲", "先に回折データを読み込んでください")
+            return
+        from kaisetsu.gui.range_dialog import RangeDialog
+
+        i = min(self.current_hist, len(self.project.histograms) - 1)
+        h = self.project.histograms[i]
+        dlg = RangeDialog(h, self)
+        if dlg.exec() != RangeDialog.DialogCode.Accepted:
+            return
+        x_min, x_max, ranges = dlg.values()
+        h.x_min, h.x_max = x_min, x_max
+        h.set_excluded(ranges)
+        self.log(
+            f"h{i}: 範囲 {x_min:g}〜{x_max:g}、除外領域 "
+            + ("、".join(f"{a:g}〜{b:g}" for a, b in h.excluded) or "なし")
+        )
+        self._refresh_all()
+
+    def _current_histogram(self) -> tuple[int, HistogramEntry] | None:
+        if not self.project.histograms or self.current_view != "hist":
+            return None
+        i = min(self.current_hist, len(self.project.histograms) - 1)
+        return i, self.project.histograms[i]
+
+    def _on_exclude_requested(self, lo: float, hi: float) -> None:
+        """図の上で Shift + ドラッグされた範囲を除外領域に加える。"""
+        cur = self._current_histogram()
+        if cur is None:
+            return
+        i, h = cur
+        h.set_excluded([*h.excluded, (lo, hi)])
+        self.log(f"h{i}: {lo:.3f}〜{hi:.3f} を除外しました(帯の右クリックで解除)")
+        self._refresh_plot()
+
+    def _on_excluded_changed(self, ranges: list) -> None:  # type: ignore[type-arg]
+        """帯の移動・削除を反映する。"""
+        cur = self._current_histogram()
+        if cur is None:
+            return
+        _, h = cur
+        h.set_excluded([(float(a), float(b)) for a, b in ranges])
+        self._refresh_plot()
 
     def edit_phase(self) -> None:
         if not self.project.phases:
