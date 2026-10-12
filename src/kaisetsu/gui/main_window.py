@@ -69,7 +69,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"kaisetsu {__version__} — 粉末回折 Rietveld / PDF / MEM 解析")
-        self.resize(1400, 850)
+        # ノート PC(1366×768、拡大率 150% なら論理 911×512)でも画面からはみ出さない大きさにする
+        avail = self.screen().availableGeometry()
+        self.resize(min(1400, avail.width() - 40), min(850, avail.height() - 60))
         self.project = Project("新規プロジェクト")
         self.project_path: Path | None = None
         self.current_hist = 0
@@ -191,7 +193,7 @@ class MainWindow(QMainWindow):
         v.addLayout(btns)
         dock.setWidget(panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setMinimumWidth(480)
+        dock.setMinimumWidth(400)
         self.param_dock = dock
         self.filter_edit.textChanged.connect(self._on_filter_text)
         self.only_free.toggled.connect(self.param_filter.set_only_free)
@@ -210,6 +212,9 @@ class MainWindow(QMainWindow):
         self.history_dock.setWidget(self.history_plot)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.history_dock)
         self.history_dock.hide()
+        # 幅が狭い画面では構造の 3D 表示を隠して図の幅を確保する(「表示」メニューから出せる)
+        if self.screen().availableGeometry().width() < 1500:
+            self.structure_dock.hide()
 
         self.status_label = QLabel(tr("データと相を読み込んでください"))
         self.statusBar().addWidget(self.status_label, 1)
