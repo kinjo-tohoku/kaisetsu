@@ -416,8 +416,10 @@ class Project:
         background を省略すると、観測パターンからピークを避けて推定した Chebyshev 背景
         (n_background 項)を初期値にする。
         """
+        lo = float(data.x[0]) if x_min is None else float(x_min)
+        hi = float(data.x[-1]) if x_max is None else float(x_max)
         if background is None:
-            background = _initial_background(data, max(n_background, 1))
+            background = _initial_background(data, max(n_background, 1), lo, hi)
         names = list(phases) if phases is not None else list(self.phases)
         for n in names:
             if n not in self.phases:
@@ -431,8 +433,8 @@ class Project:
             sample=copy.deepcopy(sample) if sample is not None else SampleGeometry(),
             background=background,
             contributions=contributions,
-            x_min=float(data.x[0]) if x_min is None else x_min,
-            x_max=float(data.x[-1]) if x_max is None else x_max,
+            x_min=lo,
+            x_max=hi,
             excluded=list(excluded),
             weight_factor=weight_factor,
             kalpha2_mode=kalpha2_mode,
@@ -514,7 +516,7 @@ class Project:
             if kind == "points":
                 h.background = InterpolatedBackground.from_pattern(h.data.x, h.data.y, n)
             else:
-                h.background = _initial_background(h.data, n)
+                h.background = _initial_background(h.data, n, h.x_min, h.x_max)
         elif kind == "points":
             old_b = h.background
             assert isinstance(old_b, InterpolatedBackground)
@@ -525,6 +527,20 @@ class Project:
             coeffs = np.zeros(n)
             coeffs[: min(n, len(old))] = old[: min(n, len(old))]
             h.background = ChebyshevBackground(coeffs, h.background.x_min, h.background.x_max)
+        self.build_parameters()
+
+    def set_range(self, hist: int, x_min: float, x_max: float) -> None:
+        """フィット範囲を変える。Chebyshev 背景は同じ曲線のまま新しい範囲を定義域に書き直す。
+
+        定義域が範囲より広いままだと多項式がほぼ線形従属になり、係数の相関が 1.000、esd が
+        10⁶ になる(11-BM の NAC を 0.5〜60° のうち 30° までで合わせたとき)。
+        """
+        if x_max <= x_min:
+            raise ValueError("x_max は x_min より大きくなければなりません")
+        h = self.histograms[hist]
+        h.x_min, h.x_max = float(x_min), float(x_max)
+        if isinstance(h.background, ChebyshevBackground):
+            h.background = h.background.with_domain(h.x_min, h.x_max)
         self.build_parameters()
 
     def enable_stephens(self, hist: int, phase: str, enable: bool = True) -> None:
@@ -1757,11 +1773,23 @@ class Project:
         return "\n".join(lines)
 
 
-def _initial_background(data: PowderData, n_terms: int) -> ChebyshevBackground:
-    """観測からの背景推定。失敗したら中央値の定数にする。"""
+def _initial_background(
+    data: PowderData, n_terms: int, x_min: float | None = None, x_max: float | None = None
+) -> ChebyshevBackground:
+    """観測からの背景推定。定義域はフィット範囲 [x_min, x_max]。失敗したら中央値の定数にする。
+
+    GSAS-II も Limits の範囲で Chebyshev を定義する。データ全体を定義域にすると、範囲を狭めた
+    ときに多項式がほぼ線形従属になり係数が決まらない(11-BM の NAC を 30° で切って相関 1.000)。
+    """
+    lo = float(data.x[0]) if x_min is None else float(x_min)
+    hi = float(data.x[-1]) if x_max is None else float(x_max)
+    if hi <= lo:
+        lo, hi = float(data.x[0]), float(data.x[-1])
+    m = (data.x >= lo) & (data.x <= hi)
+    x, y = (data.x[m], data.y[m]) if np.count_nonzero(m) >= 2 else (data.x, data.y)
     try:
-        return estimate_chebyshev_background(data.x, data.y, n_terms)
+        return estimate_chebyshev_background(x, y, n_terms).with_domain(lo, hi)
     except (ValueError, np.linalg.LinAlgError):
         coeffs = np.zeros(n_terms)
-        coeffs[0] = float(np.median(data.y))
-        return ChebyshevBackground(coeffs, float(data.x[0]), float(data.x[-1]))
+        coeffs[0] = float(np.median(y))
+        return ChebyshevBackground(coeffs, lo, hi)

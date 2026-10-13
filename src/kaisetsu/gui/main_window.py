@@ -994,7 +994,7 @@ class MainWindow(QMainWindow):
         x_min, x_max, ranges = dlg.values()
         if not self._range_keeps_points(h, x_min, x_max, ranges):
             return
-        h.x_min, h.x_max = x_min, x_max
+        self.project.set_range(i, x_min, x_max)
         h.set_excluded(ranges)
         self.log(
             f"h{i}: 範囲 {x_min:g}〜{x_max:g}、除外領域 "

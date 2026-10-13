@@ -41,7 +41,9 @@ class ChebyshevBackground:
 
     y_b(x) = Σ_n c_n T_n(t),  t = -1 + 2 (x - x_min) / (x_max - x_min)
 
-    x_min, x_max はデータの両端(GSAS-II の 'chebyschev-1' と同じ)。
+    x_min, x_max はフィット範囲の両端(GSAS-II の 'chebyschev-1' も Limits の範囲で定義する)。
+    定義域がフィット範囲より広いと、範囲内で多項式がほぼ線形従属になって係数が決まらない
+    (相関 1.000、esd 10⁶)。範囲を変えるときは `with_domain` で同じ曲線のまま書き直す。
     """
 
     coefficients: FloatArray = field(default_factory=lambda: np.zeros(1))
@@ -71,6 +73,17 @@ class ChebyshevBackground:
         xa = np.asarray(x, dtype=np.float64)
         t = -1.0 + 2.0 * (xa - self.x_min) / (self.x_max - self.x_min)
         return np.asarray(np.polynomial.chebyshev.chebvander(t, self.order - 1))
+
+    def with_domain(self, x_min: float, x_max: float) -> ChebyshevBackground:
+        """同じ多項式を定義域 [x_min, x_max] の Chebyshev 展開に書き直す(曲線は変わらない)。"""
+        if x_max <= x_min:
+            raise ValueError("x_max は x_min より大きくなければなりません")
+        series = np.polynomial.Chebyshev(self.coefficients, domain=[self.x_min, self.x_max])
+        new = series.convert(domain=[x_min, x_max], kind=np.polynomial.Chebyshev)
+        coeffs = np.zeros(self.order)
+        k = min(self.order, len(new.coef))
+        coeffs[:k] = new.coef[:k]
+        return ChebyshevBackground(coeffs, float(x_min), float(x_max))
 
 
 @dataclass
