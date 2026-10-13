@@ -13,16 +13,19 @@ Z-Rietveld の Type0m(J-PARC の iMATERIA、SuperHRPD などの装置ファイ�
 (`profile_kind = "zrietveld"`。alpha, beta* は使わない):
     プロファイル = TCH 擬 Voigt ⊗ [(1 − R) B2B(α, β₁) + R B2B(α, β₀)]
     B2B は接合点をピーク位置とする両側指数関数(上と同じ)、R は長い裾(β₀)の割合
-    時定数の単位 τ [μs] = (TOF / 1000) × ρ(d)、ρ(d) = zr_scale0 + zr_scale1 ln d
-    立ち上がり率 α = 1 / (τ α')、α' = 1 / (Alpha1 + Alpha2 d)
+    時定数の単位 τ [μs] = 擬 Voigt の全 FWHM Γ(TCH の式。試料由来の広がりを足した σ², γ から)
+    立ち上がり率 α = 1 / (τ α')、α' = max(1 / (Alpha1 + Alpha2 d), 0.001)
     減衰率 β₁ = 1 / (τ Beta1_0)、β₀ = 1 / (τ (Beta0_0 + Beta0_1 / d))
     R = r01 exp(−r02 / d^r03)
     σ² = SigmaSquare0 + SigmaSquare1 d² + SigmaSquare2 d⁴、γ = Gamma0 + Gamma1 d + Gamma2 d²
     (sig0, sig1, sig2 と z, x, y に写す)
-    定義書が公開されていないので、Z-Rietveld 2.9.1 が iMATERIA BS の装置ファイルで描いた
-    計算曲線(プロジェクトファイルから取り出した。validation/reference/zrietveld_type0m.json)
-    から逆算した: 169 反射で α', β₀', β₁', R, σ², γ の d 依存は 1e-8 で一致、関数形は Si 111 で
-    残差 2e-7、ρ(d) は 18 反射から求めた経験式(0.1% 以内)。
+    つまり α', β' は「ピーク幅に対する時定数の比」で、Type0m は幅を変えても形が相似になる。
+    定義書が公開されていないので、Z-Rietveld 2.9.1 が iMATERIA の装置ファイルで描いた
+    計算曲線(プロジェクトファイルから取り出した。validation/reference/zrietveld_type0m*.json)
+    から逆算した: BS 155° の 169 反射で α', β₀', β₁', R, σ², γ の d 依存は 1e-8 で一致、
+    関数形は Si 111 で残差 2e-7。τ = Γ は SE 90° バンク(α', β₁' が 1/100 で立ち上がりが
+    ほぼ δ 関数)の遅い減衰 β₀' Γ が 0.03% で、BS の 18 反射の τ も 0.3% 以内で一致する
+    (以前の経験式 ρ(d) = TOF/1000 × (1.0544 − 0.0306 ln d) は BS の Γ の近似だった)。
 
 GSAS-II の .instprm(テキスト)を読む `TOFInstrument.from_instprm` を用意する。
 
@@ -51,6 +54,7 @@ from kaisetsu.pattern.calculator import (
 )
 from kaisetsu.pattern.instrument import SampleGeometry
 from kaisetsu.profile.corrections import cylinder_absorption_array
+from kaisetsu.profile.pseudo_voigt import SQRT8LN2, tch_fwhm_array
 from kaisetsu.profile.tof_batch import tof_profile_batch
 from kaisetsu.profile.tof_profile import tof_peak_fwhm
 from kaisetsu.reflections.hkl import generate_reflections
@@ -93,9 +97,6 @@ class TOFInstrument:
     zr_r01: float = 0.1440
     zr_r02: float = 1.4737
     zr_r03: float = 5.2035
-    #: 時定数の単位 τ = TOF/1000 × (zr_scale0 + zr_scale1 ln d)。Z-Rietveld の計算曲線からの経験式
-    zr_scale0: float = 1.0544
-    zr_scale1: float = -0.0306
 
     @property
     def is_zrietveld(self) -> bool:
@@ -143,19 +144,37 @@ class TOFInstrument:
     def gamma_of(self, d: FloatArray) -> FloatArray:
         return np.asarray(np.maximum(self.x * d + self.y * d * d + self.z, 1e-5))
 
-    def zr_time_scale(self, d: FloatArray) -> FloatArray:
-        """Type0m の時定数の単位 τ [μs] = TOF/1000 × (zr_scale0 + zr_scale1 ln d)。"""
-        dd = np.maximum(np.asarray(d, dtype=np.float64), 1e-6)
-        t = np.maximum(self.position(dd), 1.0)
-        rho = np.maximum(self.zr_scale0 + self.zr_scale1 * np.log(dd), 1e-3)
-        return np.asarray(t / 1000.0 * rho)
+    def zr_time_scale(
+        self,
+        d: FloatArray,
+        sigma2: FloatArray | None = None,
+        gamma: FloatArray | None = None,
+    ) -> FloatArray:
+        """Type0m の時定数の単位 τ [μs] = 擬 Voigt の全 FWHM(TCH)。
 
-    def zr_rates(self, d: FloatArray) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-        """Type0m の (立ち上がり率 α, 減衰率 β₀, 減衰率 β₁, 割合 R) [1/μs, 1/μs, 1/μs, -]。"""
+        sigma2, gamma を渡せばその値(試料由来の広がりを足した σ² [μs²], γ [μs])で、
+        省略すれば装置の σ²(d), γ(d) で求める。
+        """
         dd = np.maximum(np.asarray(d, dtype=np.float64), 1e-6)
-        tau = self.zr_time_scale(dd)
-        # α' = 1 / (Alpha1 + Alpha2 d) が時定数の係数(Z-Rietveld が反射ごとに書き出す値)
-        a_ = 1.0 / np.maximum(self.zr_alpha1 + self.zr_alpha2 * dd, 1e-3)
+        s2 = self.sigma2_of(dd) if sigma2 is None else np.maximum(np.asarray(sigma2), 1e-6)
+        g = self.gamma_of(dd) if gamma is None else np.maximum(np.asarray(gamma), 1e-5)
+        return tch_fwhm_array(SQRT8LN2 * np.sqrt(s2), g)
+
+    def zr_rates(
+        self,
+        d: FloatArray,
+        sigma2: FloatArray | None = None,
+        gamma: FloatArray | None = None,
+    ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
+        """Type0m の (立ち上がり率 α, 減衰率 β₀, 減衰率 β₁, 割合 R) [1/μs, 1/μs, 1/μs, -]。
+
+        sigma2, gamma は `zr_time_scale` と同じ(時定数の単位 = 擬 Voigt の FWHM)。
+        """
+        dd = np.maximum(np.asarray(d, dtype=np.float64), 1e-6)
+        tau = self.zr_time_scale(dd, sigma2, gamma)
+        # α' = 1 / (Alpha1 + Alpha2 d) が時定数の係数(Z-Rietveld が反射ごとに書き出す値)。
+        # Z-Rietveld は α' を 0.001 で下から止める(iMATERIA SE の Si 111 で確認)
+        a_ = np.maximum(1.0 / np.maximum(self.zr_alpha1 + self.zr_alpha2 * dd, 1e-6), 1e-3)
         b0_ = np.maximum(self.zr_beta0_0 + self.zr_beta0_1 / dd, 1e-3)
         b1_ = max(self.zr_beta1, 1e-3)
         with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
@@ -392,14 +411,6 @@ def calculate_pattern_tof(
             corr = corr * cylinder_absorption_array(sample.mu_r * lam, instrument.two_theta)
         corr = corr * ph.extinction_factor(f2, lam, instrument.two_theta, False)
         inten = ph.scale / st.lattice.volume * refl.multiplicity * f2 * corr
-        if instrument.is_zrietveld:
-            alpha, beta0_zr, beta1_zr, r_zr = instrument.zr_rates(d)
-            beta = np.minimum(beta0_zr, beta1_zr)  # 窓の決定には遅い方の減衰
-        else:
-            alpha = instrument.alpha_of(d)
-            beta = instrument.beta_of(d)
-            beta0_zr = beta1_zr = beta
-            r_zr = np.zeros_like(d)
         sig2 = instrument.sigma2_of(d)
         gam = instrument.gamma_of(d)
         # 試料由来の広がり(サイズ・歪み・Stephens)を d 空間で求めて TOF に換算する:
@@ -407,6 +418,15 @@ def calculate_pattern_tof(
         add_g2, add_l = _sample_broadening_tof(ph, refl.hkl, d, instrument.difc)
         sig2 = sig2 + add_g2
         gam = gam + add_l
+        if instrument.is_zrietveld:
+            # Type0m の時定数の単位は(試料の広がりを含めた)擬 Voigt の FWHM
+            alpha, beta0_zr, beta1_zr, r_zr = instrument.zr_rates(d, sig2, gam)
+            beta = np.minimum(beta0_zr, beta1_zr)  # 窓の決定には遅い方の減衰
+        else:
+            alpha = instrument.alpha_of(d)
+            beta = instrument.beta_of(d)
+            beta0_zr = beta1_zr = beta
+            r_zr = np.zeros_like(d)
         n_refl = len(refl)
         fwhm_all = np.array(
             [
@@ -481,11 +501,11 @@ def zrietveld_peak(
     xa = np.asarray(x, dtype=np.float64).ravel()
     dd = np.array([float(d)])
     pos = instrument.position(dd)
-    alpha, beta0, beta1, r = instrument.zr_rates(dd)
-    i0 = np.zeros(1, dtype=np.int64)
-    i1 = np.array([xa.size], dtype=np.int64)
     s2 = np.array([max(sigma2, 1e-6)])
     g = np.array([max(gamma, 1e-5)])
+    alpha, beta0, beta1, r = instrument.zr_rates(dd, s2, g)
+    i0 = np.zeros(1, dtype=np.int64)
+    i1 = np.array([xa.size], dtype=np.int64)
     y1, _, _ = tof_profile_batch(xa, pos, alpha, beta1, s2, g, 1.0 - r, i0, i1)
     y2, _, _ = tof_profile_batch(xa, pos, alpha, beta0, s2, g, r, i0, i1)
     return np.asarray(y1 + y2)

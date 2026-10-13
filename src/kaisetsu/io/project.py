@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 
@@ -118,7 +118,9 @@ def _instrument_to_dict(inst: CWInstrument | TOFInstrument) -> dict[str, Any]:
 
 def _instrument_from_dict(d: dict[str, Any]) -> CWInstrument | TOFInstrument:
     if d.get("kind") == "tof":
-        kw = {k: v for k, v in d.items() if k != "kind"}
+        # 無くなったフィールド(v0.1.1 までの zr_scale0, zr_scale1 など)は読み飛ばす
+        known = {f.name for f in fields(TOFInstrument)}
+        kw = {k: v for k, v in d.items() if k in known}
         return TOFInstrument(**kw)
     r = d["radiation"]
     rad = Radiation(

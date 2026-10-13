@@ -54,14 +54,12 @@ _GSAS3_ONLY = ("alpha", "beta0", "beta1", "betaq")
 _ZR_FIELDS: tuple[tuple[str, str, int, float, float, str], ...] = (
     ("zr_alpha1", "Alpha1", 5, 1e-3, 100.0, "立ち上がり 1/α' = Alpha1 + Alpha2 d"),
     ("zr_alpha2", "Alpha2", 5, -50.0, 50.0, ""),
-    ("zr_beta1", "Beta1_0", 5, 1e-3, 100.0, "短い裾の減衰 β₁'(定数)"),
+    ("zr_beta1", "Beta1_0", 5, 1e-3, 100.0, "短い裾の減衰 β₁'(定数)。時定数 = 係数 × ピークの FWHM"),
     ("zr_beta0_0", "Beta0_0", 5, 1e-3, 100.0, "長い裾の減衰 β₀' = Beta0_0 + Beta0_1 / d"),
     ("zr_beta0_1", "Beta0_1", 5, -100.0, 100.0, ""),
     ("zr_r01", "r01", 5, 0.0, 1.0, "長い裾の割合 R = r01 exp(−r02 / d^r03)"),
     ("zr_r02", "r02", 5, 0.0, 100.0, ""),
     ("zr_r03", "r03", 5, 0.0, 20.0, ""),
-    ("zr_scale0", "時定数の単位(定数項)", 4, 0.3, 3.0, "時定数 = TOF/1000 × (この値 + 次の値 × ln d)。Z-Rietveld の計算曲線から求めた校正定数"),
-    ("zr_scale1", "時定数の単位(ln d の係数)", 4, -0.5, 0.5, ""),
 )  # fmt: skip
 
 

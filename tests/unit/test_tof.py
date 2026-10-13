@@ -117,7 +117,7 @@ def test_zrietveld_profile_in_project_round_trip(data_dir: Path, tmp_path: Path)
     names = proj.params.names()
     assert "h0:inst:zr_alpha1" in names and "h0:inst:zr_r03" in names
     assert "h0:inst:alpha" not in names and "h0:inst:beta0" not in names
-    assert proj.params["h0:inst:zr_scale0"].advanced
+    assert "h0:inst:zr_scale0" not in names  # 時定数の単位は FWHM(校正定数は無い)
     res = proj.calculate(0)
     y = res.y_calc - res.y_background
     assert np.all(np.isfinite(y)) and y.max() > 0

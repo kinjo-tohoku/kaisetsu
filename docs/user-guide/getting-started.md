@@ -210,9 +210,10 @@ TOF 装置パラメータのダイアログが開きます。装置から受け�
 Z-Rietveld の .zDiffractometer(J-PARC の iMATERIA、SuperHRPD など)からは換算係数 c₀, c₁, c₂、
 バンク角、プロファイル Type0m のすべて(σ²、γ、Alpha1/2、Beta1_0、Beta0_0/1、r01〜r03)を
 取り込み、プロファイル関数を「Z-Rietveld Type0m」に切り替えて Z-Rietveld と同じ形で計算します
-(関数形は Z-Rietveld の計算曲線から逆算したもので、ピーク形状は 0.5% 以内、位置の定義も同じ。
-詳細は docs/validation/phase7_tof.md 8 節)。iMATERIA の CeO2 では装置ファイルの値をそのまま使った
-標準の手順で Rwp 8.6%、格子定数 5.41228 Å(Z-Rietveld の解 5.41197 Å)になります。
+(関数形は Z-Rietveld の計算曲線から逆算したもので、ピーク形状は iMATERIA の BS 155° と SE 90° の
+両バンクで 0.05% 以内、位置の定義も同じ。詳細は docs/validation/phase7_tof.md 8 節)。
+iMATERIA の CeO2 では装置ファイルの値をそのまま使った標準の手順で、BS バンクが Rwp 8.1%、
+格子定数 5.41223 Å(Z-Rietveld の解 5.41197〜5.41234 Å)、SE バンクが Rwp 6.2% になります。
 パラメータ名は `h0:inst:difc|difa|difb|zero|sig0|sig1|sig2|sigq|x|y|z` と、GSAS type 3 なら
 `alpha|beta0|beta1|betaq`、Type0m なら `zr_alpha1|zr_alpha2|zr_beta1|zr_beta0_0|zr_beta0_1|zr_r01|zr_r02|zr_r03`
 (Z-Rietveld と同じく装置の定数として固定しておくのが普通です)。

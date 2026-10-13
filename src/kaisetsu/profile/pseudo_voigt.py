@@ -80,3 +80,18 @@ def pseudo_voigt(dx: npt.ArrayLike, fwhm_g: float, fwhm_l: float) -> FloatArray:
 def pseudo_voigt_fwhm(fwhm_g: float, fwhm_l: float) -> float:
     """全 FWHM だけを返す。"""
     return float(tch_fwhm_eta(float(fwhm_g), float(fwhm_l))[0])
+
+
+def tch_fwhm_array(fwhm_g: npt.ArrayLike, fwhm_l: npt.ArrayLike) -> FloatArray:
+    """TCH の全 FWHM を配列で返す(`tch_fwhm_eta` と同じ式の NumPy 版)。"""
+    g = np.maximum(np.asarray(fwhm_g, dtype=np.float64), 0.0)
+    lo = np.maximum(np.asarray(fwhm_l, dtype=np.float64), 0.0)
+    s = (
+        g**5
+        + 2.69269 * g**4 * lo
+        + 2.42843 * g**3 * lo**2
+        + 4.47163 * g**2 * lo**3
+        + 0.07842 * g * lo**4
+        + lo**5
+    )
+    return np.asarray(np.maximum(np.where(s > 0.0, s, _MIN_FWHM**5) ** 0.2, _MIN_FWHM))

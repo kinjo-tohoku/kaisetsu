@@ -1,8 +1,9 @@
-"""Z-Rietveld 2.9.1 の Type0m 計算曲線との比較。
+"""Z-Rietveld 2.9.1 の Type0m 計算曲線との比較(iMATERIA BS 155° と SE 90° の 2 バンク)。
 
-参照値は Z-Rietveld がサンプル #2_CeO2_iMATERIA の装置ファイル(BS 155° バンク)と既定相 Si で
-0 サイクル実行したプロジェクト(.zrietveldn、zstd 圧縮の CBOR)から取り出した計算曲線
-(`validation/reference/zrietveld_type0m.json`、スクリプトは docs/validation/phase7_tof.md 8 節)。
+参照値は Z-Rietveld がサンプル #2_CeO2_iMATERIA の装置ファイルと既定相 Si で 0 サイクル実行した
+プロジェクト(.zrietveldn、zstd 圧縮の CBOR)から取り出した計算曲線
+(`validation/reference/zrietveld_type0m.json`(BS)と `zrietveld_type0m_se.json`(SE)、
+スクリプトは docs/validation/phase7_tof.md 8 節)。
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from kaisetsu.pattern.tof import TOFInstrument, zrietveld_peak
 from tests.conftest import load_reference
 
 pytestmark = pytest.mark.validation
+
+REFERENCES = ["zrietveld_type0m", "zrietveld_type0m_se"]
 
 
 def _instrument(ref: dict) -> TOFInstrument:
@@ -41,9 +44,10 @@ def _instrument(ref: dict) -> TOFInstrument:
     )
 
 
-def test_type0m_d_dependence_matches_zrietveld() -> None:
+@pytest.mark.parametrize("name", REFERENCES)
+def test_type0m_d_dependence_matches_zrietveld(name: str) -> None:
     """α', β₀', β₁', R, σ², γ, 位置の d 依存(Z-Rietveld が反射ごとに書き出した値と比べる)。"""
-    ref = load_reference("zrietveld_type0m")
+    ref = load_reference(name)
     inst = _instrument(ref)
     for pk in ref["peaks"]:
         d = np.array([pk["d"]])
@@ -52,20 +56,33 @@ def test_type0m_d_dependence_matches_zrietveld() -> None:
         assert float(inst.gamma_of(d)[0]) == pytest.approx(pk["gamma"], rel=1e-6)
         alpha, beta0, beta1, r = inst.zr_rates(d)
         tau = inst.zr_time_scale(d)
-        # 率 × 時定数の単位 = パラメータの逆数
+        # 率 × 時定数の単位 = パラメータの逆数(α' は Z-Rietveld と同じく 0.001 で下から止める)
         assert float(1.0 / (alpha[0] * tau[0])) == pytest.approx(pk["alpha"], rel=1e-6)
         assert float(1.0 / (beta0[0] * tau[0])) == pytest.approx(pk["beta0"], rel=1e-6)
         assert float(1.0 / (beta1[0] * tau[0])) == pytest.approx(pk["beta1"], rel=1e-6)
         assert float(r[0]) == pytest.approx(pk["R"], abs=1e-6)
+        # 時定数の単位は擬 Voigt の全 FWHM(TCH)
+        fwhm_g = 2.3548200450309493 * np.sqrt(pk["sigma2"])
+        gl = pk["gamma"]
+        fwhm = (
+            fwhm_g**5
+            + 2.69269 * fwhm_g**4 * gl
+            + 2.42843 * fwhm_g**3 * gl**2
+            + 4.47163 * fwhm_g**2 * gl**3
+            + 0.07842 * fwhm_g * gl**4
+            + gl**5
+        ) ** 0.2
+        assert float(tau[0]) == pytest.approx(fwhm, rel=1e-6)
 
 
-def test_type0m_peak_shape_matches_zrietveld() -> None:
+@pytest.mark.parametrize("name", REFERENCES)
+def test_type0m_peak_shape_matches_zrietveld(name: str) -> None:
     """ピーク形状(面積 1 × 強度)が Z-Rietveld の計算曲線と一致する。
 
-    形状の関数形は Si 111 で残差 2e-7(数値畳み込み)。時定数の単位 ρ(d) が経験式なので
-    0.1% 程度、閉形式の擬 Voigt と Z-Rietveld の数値畳み込みの差を含めて最大 0.5% を許す。
+    形状の関数形は Si 111 で残差 2e-7(数値畳み込み)。閉形式の擬 Voigt と Z-Rietveld の
+    数値畳み込みの差、窓にかかる隣接反射の切れ端を含めて最大 0.5% を許す。
     """
-    ref = load_reference("zrietveld_type0m")
+    ref = load_reference(name)
     inst = _instrument(ref)
     worst = 0.0
     for pk in ref["peaks"]:
@@ -82,4 +99,4 @@ def test_type0m_peak_shape_matches_zrietveld() -> None:
         c_ref = float(np.sum(x[w] * y_ref[w]) / np.sum(y_ref[w]))
         c = float(np.sum(x[w] * y[w]) / np.sum(y[w]))
         assert abs(c - c_ref) < 0.3, (pk["hkl"], c - c_ref)
-    print(f"[zrietveld_type0m] worst max|dy|/max = {worst:.2e}")
+    print(f"[{name}] worst max|dy|/max = {worst:.2e}")

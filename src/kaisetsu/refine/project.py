@@ -800,8 +800,6 @@ class Project:
                 ("zr_r01", "zr_r01", 1e-3, 0.0, 1.0, "", "Type0m r01(R = r01 exp(−r02/d^r03))"),
                 ("zr_r02", "zr_r02", 1e-3, 0.0, 100.0, "Å^r03", "Type0m の r02"),
                 ("zr_r03", "zr_r03", 1e-3, 0.0, 20.0, "", "Type0m の r03"),
-                ("zr_scale0", "zr_scale0", 1e-3, 0.3, 3.0, "", "Type0m 時定数の単位(校正定数)"),
-                ("zr_scale1", "zr_scale1", 1e-3, -0.5, 0.5, "", "Type0m 時定数 ln d 係数"),
             ]  # fmt: skip
         else:
             spec += [
@@ -830,7 +828,6 @@ class Project:
                     setter=_attr_setter(inst, attr),
                     unit=unit,
                     description=desc,
-                    advanced=nm.startswith("zr_scale"),
                 )
             )
 
