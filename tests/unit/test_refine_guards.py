@@ -129,7 +129,7 @@ def test_width_guard_fixes_tof_sigma_terms(data_dir: Path) -> None:
     assert not proj.params["h0:inst:sig0"].vary and not proj.params["h0:inst:sig2"].vary
     assert proj.params["h0:inst:sig0"].value == 0.0  # 段階前の値に戻っている
     assert proj.params["h0:bkg:0"].vary  # 他は動いたまま
-    assert any("sig0, h0:inst:sig2 を段階前の値に固定" in line for line in proj.log)
+    assert any("sig0 = 0, h0:inst:sig2 = 0 を固定してやり直します" in line for line in proj.log)
     # sig0, sig2 が固定で sig1 だけ動いているなら sig1 を固定する
     proj.vary("h0:inst:sig1")
     proj.params["h0:inst:sig1"].value = -1.0e4

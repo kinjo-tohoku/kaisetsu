@@ -52,7 +52,7 @@ class Recipe:
     name: str
     steps: list[Step] = field(default_factory=list)
     #: 真なら、段階の後でガウス幅 Γ_G²(TOF では σ²)が負(境界)になっていたら
-    #: U(TOF では sig0, sig2、それらが固定なら sig1)を固定してやり直す
+    #: U → V → W の順(TOF では sig0, sig2 → sig1)に固定してやり直す(3 回まで)
     guard_widths: bool = True
 
     def add(self, name: str, patterns: Iterable[str], max_cycles: int = 15, **kw: object) -> Recipe:
@@ -132,7 +132,10 @@ class Recipe:
         負の範囲はガウス成分を 0 として計算される(GSAS-II と同じ)ので精密化は通るが、
         U < 0 に流れていく解は装置の特性として意味を失う。U を初期値に固定しても Rwp は
         ほとんど変わらない(PbSO4 9.88 → 9.86%、LaB6 は同じ)ので、初心者向けに固定する。
-        それでも V, W の組み合わせで負が残ることはあり、その場合は diagnostics が知らせる。
+        U を固定しても V, W の組み合わせで負が残れば V を段階前の値に、それでも残れば W を
+        最小値 G2_REF(FWHM 0.01°)に固定する(3 回まで)。ガウス成分の無いデータで V, W が
+        負のまま「収束」すると、全範囲でガウス幅が 0 に切られて V, W の微分が 0 になり、
+        共分散が特異になる(Z-Rietveld サンプルの CaF2 実験室データで V = −1.8, W = −0.43)。
 
         TOF では σ² = sig0 + sig1 d² + sig2 d⁴ が負になったら、動いている sig0, sig2 を固定する。
         sig1 だけが動いている段階(「ピーク幅 W」)で負になるのは、立ち上がり α や減衰 β が
@@ -140,37 +143,52 @@ class Recipe:
         固定して次の段階(α, β も動く)に進む(iMATERIA の CeO2 で α の既定値のまま sig1 を
         動かすと σ² = −4000 μs² まで流れた)。
         """
-        from kaisetsu.refine.width_check import width_violations
+        from kaisetsu.refine.width_check import G2_REF, width_violations
 
-        fixed: list[str] = []
-        for v in width_violations(project):
-            if v.kind == "gauss":
-                cands = [f"h{v.hist}:inst:u"]
-            elif v.kind == "tof_sigma2":
-                cands = [f"h{v.hist}:inst:sig0", f"h{v.hist}:inst:sig2"]
-                if not any(n in project.params and project.params[n].is_free for n in cands):
-                    cands = [f"h{v.hist}:inst:sig1"]
-            else:
-                continue
-            fixed.extend(n for n in cands if n in project.params and project.params[n].is_free)
-        if not fixed:
-            return res
-        for q in project.params:
-            if q.name in snapshot:
-                q.value = snapshot[q.name]
-        project.params.evaluate_ties()
-        project.params.apply_all()
-        for name in fixed:
-            project.fix(name)
-        project.log.append(
-            f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅(Γ_G² または σ²)がデータの一部で"
-            f"負になったので {', '.join(fixed)} を段階前の値に固定してやり直します"
-        )
-        return project.refine(
-            max_cycles=step.max_cycles,
-            progress=iteration_progress,
-            le_bail_cycles=3 if _has_le_bail(project) else 0,
-        )
+        def is_free(name: str) -> bool:
+            return name in project.params and project.params[name].is_free
+
+        for _attempt in range(3):
+            fixed: list[str] = []
+            floors: dict[str, float] = {}
+            for v in width_violations(project):
+                if v.kind == "gauss":
+                    order = [f"h{v.hist}:inst:{k}" for k in ("u", "v", "w")]
+                    cands = [n for n in order if is_free(n)][:1]
+                    if cands and cands[0].endswith(":w"):
+                        # U, V を固定しても負ならガウス成分が要らないデータ。W は段階前の値
+                        # (ガウスだけで幅を合わせた大きめの値)でなく、分解能より細い最小値にする
+                        w0 = snapshot.get(cands[0], 0.0)
+                        floors[cands[0]] = w0 if 0.0 < w0 < G2_REF else G2_REF
+                elif v.kind == "tof_sigma2":
+                    cands = [f"h{v.hist}:inst:sig0", f"h{v.hist}:inst:sig2"]
+                    if not any(is_free(n) for n in cands):
+                        cands = [f"h{v.hist}:inst:sig1"]
+                else:
+                    continue
+                fixed.extend(n for n in cands if is_free(n) and n not in fixed)
+            if not fixed:
+                return res
+            for q in project.params:
+                if q.name in snapshot:
+                    q.value = snapshot[q.name]
+            for name, val in floors.items():
+                project.params[name].value = val
+            project.params.evaluate_ties()
+            project.params.apply_all()
+            for name in fixed:
+                project.fix(name)
+            what = ", ".join(f"{n} = {project.params[n].value:g}" for n in fixed)
+            project.log.append(
+                f"レシピ '{self.name}' 段階 '{step.name}': ガウス幅(Γ_G² または σ²)がデータの"
+                f"一部で負になったので {what} を固定してやり直します"
+            )
+            res = project.refine(
+                max_cycles=step.max_cycles,
+                progress=iteration_progress,
+                le_bail_cycles=3 if _has_le_bail(project) else 0,
+            )
+        return res
 
 
 def _has_le_bail(project: Project) -> bool:

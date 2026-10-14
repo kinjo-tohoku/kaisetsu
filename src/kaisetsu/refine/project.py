@@ -1661,6 +1661,22 @@ class Project:
                     f"{p.name} は決まっていません(esd {p.esd:.3g} が値 {p.value:.3g} より大きい)。"
                     "他のパラメータと強く相関しているか、データに感度がありません。固定を検討してください。"
                 )
+        fit = self.last_fit
+        if fit is not None:
+            free_names = {p.name for p in ps.free()}
+            for name in fit.insensitive:
+                if name in free_names:
+                    notes.append(
+                        f"{name} はデータに感度がありません(変えても計算パターンが変わらない"
+                        "ので esd を出せません)。ピーク幅が負の範囲で 0 に切られているときに"
+                        "起こります。固定してください。"
+                    )
+            for group in fit.degenerate:
+                if all(n in free_names for n in group):
+                    notes.append(
+                        f"{', '.join(group)} はこのデータでは組み合わせでしか決まりません"
+                        "(最小二乗の行列が特異)。どれか 1 つを固定してください。"
+                    )
         from kaisetsu.refine.width_check import width_violations
 
         for v in width_violations(self):

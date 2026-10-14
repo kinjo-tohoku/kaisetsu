@@ -2,7 +2,8 @@
 
 目的関数は重み付き残差 r_i = sqrt(w_i) (y_obs,i - y_calc,i) の二乗和。
 ヤコビアンはパラメータごとの刻み(`Parameter.step`)による前進差分で求める。
-収束後、共分散 (J^T J)^{-1} × χ²_red から esd と相関行列を得る。
+収束後、共分散 (J^T J)^{-1} × χ²_red から esd と相関行列を得る。J^T J は列を正規化して
+固有値分解し、特異な方向を捨てた擬似逆行列にする(`covariance_from_jacobian`)。
 
 出典: W. H. Press et al., *Numerical Recipes*, Ch. 15; Young, *The Rietveld Method*, Ch. 1.
 """
@@ -42,6 +43,10 @@ class FitResult:
     message: str
     elapsed: float
     history: list[float] = field(default_factory=list)
+    #: 微分が 0 でデータに感度の無い変数(esd は 0、相関は 0 にしてある)
+    insensitive: list[str] = field(default_factory=list)
+    #: J^T J の特異方向ごとの変数の組(このデータでは組み合わせでしか決まらない)
+    degenerate: list[list[str]] = field(default_factory=list)
 
     def high_correlations(self, threshold: float = 0.9) -> list[tuple[str, str, float]]:
         out = []
@@ -66,6 +71,12 @@ class FitResult:
             lines.append("相関の強い組 (|ρ| ≥ 0.9):")
             for a, b, c in hc[:10]:
                 lines.append(f"  {a} – {b}: {c:+.3f}")
+        if self.insensitive:
+            lines.append(
+                "データに感度が無い変数(微分が 0、esd は出せない): " + ", ".join(self.insensitive)
+            )
+        for group in self.degenerate:
+            lines.append("組み合わせでしか決まらない変数(行列が特異): " + ", ".join(group))
         return "\n".join(lines)
 
 
@@ -212,16 +223,11 @@ def refine_least_squares(
     n_par = len(res.x)
     dof = max(n_data - n_par, 1)
     chi2 = float(np.sum(r**2) / dof)
-    jtj = res.jac.T @ res.jac
-    cov = _safe_inverse(jtj) * chi2
-    esd = np.sqrt(np.maximum(np.diag(cov), 0.0))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        corr = cov / np.outer(esd, esd)
-    corr[~np.isfinite(corr)] = 0.0
-    np.fill_diagonal(corr, 1.0)
+    cov, esd, corr, insens, degen = covariance_from_jacobian(res.jac, chi2)
     params.set_esd(esd)
+    names = [p.name for p in free]
     return FitResult(
-        names=[p.name for p in free],
+        names=names,
         values=np.asarray(res.x, dtype=np.float64),
         esd=esd,
         covariance=cov,
@@ -234,11 +240,71 @@ def refine_least_squares(
         message=str(res.message),
         elapsed=time.perf_counter() - t0,
         history=history,
+        insensitive=[names[i] for i in insens],
+        degenerate=[[names[i] for i in idx] for idx in degen],
     )
 
 
-def _safe_inverse(a: FloatArray) -> FloatArray:
-    try:
-        return np.linalg.inv(a)
-    except np.linalg.LinAlgError:
-        return np.linalg.pinv(a)
+#: 列を正規化した J^T J の固有値が(最大固有値 × この比)より小さい方向は特異として捨てる
+COV_RCOND = 1.0e-14
+#: 特異方向の固有ベクトルで、この大きさ以上の成分を持つ変数を「組み合わせ」として報告する
+DEGENERATE_COMPONENT = 0.3
+
+
+def covariance_from_jacobian(
+    jac: FloatArray, chi2: float, rcond: float = COV_RCOND
+) -> tuple[FloatArray, FloatArray, FloatArray, list[int], list[list[int]]]:
+    """ヤコビアンから共分散 (J^T J)^{-1} χ²_red、esd、相関行列を安定に求める。
+
+    `np.linalg.inv` は特異に近い行列でも例外を出さずに桁違いの値を返すことがあり、その
+    共分散から作った相関係数は |ρ| > 1 になる(ガウス幅 Γ_G² が全範囲で負になって V, W の
+    微分が 0 になった CaF2 の実験室データで、|ρ| = 8.9 のような組が 11 組出た)。ここでは
+
+    1. 列をそのノルムで割って J^T J の対角を 1 にし(条件数を下げる)、
+    2. 固有値分解で、最大固有値 × rcond より小さい固有値の方向を 0 とする擬似逆行列を作る
+
+    ので共分散は常に半正定値で |ρ| ≤ 1 になる。ノルムが 0 の列(その変数を変えても残差が
+    変わらない)は感度無しとして esd = 0、相関 0 にし、捨てた固有方向は成分の大きい変数の
+    組として返す(このデータでは組み合わせでしか決まらない)。
+
+    Returns:
+        (共分散, esd, 相関行列, 感度の無い変数の添字, 特異方向ごとの変数の添字)
+
+    出典: Press et al., *Numerical Recipes*, Ch. 15.4(共分散)と Ch. 2.6(SVD による擬似逆行列)
+    """
+    j = np.asarray(jac, dtype=np.float64)
+    if j.ndim != 2:
+        raise ValueError("ヤコビアンは 2 次元配列でなければなりません")
+    n = j.shape[1]
+    norms = np.linalg.norm(j, axis=0)
+    good = np.isfinite(norms) & (norms > 0.0)
+    insens = [int(i) for i in np.flatnonzero(~good)]
+    scale = np.where(good, norms, 1.0)
+    js = np.where(good[None, :], j / scale, 0.0)
+    jtj = js.T @ js
+    jtj = 0.5 * (jtj + jtj.T)
+    w, v = np.linalg.eigh(jtj)
+    w_max = float(w.max()) if n else 0.0
+    keep = w > max(rcond * w_max, 0.0)
+    inv_w = np.where(keep, 1.0 / np.where(keep, w, 1.0), 0.0)
+    cov_s = (v * inv_w) @ v.T
+    cov = cov_s / np.outer(scale, scale) * chi2
+    cov = 0.5 * (cov + cov.T)
+    cov[insens, :] = 0.0
+    cov[:, insens] = 0.0
+    esd = np.sqrt(np.maximum(np.diag(cov), 0.0))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = cov / np.outer(esd, esd)
+    corr[~np.isfinite(corr)] = 0.0
+    corr = np.clip(corr, -1.0, 1.0)
+    np.fill_diagonal(corr, 1.0)
+    degen: list[list[int]] = []
+    for k in np.flatnonzero(~keep):
+        idx = [
+            int(i)
+            for i in np.flatnonzero(np.abs(v[:, k]) >= DEGENERATE_COMPONENT)
+            if int(i) not in insens
+        ]
+        if len(idx) >= 2:
+            degen.append(idx)
+    return cov, esd, corr, insens, degen
