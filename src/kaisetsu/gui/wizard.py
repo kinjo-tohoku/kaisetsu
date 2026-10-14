@@ -71,7 +71,7 @@ class DataPage(_FilePage):
         super().__init__(
             "1. 回折データ",
             "測定した粉末回折パターンのファイルを選びます(xy / xye / GSAS 形式など)。",
-            "回折データ (*.xy *.xye *.dat *.txt *.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)",
+            "回折データ (*.xy *.xye *.chi *.dat *.txt *.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)",
             parent,
         )
 

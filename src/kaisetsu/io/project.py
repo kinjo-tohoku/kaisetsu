@@ -523,3 +523,53 @@ def load_project(path: str | Path) -> Project:
         d = json.load(f)
     _internalize(d, _npz_path(p))
     return project_from_dict(d)
+
+
+# ----------------------------------------------------------------------
+# 装置テンプレート(標準試料で校正した装置と試料形状を使い回す)
+# ----------------------------------------------------------------------
+INSTRUMENT_TEMPLATE_SUFFIX = ".kaisetsu-inst.json"
+INSTRUMENT_TEMPLATE_FILTER = "装置テンプレート (*.kaisetsu-inst.json *.json);;すべて (*)"
+
+
+def instrument_template_to_dict(
+    inst: CWInstrument | TOFInstrument, sample: SampleGeometry | None = None
+) -> dict[str, Any]:
+    return {
+        "schema": "kaisetsu-instrument-template",
+        "schema_version": 1,
+        "kaisetsu_version": __version__,
+        "instrument": _instrument_to_dict(inst),
+        "sample": _sample_to_dict(sample if sample is not None else SampleGeometry()),
+    }
+
+
+def save_instrument_template(
+    path: str | Path, inst: CWInstrument | TOFInstrument, sample: SampleGeometry | None = None
+) -> Path:
+    """装置(波長・幅・非対称・ゼロ点)と試料形状(幾何・半径・位置ずれ)をテンプレートに保存する。
+
+    放射光マイクロ XRD では標準試料(CeO2、LaB6)で校正した値をここに保存し、
+    「Le Bail で格子定数だけ」や装置ダイアログから読み込んで使い回す。
+    """
+    p = Path(path)
+    p.write_text(
+        json.dumps(instrument_template_to_dict(inst, sample), ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
+    return p
+
+
+def load_instrument_template(
+    path: str | Path,
+) -> tuple[CWInstrument | TOFInstrument, SampleGeometry]:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"装置テンプレートが見つかりません: {p}")
+    with p.open(encoding="utf-8") as f:
+        d = json.load(f)
+    if not isinstance(d, dict) or "instrument" not in d:
+        raise ValueError(f"{p.name} は装置テンプレートではありません(instrument がありません)")
+    inst = _instrument_from_dict(d["instrument"])
+    sample = _sample_from_dict(d.get("sample") or {})
+    return inst, sample

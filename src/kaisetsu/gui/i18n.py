@@ -31,6 +31,8 @@ EN: dict[str, str] = {
     "I(Q) から G(r) を作る…": "Transform I(Q) to G(r)…",
     "はじめての精密化(ウィザード)(&W)…": "First refinement (&wizard)…",
     "連続データを順に精密化…": "Sequential refinement…",
+    "Le Bail で格子定数だけ(放射光マイクロ XRD 向け)…": "Lattice parameters only (Le Bail)…",
+    "Le Bail で格子定数だけ": "Lattice parameters only (Le Bail)",
     "精密化(&R)": "&Refine",
     "パターンを計算(&C)": "&Calculate pattern",
     "精密化を実行(&R)": "&Run refinement",

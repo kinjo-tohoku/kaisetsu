@@ -1596,12 +1596,19 @@ class Project:
                     tbl.intensity_total,
                 )
                 table = ph.f2_tables.setdefault(i, {})
+                new: dict[tuple[int, int, int], float | None] = {}
                 for hk, f2c, ic, io in zip(
                     tbl.hkl, tbl.f2, tbl.intensity_total, i_obs, strict=True
                 ):
                     key = (int(hk[0]), int(hk[1]), int(hk[2]))
-                    if ic > 0 and np.isfinite(io):
-                        table[key] = max(float(f2c * io / ic), 0.0)
+                    new[key] = (
+                        max(float(f2c * io / ic), 0.0) if ic > 0 and np.isfinite(io) else None
+                    )
+                # 0 になった反射は計算強度も 0 になり、分配で二度と強度をもらえない(格子定数の
+                # 初期値が 0.2% ずれていた CeO2 で (533) が消えた)。最大値の 1e-4 を下限にする
+                floor = 1e-4 * max((v for v in new.values() if v is not None), default=0.0)
+                for key, val in new.items():
+                    table[key] = floor if val is None or val < floor else val
 
     # ------------------------------------------------------------------
     # 結果

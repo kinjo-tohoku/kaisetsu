@@ -59,6 +59,35 @@ PRESETS: dict[str, dict[str, object]] = {
 }  # fmt: skip
 
 
+def instrument_from_preset(name: str) -> tuple[CWInstrument, SampleGeometry]:
+    """プリセット名から装置と試料形状を作る(ダイアログを開かずに使うため)。"""
+    d = PRESETS[name]
+    if d.get("neutron"):
+        rad = Radiation.neutron(float(d["wavelength"]))
+    elif "target" in d:
+        rad = Radiation.characteristic(str(d["target"]))
+        if not d.get("kalpha2", True):
+            rad = Radiation.xray(rad.wavelength)
+        elif rad.wavelength2 is not None:
+            rad = Radiation.xray(rad.wavelength, rad.wavelength2, float(d.get("ratio2", 0.5)))
+    else:
+        rad = Radiation.xray(float(d["wavelength"]))
+    sh_l = float(d.get("sh_l", 0.0))
+    inst = CWInstrument(
+        rad,
+        u=float(d["u"]),
+        v=float(d["v"]),
+        w=float(d["w"]),
+        x=float(d["x"]),
+        y=float(d["y"]),
+        s_l=0.5 * sh_l,
+        h_l=0.5 * sh_l,
+        polarization=float(d.get("polarization", 0.5)),
+    )
+    kind = d.get("geometry", GeometryKind.BRAGG_BRENTANO)
+    return inst, SampleGeometry(kind=GeometryKind(kind))
+
+
 def _spin(value: float, lo: float, hi: float, decimals: int, step: float) -> QDoubleSpinBox:
     s = QDoubleSpinBox()
     s.setRange(lo, hi)
@@ -101,6 +130,19 @@ class InstrumentDialog(QDialog):
         )
         self.btn_load.clicked.connect(self.load_instrument_file)
         top.addWidget(self.btn_load)
+        self.btn_template_load = QPushButton("テンプレートを読む…")
+        self.btn_template_load.setToolTip(
+            "「テンプレートに保存」で保存した装置と試料形状(*.kaisetsu-inst.json)を読み込みます"
+        )
+        self.btn_template_load.clicked.connect(self.load_template)
+        top.addWidget(self.btn_template_load)
+        self.btn_template_save = QPushButton("テンプレートに保存…")
+        self.btn_template_save.setToolTip(
+            "いまの装置と試料形状をファイルに保存します。標準試料で校正した値を、"
+            "別のプロジェクトや「Le Bail で格子定数だけ」で使い回せます"
+        )
+        self.btn_template_save.clicked.connect(self.save_template)
+        top.addWidget(self.btn_template_save)
         layout.addLayout(top)
         # 2 列(左: 放射線と試料、右: ピーク幅)にして、ノート PC でも画面に収める
         cols = QHBoxLayout()
@@ -261,6 +303,59 @@ class InstrumentDialog(QDialog):
         remember_dir(path)
         self.apply_instrument(inst)
         self.preset.setCurrentIndex(0)
+
+    def load_template(self) -> None:
+        from kaisetsu.io.project import INSTRUMENT_TEMPLATE_FILTER, load_instrument_template
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "装置テンプレート", last_dir(), INSTRUMENT_TEMPLATE_FILTER
+        )
+        if not path:
+            return
+        try:
+            inst, smp = load_instrument_template(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "装置テンプレート", f"読めませんでした:\n{exc}")
+            return
+        if not isinstance(inst, CWInstrument):
+            QMessageBox.warning(
+                self, "装置テンプレート", "TOF のテンプレートはこのダイアログでは使えません"
+            )
+            return
+        remember_dir(path)
+        self.apply_instrument(inst)
+        self.apply_sample(smp)
+        self.preset.setCurrentIndex(0)
+
+    def save_template(self) -> None:
+        from kaisetsu.io.project import (
+            INSTRUMENT_TEMPLATE_FILTER,
+            INSTRUMENT_TEMPLATE_SUFFIX,
+            save_instrument_template,
+        )
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "装置テンプレートに保存", last_dir(), INSTRUMENT_TEMPLATE_FILTER
+        )
+        if not path:
+            return
+        if not path.endswith(".json"):
+            path += INSTRUMENT_TEMPLATE_SUFFIX
+        inst, smp = self.result_instrument()
+        save_instrument_template(path, inst, smp)
+        remember_dir(path)
+        QMessageBox.information(self, "装置テンプレート", f"保存しました:\n{path}")
+
+    def apply_sample(self, smp: SampleGeometry) -> None:
+        """SampleGeometry の値をウィジェットに反映する。"""
+        self._smp = smp
+        self.geometry.setCurrentIndex(1 if smp.kind is GeometryKind.DEBYE_SCHERRER else 0)
+        self.radius.setValue(smp.radius_mm)
+        self.displacement.setValue(smp.displacement_mm)
+        self.transparency.setValue(smp.transparency_mm)
+        self.rough_a.setValue(smp.roughness_a)
+        self.rough_b.setValue(smp.roughness_b)
+        self.mu_r.setValue(smp.mu_r)
 
     def apply_instrument(self, inst: CWInstrument) -> None:
         """CWInstrument の値をウィジェットに反映する(プリセットは触らない)。"""

@@ -15,7 +15,7 @@ from kaisetsu.io.readers.xy import read_xy
 from kaisetsu.pattern.histogram import PowderData
 
 SUPPORTED_EXTENSIONS = (
-    ".xy", ".xye", ".dat", ".txt", ".csv", ".asc",
+    ".xy", ".xye", ".chi", ".dat", ".txt", ".csv", ".asc",
     ".gsa", ".gsas", ".fxye", ".raw", ".xra", ".cwn",
     ".ras", ".rasx", ".xrdml", ".int", ".histogramigor",
 )  # fmt: skip
@@ -33,7 +33,8 @@ def read_powder_data(path: str | Path, **kwargs: object) -> PowderData:
     """粉末回折データを読む。
 
     対応形式:
-        - ASCII 2〜3 列(.xy/.xye/.dat/.txt/.csv: 2θ, 強度[, σ])。先頭のヘッダ行は読み飛ばす
+        - ASCII 2〜3 列(.xy/.xye/.dat/.txt/.csv: 2θ, 強度[, σ])。先頭のヘッダ行は読み飛ばす。
+          Fit2D / Dioptas / pyFAI が 2 次元画像を積分して書く .chi / .xy(ヘッダ付き)も同じ
         - GSAS 標準形式(.gsa/.gsas/.fxye/.raw/.xra/.cwn 等、BANK 行を持つもの)
         - Bruker / Siemens DIFFRAC .raw(バイナリ。RAW1.01 は実ファイルで確認済み)
         - Rigaku .ras(テキスト)、.rasx(zip)

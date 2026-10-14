@@ -56,7 +56,7 @@ from kaisetsu.refine.recipe import Recipe
 log = logging.getLogger(__name__)
 
 DATA_FILTER = (
-    "回折データ (*.xy *.xye *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
+    "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
     "*.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)"
 )
 PDF_FILTER = "PDF G(r) (*.gr *.dat *.txt *.csv);;すべて (*)"
@@ -282,6 +282,13 @@ class MainWindow(QMainWindow):
         )
         self.act_phase = self._add_action(
             m_data, tr("相の設定(強度の扱い・選択配向軸・異方性)…"), self.edit_phase
+        )
+        self.act_lattice = self._add_action(
+            m_data, tr("Le Bail で格子定数だけ(放射光マイクロ XRD 向け)…"), self.open_lattice_dialog
+        )
+        self.act_lattice.setToolTip(
+            "データと CIF を入れるだけで、強度を使わない Le Bail 法で格子定数と esd を出します。"
+            "複数ファイルの一括処理と CSV 保存もできます"
         )
         m_data.addSeparator()
         self.act_load_pdf = self._add_action(
@@ -1373,6 +1380,32 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
+    def open_lattice_dialog(self) -> None:
+        """Le Bail で格子定数だけを出すダイアログ(放射光マイクロ XRD 向け)。"""
+        from kaisetsu.gui.lattice_dialog import LatticeDialog
+
+        dlg = LatticeDialog(self.project, self, main=self)
+        dlg.exec()
+
+    def adopt_project(self, project: Project, *, source: str = "") -> None:
+        """別のところで作ったプロジェクト(Le Bail の結果など)をメインウィンドウで開く。"""
+        if not self._confirm_discard():
+            return
+        self.project = project
+        self.project_path = None
+        self.current_hist = 0
+        self.current_pdf = 0
+        self.current_view = "hist" if project.histograms else "pdf"
+        self.current_phase = None
+        self._undo_values = None
+        self.act_undo.setEnabled(False)
+        self.log_view.clear()
+        self.history_plot.clear()
+        self.log(f"プロジェクトを開きました: {source or project.name}")
+        for line in project.log[-20:]:
+            self.log("  " + line)
+        self._refresh_all()
+
     def _confirm_discard(self) -> bool:
         if (
             not self.project.histograms
