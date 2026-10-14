@@ -145,3 +145,33 @@ def test_background_dialog_and_reset(qtbot, data_dir: Path) -> None:
     assert len(win.project.params.select("h0:bkg:*")) == 12
     win.project.reset_background(0, 5, False)
     assert len(win.project.params.select("h0:bkg:*")) == 5
+
+
+def test_undo_and_reset_to_initial(qtbot, data_dir: Path) -> None:
+    """Ctrl+Z で精密化前の値に戻り、もう一度で戻す前に戻る。「すべて初期値に戻す」は読込時の値。"""
+    win = _window(qtbot, data_dir)
+    initial = win.project.snapshot()
+    assert all(p.initial == p.value for p in win.project.params)
+    assert not win.act_undo.isEnabled()
+    win.project.vary("h0:bkg:*", "h0:PbSO4:scale")
+    worker = RefineWorker(win.project, None, max_cycles=3)
+    with qtbot.waitSignal(worker.finished, timeout=120_000):
+        win._start_worker(worker)
+    qtbot.waitUntil(lambda: not win.act_stop.isEnabled(), timeout=5000)
+    refined = win.project.snapshot()
+    assert refined["h0:PbSO4:scale"] != initial["h0:PbSO4:scale"]
+    assert win.act_undo.isEnabled()
+    win.undo_refine()
+    assert win.project.snapshot() == initial
+    assert win.project.params["h0:PbSO4:scale"].esd is None
+    win.undo_refine()  # もう一度でやり直し
+    assert win.project.snapshot() == refined
+    win.reset_to_initial(confirm=False)
+    assert win.project.snapshot() == initial
+    win.undo_refine()
+    assert win.project.snapshot() == refined
+    # 表示中だけ戻す
+    win.filter_edit.setText("h0:PbSO4:scale")
+    win._reset_shown()
+    assert win.project.params["h0:PbSO4:scale"].value == initial["h0:PbSO4:scale"]
+    assert win.project.params["h0:bkg:0"].value == refined["h0:bkg:0"]

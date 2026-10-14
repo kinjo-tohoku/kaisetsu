@@ -166,6 +166,7 @@ class ParameterModel(QAbstractTableModel):
             if not math.isfinite(v):
                 return False
             p.value = min(max(v, p.min), p.max)
+            p.initial = p.value  # 手で入れた値は「設定した初期値」として扱う
             p.apply()
             self._params.evaluate_ties()
             self._params.apply_all()

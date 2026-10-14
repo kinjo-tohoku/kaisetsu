@@ -626,7 +626,12 @@ class Project:
     # パラメータ
     # ------------------------------------------------------------------
     def build_parameters(self) -> ParameterSet:
-        """モデルからパラメータ集合を(再)構築する。既存の vary フラグは名前が同じなら引き継ぐ。"""
+        """モデルからパラメータ集合を(再)構築する。
+
+        既存の vary フラグと拘束は名前が同じなら引き継ぐ。初期値(`Parameter.initial`)も、
+        値がパラメータ系の外で変わっていなければ引き継ぐ。値が変わっていれば(装置ダイアログ、
+        背景の推定し直し、範囲の変更など)設定し直したとみなして、今の値を初期値にする。
+        """
         old = self.params
         ps = ParameterSet()
         for ph in self.phases.values():
@@ -642,6 +647,10 @@ class Project:
                     p.vary = op.vary
                 if op.tie is not None and p.tie is None and all(m in ps for m in op.tie.masters):
                     ps.tie(p.name, op.tie.masters, op.tie.coeffs, op.tie.offset)
+                if op.initial is not None and p.value == op.value:
+                    p.initial = op.initial
+            if p.initial is None:
+                p.initial = p.value
         self.params = ps
         return ps
 
@@ -1159,6 +1168,45 @@ class Project:
 
     def fix_all(self) -> None:
         self.params.fix_all()
+
+    # ------------------------------------------------------------------
+    # 値の保存と復元(初期値に戻す、精密化前に戻す)
+    # ------------------------------------------------------------------
+    def _named(self, names: Iterable[str] | None) -> list[Parameter]:
+        if names is None:
+            return list(self.params)
+        return [self.params[n] for n in names if n in self.params]
+
+    def mark_initial(self, names: Iterable[str] | None = None) -> None:
+        """今の値を初期値として覚える(names が None なら全部)。"""
+        for p in self._named(names):
+            p.initial = p.value
+
+    def snapshot(self) -> dict[str, float]:
+        """全パラメータの現在値(名前 → 値)。`restore` で戻せる。"""
+        return {p.name: p.value for p in self.params}
+
+    def restore(self, values: dict[str, float]) -> list[str]:
+        """値を戻す(名前が一致し、拘束されていないものだけ)。esd と直近の精密化結果は消す。
+
+        Le Bail / Pawley の抽出強度はそのまま(次の精密化で更新される)。戻した名前を返す。
+        """
+        names: list[str] = []
+        for p in self.params:
+            if p.name in values and p.tie is None:
+                p.value = float(values[p.name])
+                p.esd = None
+                names.append(p.name)
+        self.params.evaluate_ties()
+        self.params.apply_all()
+        if names:
+            self.last_fit = None
+        return names
+
+    def reset_to_initial(self, names: Iterable[str] | None = None) -> list[str]:
+        """初期値(`Parameter.initial`)に戻す。names が None なら全部。戻した名前を返す。"""
+        values = {p.name: p.initial for p in self._named(names) if p.initial is not None}
+        return self.restore(values)
 
     def tie(
         self,

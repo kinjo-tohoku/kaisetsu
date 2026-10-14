@@ -54,6 +54,8 @@ class Parameter:
         advanced: 真なら「詳細」扱い(GUI の表では既定で隠す)
         neutral_value: 詳細パラメータがこの値のときは効いていない(隠してよい)。
             None なら値によらず隠す
+        initial: 初期値(データ・CIF を読み込んだとき、または設定し直したときの値)。
+            「初期値に戻す」で使う。None なら未設定
     """
 
     name: str
@@ -70,6 +72,7 @@ class Parameter:
     description: str = ""
     advanced: bool = False
     neutral_value: float | None = None
+    initial: float | None = None
 
     @property
     def is_free(self) -> bool:

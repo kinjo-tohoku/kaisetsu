@@ -297,6 +297,7 @@ def project_to_dict(proj: Project) -> dict[str, Any]:
             "max": _f(p.max),
             "step": p.step,
             "esd": p.esd,
+            "initial": p.initial,
             "tie": None
             if p.tie is None
             else {
@@ -430,6 +431,8 @@ def project_from_dict(d: dict[str, Any]) -> Project:
             p.max = math.inf if pd["max"] is None else float(pd["max"])
         p.step = float(pd.get("step", p.step))
         p.esd = pd.get("esd")
+        init = pd.get("initial")
+        p.initial = float(init) if init is not None else p.value
         if p.tie is None and not p.locked:
             p.vary = bool(pd.get("vary", False))
         t = pd.get("tie")

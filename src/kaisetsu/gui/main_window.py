@@ -80,6 +80,8 @@ class MainWindow(QMainWindow):
         self.current_phase: str | None = None
         self._thread: RefineThread | None = None
         self._worker: RefineWorker | None = None
+        # 直前の精密化(または初期値に戻す操作)の前の値。Ctrl+Z で戻す
+        self._undo_values: dict[str, float] | None = None
         self.settings = QSettings("kaisetsu", "kaisetsu")
 
         self._build_ui()
@@ -186,10 +188,17 @@ class MainWindow(QMainWindow):
         self.btn_fix_shown.setToolTip(
             "いま表に表示されているパラメータの「精密化」をまとめてオフにします"
         )
+        self.btn_reset_shown = QPushButton(tr("表示中の値を初期値に戻す"))
+        self.btn_reset_shown.setToolTip(
+            "いま表に表示されているパラメータの値を、読み込んだとき(または設定し直したとき)の"
+            "値に戻します。全部戻すには「精密化」→「すべて初期値に戻す」。Ctrl+Z で戻す前に戻せます"
+        )
         self.btn_vary_shown.clicked.connect(lambda: self._set_vary_shown(True))
         self.btn_fix_shown.clicked.connect(lambda: self._set_vary_shown(False))
+        self.btn_reset_shown.clicked.connect(self._reset_shown)
         btns.addWidget(self.btn_vary_shown)
         btns.addWidget(self.btn_fix_shown)
+        btns.addWidget(self.btn_reset_shown)
         v.addLayout(btns)
         dock.setWidget(panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
@@ -302,6 +311,21 @@ class MainWindow(QMainWindow):
         self.act_stop.setEnabled(False)
         m_ref.addSeparator()
         self._add_action(m_ref, tr("すべて固定(&F)"), self.fix_all)
+        self.act_undo = self._add_action(
+            m_ref, tr("直前の精密化の前に戻す(&Z)"), self.undo_refine, "Ctrl+Z"
+        )
+        self.act_undo.setEnabled(False)
+        self.act_undo.setToolTip(
+            "直前の精密化(または「初期値に戻す」)の前の値に全パラメータを戻します。"
+            "もう一度選ぶと戻す前の値に戻ります"
+        )
+        self.act_reset = self._add_action(
+            m_ref, tr("すべて初期値に戻す(&I)"), self.reset_to_initial
+        )
+        self.act_reset.setToolTip(
+            "データ・CIF を読み込んだとき(装置や背景を設定し直したときはその値)に全パラメータを"
+            "戻します。精密化の結果は失われますが、Ctrl+Z で戻す前の値に戻せます"
+        )
         self._add_action(m_ref, tr("結果の要約を表示(&U)"), self.show_summary)
         self.act_width_penalty = self._add_action(
             m_ref, tr("ピーク幅が負にならないよう拘束する(罰則)"), self._toggle_width_penalty
@@ -1098,6 +1122,72 @@ class MainWindow(QMainWindow):
         self.project.fix_all()
         self.param_model.refresh()
 
+    def undo_refine(self) -> None:
+        """直前の精密化(または初期値に戻す操作)の前の値に戻す。もう一度でやり直し。"""
+        if self._undo_values is None:
+            return
+        if self._thread is not None and self._thread.isRunning():
+            QMessageBox.information(self, "戻す", "精密化の実行中は戻せません(Esc で中止)")
+            return
+        current = self.project.snapshot()
+        names = self.project.restore(self._undo_values)
+        self._undo_values = current
+        self.log(
+            f"直前の精密化の前の値に戻しました({len(names)} 個)。"
+            "もう一度「直前の精密化の前に戻す」を選ぶと、戻す前の値に戻ります"
+        )
+        self._after_restore()
+
+    def reset_to_initial(self, confirm: bool = True) -> None:
+        """全パラメータを初期値(読み込んだとき・設定し直したときの値)に戻す。"""
+        if not any(True for _ in self.project.params):
+            return
+        if self._thread is not None and self._thread.isRunning():
+            QMessageBox.information(self, "戻す", "精密化の実行中は戻せません(Esc で中止)")
+            return
+        if confirm:
+            ans = QMessageBox.question(
+                self,
+                "初期値に戻す",
+                "すべてのパラメータを初期値(データ・CIF を読み込んだときの値)に戻します。\n"
+                "精密化の結果は失われます(Ctrl+Z で戻す前の値に戻せます)。よろしいですか?",
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        self._undo_values = self.project.snapshot()
+        self.act_undo.setEnabled(True)
+        names = self.project.reset_to_initial()
+        self.log(
+            f"すべてのパラメータを初期値に戻しました({len(names)} 個)。Ctrl+Z で戻す前の値に戻せます"
+        )
+        self._after_restore()
+
+    def _reset_shown(self) -> None:
+        """表に表示中(絞り込み後)のパラメータだけ初期値に戻す。"""
+        if self._thread is not None and self._thread.isRunning():
+            return
+        names = []
+        for r in range(self.param_filter.rowCount()):
+            src = self.param_filter.mapToSource(self.param_filter.index(r, 0))
+            names.append(self.param_model.parameter(src.row()).name)
+        if not names:
+            return
+        self._undo_values = self.project.snapshot()
+        self.act_undo.setEnabled(True)
+        done = self.project.reset_to_initial(names)
+        self.log(
+            f"表示中の {len(done)} 個のパラメータを初期値に戻しました(Ctrl+Z で戻す前に戻せます)"
+        )
+        self._after_restore()
+
+    def _after_restore(self) -> None:
+        self.param_model.refresh()
+        self._refresh_plot()
+        self._refresh_structure()
+        if self.project.phases and (self.project.histograms or self.project.pdf_datasets):
+            rf = self.project.rfactors()["total"]
+            self.log(f"計算: {rf}")
+
     def refine(self) -> None:
         if not self.project.params.free():
             QMessageBox.information(
@@ -1132,6 +1222,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "精密化", "すでに精密化が実行中です")
             return
         self._worker = worker
+        self._undo_values = self.project.snapshot()
         self._thread = RefineThread(worker, self)
         worker.progress.connect(self.log)
         worker.iteration.connect(self._on_iteration)
@@ -1184,6 +1275,7 @@ class MainWindow(QMainWindow):
 
     def _on_refine_finished(self, ok: bool, message: str) -> None:
         self.log(message)
+        self.act_undo.setEnabled(self._undo_values is not None)
         self.act_refine.setEnabled(True)
         self.act_recipe.setEnabled(bool(self.project.histograms))
         self.act_pdf_recipe.setEnabled(bool(self.project.pdf_datasets))
