@@ -131,6 +131,7 @@ def find_residual_features(
     *,
     min_sigma: float = 8.0,
     min_fraction: float = 0.04,
+    hump_min_fraction: float = 0.01,
     max_peaks: int = 12,
     max_humps: int = 6,
 ) -> ResidualFeatures:
@@ -139,7 +140,11 @@ def find_residual_features(
     Args:
         project, hist: 対象(最後の計算結果 `HistogramEntry.result` を使う。無ければ計算する)
         min_sigma: 残差が統計誤差の何倍以上なら拾うか
-        min_fraction: 残差が正味の最大強度の何割以上なら拾うか
+        min_fraction: 鋭いピークの残差が正味の最大強度の何割以上なら拾うか
+        hump_min_fraction: こぶの高さが正味の最大強度の何割以上なら拾うか。こぶは平滑化した残差で
+            見る(雑音は min_sigma で既に抑えてある)ので鋭いピークより低くてよい。背景の多項式が
+            こぶを半分吸ったあとの残りは最強ピークの 1〜3% で、それでも Rwp には大きく効く
+            (COD 2240592 の Ba(ClO4)2: ハンプ無し 11.5%、ハンプ有り 7.0%)
         max_peaks, max_humps: 返す数の上限(高い順)
     """
     h = project.histograms[hist]
@@ -194,7 +199,7 @@ def find_residual_features(
     while i < n - k:
         v = sm[i]
         if (
-            v >= max(min_sigma * sig_sm[i], min_fraction * net_max)
+            v >= max(min_sigma * sig_sm[i], hump_min_fraction * net_max)
             and v >= sm[i - k : i + k + 1].max()
         ):
             hv = 0.5 * v

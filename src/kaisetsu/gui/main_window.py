@@ -60,7 +60,7 @@ log = logging.getLogger(__name__)
 
 DATA_FILTER = (
     "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
-    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)"
+    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn *.cif);;すべて (*)"
 )
 PDF_FILTER = "PDF G(r) (*.gr *.dat *.txt *.csv);;すべて (*)"
 CIF_FILTER = "CIF (*.cif);;すべて (*)"

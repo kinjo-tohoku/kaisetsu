@@ -308,7 +308,7 @@ class Recipe:
         added: dict[int, int] = {}
         notes: list[str] = []
         for i in range(len(project.histograms)):
-            feats = find_residual_features(project, i, min_fraction=HUMP_MIN_FRACTION)
+            feats = find_residual_features(project, i, hump_min_fraction=HUMP_MIN_FRACTION)
             cands = feats.humps[:HUMP_MAX_PER_HISTOGRAM]
             if not cands:
                 continue
@@ -367,8 +367,9 @@ LIGHT_ATOM_FRACTION = 0.3
 KALPHA2_GAIN = 0.003
 #: 残差のこぶを背景のハンプとして採用する Rwp の改善の下限(0.5 ポイント)
 HUMP_GAIN = 0.005
-#: ハンプの候補にする、こぶの高さの正味の最大強度に対する下限
-HUMP_MIN_FRACTION = 0.05
+#: ハンプの候補にする、こぶの高さの正味の最大強度に対する下限。背景の多項式がこぶを半分吸った残りは
+#: 最強ピークの 1〜3% でも Rwp に大きく効く(COD 2240592 の Ba(ClO4)2: 11.5% → 7.0%)
+HUMP_MIN_FRACTION = 0.01
 #: 1 ヒストグラムあたり試すこぶの数の上限
 HUMP_MAX_PER_HISTOGRAM = 3
 #: 放射光とみなす波長の上限 [Å](軸発散 SH/L も動かす)

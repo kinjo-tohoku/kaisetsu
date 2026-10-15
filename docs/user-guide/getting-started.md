@@ -20,7 +20,7 @@ GUI を使わずスクリプトで動かすこともできます(`examples/refin
 
 | もの | 形式 | 例 |
 |---|---|---|
-| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、Bruker .raw(RAW1.01 ほか)、GSAS 形式(.gsa, .fxye, .raw 等。ISIS の ALT も可)、RIETAN-FP の .int(GENERAL / IGOR / 「点数 開始角 刻み」)、FullProf の .dat(自由形式、D1A/D2B の組形式)、Z-Rietveld の .histogramIgor | `data/public/fap/FAP.XRA` |
+| 粉末回折データ | テキスト 2〜3 列(.xy/.xye/.txt/.csv: 2θ, 強度[, σ]。先頭のヘッダ行は無視)、Rigaku .ras/.rasx、PANalytical .xrdml、Bruker .raw(RAW1.01 ほか)、GSAS 形式(.gsa, .fxye, .raw 等。ISIS の ALT も可)、RIETAN-FP の .int(GENERAL / IGOR / 「点数 開始角 刻み」)、FullProf の .dat(自由形式、D1A/D2B の組形式)、Z-Rietveld の .histogramIgor、pdCIF(COD や Acta Cryst. E の CIF に粉末データが入っているもの。同じ CIF を相にも使える) | `data/public/fap/FAP.XRA` |
 | 結晶構造 | CIF(格子定数、空間群、原子座標) | `data/public/fap/fluorapatite_COD9001232.cif` |
 | 装置の情報 | ターゲット(Cu など)または波長、光学系(反射か透過か)、だいたいのピーク幅 | プリセットから選べる |
 
@@ -41,6 +41,7 @@ CIF の入手先: COD(crystallography.net、無料)、ICSD(研究室で契約が
 | `garnet/` | Y3(Fe,Al)5O12、D1A 中性子 1.909 Å | 中性子、波長 1.909、Debye-Scherrer | 混合サイトの占有率も動かす。Rwp 4%、約 2 分 |
 | `nac/` | NAC + CaF2、放射光 11-BM 0.4139 Å | その他、波長 0.413909、偏光 0.99、Debye-Scherrer | 2 相。点数が多いので時間がかかる |
 | `pbso4/` | PbSO4、Cu Kα と D1A 中性子 | 実験室 X 線 Cu Kα(モノクロメータ)/ 中性子 | GSAS-II との比較に使ったデータ |
+| `baclo4/` | Ba(ClO4)2、PANalytical Cu Kα1(pdCIF。データも相も同じ CIF) | 実験室 X 線 Cu Kα(モノクロメータ)、Kα2 なし | 非晶質のこぶを標準手順がハンプにする例。Rwp 7%(公表 6%) |
 
 ### Cu Kα など放射線の指定
 

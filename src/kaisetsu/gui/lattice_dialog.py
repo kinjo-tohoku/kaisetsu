@@ -52,7 +52,7 @@ from kaisetsu.refine.project import Project
 
 DATA_FILTER = (
     "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
-    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn);;すべて (*)"
+    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn *.cif);;すべて (*)"
 )
 CIF_FILTER = "CIF (*.cif);;すべて (*)"
 

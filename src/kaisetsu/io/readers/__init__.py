@@ -9,6 +9,7 @@ from kaisetsu.io.readers.bruker import is_bruker_raw, read_bruker_raw
 from kaisetsu.io.readers.fullprof import detect_fullprof, read_fullprof
 from kaisetsu.io.readers.gsas import gsas_bank_count, is_gsas_file, read_gsas
 from kaisetsu.io.readers.opxrd import is_opxrd, read_opxrd
+from kaisetsu.io.readers.pdcif import read_pdcif
 from kaisetsu.io.readers.rietan import is_rietan_block, read_rietan_block
 from kaisetsu.io.readers.vendors import is_ras_text, read_ras, read_rasx, read_xrdml
 from kaisetsu.io.readers.xy import read_xy
@@ -61,6 +62,8 @@ def read_powder_data(path: str | Path, **kwargs: object) -> PowderData:
         return read_ras(p)
     if head.lstrip().startswith("<?xml") and "xrdMeasurement" in head:
         return read_xrdml(p)
+    if suffix == ".cif":
+        return read_pdcif(p)  # pdCIF(COD や Acta E に付く GSAS2CIF 出力の粉末データ)
     if is_gsas_file(p):
         return read_gsas(p, **kwargs)  # type: ignore[arg-type]
     if is_rietan_block(head):

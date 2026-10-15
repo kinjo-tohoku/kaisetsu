@@ -13,12 +13,13 @@ GUI の「はじめての精密化」ウィザードでそのまま選べる。
 | `nac/` | Na2Ca3Al2F14 + CaF2 | APS 11-BM 放射光 0.4139 Å | ★★★ | 放射光、2 相、異方性変位パラメータ |
 | `pdf/` | Ni | X 線・中性子の G(r) | ★ | PDF(実空間フィット)の最初の練習。pdffit2 との突き合わせにも使う |
 | `kaolinite/` | カオリナイト | Bruker .raw(2 レンジ) | — | 複数スキャンの .raw 読み込みテスト用(積層不整のため Rietveld には不向き) |
+| `baclo4/` | Ba(ClO4)2 | 実験室 Cu Kα1、PANalytical、Bragg-Brentano(pdCIF) | ★★ | 非晶質のこぶ(背景のハンプ)、選択配向、異方的広がりの練習。pdCIF の読み込みテスト |
 
 ## 出典とライセンス
 
 - **GSAS-II チュートリアル**(<https://github.com/AdvancedPhotonSource/GSAS-II-tutorials>、UChicago Argonne, LLC のオープンソースライセンス): `fap/FAP.XRA`, `fap/INST_XRY.PRM`, `lab6/LaB6_Jan2018.raw`, `garnet/garnet.raw`, `garnet/inst_d1a.prm`, `nac/*`, `pdf/*`, `kaolinite/*`。
 - **GSAS-II 5.7.4 同梱テストデータ**: `pbso4/*`, `cif/diamond.cif`。
-- **Crystallography Open Database (COD)**(<https://www.crystallography.net/>、パブリックドメイン相当): `fap/fluorapatite_COD9001232.cif`, `lab6/LaB6_COD1000055.cif`。
+- **Crystallography Open Database (COD)**(<https://www.crystallography.net/>、パブリックドメイン相当): `fap/fluorapatite_COD9001232.cif`, `lab6/LaB6_COD1000055.cif`, `baclo4/BaClO4_COD2240592.cif`。
 - 自作: `garnet/Y3Fe2Al3O12_start.cif`(チュートリアルの出発値から作成)。
 
 ## fap/ — 蛍石燐灰石(実験室 X 線)
@@ -113,3 +114,17 @@ X 線と中性子で a が 0.0025 Å 違うのは、それぞれの装置の Q �
 | ファイル | 内容 | 出典 |
 |---|---|---|
 | `diamond.cif` | ダイヤモンド(Fd-3m, a = 3.56679 Å) | Wyckoff, Crystal Structures (1963) 経由 AMCSD 0011242。GSAS-II `tests/testinp/` から複製 |
+
+## baclo4/ — Ba(ClO4)2(pdCIF、実験室 X 線)
+
+COD 2240592(Acta Cryst. E (2015)、無水過塩素酸バリウム、Fddd、GSAS で精密化)。CIF に構造と一緒に
+測定した粉末パターン(PANalytical、Cu Kα1 1.54059 Å、Bragg-Brentano、15–130° 2θ、0.026° 刻み、4423 点)が
+入っているので、同じファイルを「回折データを読み込む」(pdCIF として読む)と「CIF から相を追加」の
+両方に使う。公表値: Rwp = 6.00%、R_exp = 4.52%(背景 Chebyshev 36 項、(100) の March-Dollase r = 0.974、
+c 軸の異方的広がり)。
+
+15–25° に幅の広いこぶ(非晶質成分か試料台)がある。標準手順(背景 12 項)は「残差のこぶを背景に試す」で
+これをガウスのハンプにして Rwp 11.5% → 7.0%(ハンプ無しでは背景 36 項でも 6.9%)。そこから
+非対称 + (100) の選択配向 + c 軸の異方的サイズで 6.5% まで下がる(2026-10-15、kaisetsu 0.1.5 開発版)。
+(400) のピークは観測が計算より高く、選択配向と異方的広がりの両方が効く。
+

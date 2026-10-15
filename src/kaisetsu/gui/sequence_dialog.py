@@ -104,7 +104,8 @@ class SequenceDialog(QDialog):
     def add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self, "回折データ(複数選択)", last_dir(),
-            "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.ras *.rasx *.xrdml *.gsa *.fxye *.raw);;すべて (*)",
+            "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.ras *.rasx *.xrdml *.gsa *.fxye *.raw "
+            "*.cif);;すべて (*)",
         )  # fmt: skip
         for p in paths:
             self.files.addItem(p)
