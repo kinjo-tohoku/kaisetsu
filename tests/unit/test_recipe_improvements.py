@@ -199,6 +199,7 @@ def test_recipe_skips_steps_without_target_parameters(data_dir: Path) -> None:
 def test_standard_recipe_step_names_and_options() -> None:
     names = [s.name for s in standard_recipe("*", "h0").steps]
     assert names == [
+        "格子定数の初期値を振る",
         "スケールと背景",
         "格子定数とピーク位置",
         "ピーク幅 W",
@@ -215,4 +216,4 @@ def test_standard_recipe_step_names_and_options() -> None:
     names = [s.name for s in standard_recipe("*", "h0", humps=False).steps]
     assert "残差のこぶを背景に試す" not in names
     # 人が足したハンプは「スケールと背景」で動く
-    assert "h0:hump*:*" in standard_recipe("*", "h0").steps[0].patterns
+    assert "h0:hump*:*" in standard_recipe("*", "h0").steps[1].patterns

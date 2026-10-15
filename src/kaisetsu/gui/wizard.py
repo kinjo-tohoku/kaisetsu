@@ -124,6 +124,12 @@ class RunPage(QWizardPage):
             "「完了」を押すと、推奨の順序で精密化を実行します(途中経過はログに出ます)。"
         )
         layout = QVBoxLayout(self)
+        self.cell_scan = QCheckBox("格子定数の初期値を ±1% 振って、ピークが重なる谷から始める")
+        self.cell_scan.setChecked(True)
+        self.cell_scan.setToolTip(
+            "CIF の格子定数が試料と少し違っても(温度・組成)、最初に ±1% の範囲で振って"
+            "計算ピークが観測ピークに重なる初期値を見つけます。数秒で済みます"
+        )
         self.coords = QCheckBox("原子座標も動かす")
         self.coords.setChecked(True)
         self.adp = QCheckBox("変位パラメータ(U)も動かす")
@@ -151,6 +157,7 @@ class RunPage(QWizardPage):
             "(占有率・選択配向・第二相)です。差が小さければピーク形状や背景の限界です"
         )
         for w in (
+            self.cell_scan,
             self.coords,
             self.adp,
             self.disp,
@@ -231,6 +238,7 @@ class StartWizard(QWizard):
             try_no_kalpha2=self.page_run.ka2.isChecked(),
             light_atom_uiso=self.page_run.light.isChecked(),
             humps=self.page_run.humps.isChecked(),
+            cell_scan=self.page_run.cell_scan.isChecked(),
         )
         companion = None
         if self.page_run.lebail.isChecked():

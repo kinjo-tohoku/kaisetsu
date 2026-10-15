@@ -537,7 +537,16 @@ class RecipeDialog(QDialog):
             "Rwp が 0.5 ポイント以上下がれば採用します。「背景の設定」で足したハンプは"
             "「スケールと背景」で背景と一緒に動きます"
         )
+        self.cell_scan = QCheckBox("格子定数の初期値を ±1% 振って、ピークが重なる谷から始める")
+        self.cell_scan.setChecked(True)
+        self.cell_scan.setToolTip(
+            "最初に格子定数を ±1% の範囲で細かく振り(刻みは高角端のピーク幅)、計算ピークが"
+            "観測ピークに重なる初期値から始めます。初期値が谷の外だと最小二乗は格子定数を"
+            "動かせません(放射光級の鋭いピークでは 0.6% のずれで止まり、3% で発散します)。"
+            "数秒で済みます"
+        )
         for w in (
+            self.cell_scan,
             self.coords,
             self.adp,
             self.occ,
@@ -576,6 +585,7 @@ class RecipeDialog(QDialog):
             try_no_kalpha2=self.ka2.isChecked(),
             light_atom_uiso=self.light.isChecked(),
             humps=self.humps.isChecked(),
+            cell_scan=self.cell_scan.isChecked(),
         )
         for s in r.steps:
             s.max_cycles = (

@@ -3,6 +3,11 @@
 前のデータの精密化結果を次の初期値にする(温度変化で格子定数が連続的に動く場合に収束が速い)。
 失敗したデータは記録して次に進む。
 
+精密化が失敗したか Rwp が前のデータより大きく悪化したときは、格子定数の初期値を ±1% 振って
+谷を見つけ直してからもう一度精密化する(`kaisetsu.refine.cell_scan`)。相転移や大きな熱膨張で
+前の値から外れたときに、以後のデータが全部失敗するのを防ぐ(相見, 電気化学 94, 264 (2026) の
+CaMnTi2O6 の例: 300 K の格子定数を全温度に使うと 800 K 以上で解析不能)。
+
 使い方:
     proj = ...(1 つ目のデータで精密化済みのプロジェクト)
     table = refine_sequence(proj, ["T100.xy", "T200.xy", ...], recipe=None,
@@ -12,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -21,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from kaisetsu.io.readers import read_powder_data
+from kaisetsu.refine.cell_scan import scan_all_cells
 from kaisetsu.refine.project import Project
 from kaisetsu.refine.recipe import Recipe
 
@@ -84,6 +91,7 @@ def refine_sequence(
     params: Sequence[str] | None = None,
     max_cycles: int = 20,
     reset_background: bool = True,
+    cell_scan: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> SequenceResult:
     """ヒストグラム hist のデータを順に差し替えて精密化する。
@@ -94,13 +102,28 @@ def refine_sequence(
         recipe: 各データで走らせる手順(None なら現在 vary の立っているパラメータで refine)
         params: 表に出すパラメータ名(None なら精密化したもの全部)
         reset_background: 真ならデータごとに背景を観測から推定し直す
+        cell_scan: 真なら、失敗したか Rwp が前のデータの 1.5 倍 + 2 ポイントより悪いときに
+            格子定数の初期値を ±1% 振って谷を見つけ直し、もう一度精密化する
     """
     result = SequenceResult()
     h = project.histograms[hist]
     vary_names = project.params.free_names()
+    prev_rwp: float | None = None
+
+    def _refine_once() -> float:
+        if recipe is not None:
+            recipe.run(project)
+        else:
+            if vary_names:
+                project.fix_all()
+                project.vary(*[n for n in vary_names if n in project.params])
+            project.refine(max_cycles=max_cycles)
+        return project.rfactors()[h.name].rwp
+
     for path in paths:
         p = Path(path)
         t0 = time.perf_counter()
+        note = ""
         try:
             data = read_powder_data(p)
             h.data = data
@@ -110,14 +133,37 @@ def refine_sequence(
             if reset_background:
                 project.reset_background(hist, None, True)
             project.build_parameters()
-            if recipe is not None:
-                recipe.run(project)
-            else:
-                if vary_names:
-                    project.fix_all()
-                    project.vary(*[n for n in vary_names if n in project.params])
-                project.refine(max_cycles=max_cycles)
+            start = project.snapshot()
+            try:
+                rwp = _refine_once()
+                failure: Exception | None = None
+            except Exception as exc:
+                rwp, failure = float("inf"), exc
+            bad = failure is not None or (prev_rwp is not None and rwp > 1.5 * prev_rwp + 0.02)
+            if cell_scan and bad:
+                # 前の値から外れた(相転移・大きな熱膨張)。谷を見つけ直してやり直す
+                end = project.snapshot()
+                project.restore(start)
+                scans = scan_all_cells(project)
+                try:
+                    rwp2 = _refine_once()
+                except Exception as exc:
+                    rwp2 = float("inf")
+                    if failure is None:
+                        failure = exc
+                if rwp2 < rwp:
+                    rwp, failure = rwp2, None
+                    note = "格子定数の初期値を振り直して再精密化: " + "; ".join(
+                        f"{r.phase}: {r.message}" for r in scans if r.names
+                    )
+                elif failure is None:
+                    project.restore(end)
+                    with contextlib.suppress(Exception):
+                        project.refine(max_cycles=1)  # esd を付け直す
+            if failure is not None:
+                raise failure
             rf = project.rfactors()[h.name]
+            prev_rwp = rf.rwp
             names = list(params) if params is not None else project.params.free_names()
             if not result.param_names:
                 result.param_names = names
@@ -130,6 +176,7 @@ def refine_sequence(
                 values={n: project.params[n].value for n in names if n in project.params},
                 esds={n: project.params[n].esd for n in names if n in project.params},
                 elapsed=time.perf_counter() - t0,
+                message=note,
             )
         except Exception as exc:
             row = SequenceRow(p.stem, str(p), False, float("nan"), float("nan"), {}, {},
@@ -140,6 +187,7 @@ def refine_sequence(
                 f"{row.name}: "
                 + (
                     f"Rwp = {100 * row.rwp:.3f}%  χ² = {row.chi2:.3f}"
+                    + (f"  ({row.message})" if row.message else "")
                     if row.ok
                     else f"失敗: {row.message}"
                 )

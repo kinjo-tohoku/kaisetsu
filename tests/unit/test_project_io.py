@@ -89,4 +89,8 @@ def test_recipe_runs_steps(data_dir: Path) -> None:
     rw = [float(line.split("Rwp = ")[1].split("%")[0]) for line in proj.log if "レシピ" in line]
     assert rw[1] <= rw[0] + 1e-9
     std = standard_recipe("PbSO4", "h0")
-    assert [s.name for s in std.steps][:2] == ["スケールと背景", "格子定数とピーク位置"]
+    assert [s.name for s in std.steps][:3] == [
+        "格子定数の初期値を振る",
+        "スケールと背景",
+        "格子定数とピーク位置",
+    ]

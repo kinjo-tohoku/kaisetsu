@@ -3,6 +3,8 @@
 初心者向けの標準手順(Young, *The Rietveld Method*, Ch. 1.6 / McCusker et al.,
 J. Appl. Cryst. 32, 36-50 (1999) の推奨順序に準拠):
 
+    0. 格子定数の初期値を ±1% 振って、計算ピークが観測ピークに重なる谷から始める
+       (`kaisetsu.refine.cell_scan`。初期値が谷の外だと最小二乗は格子定数を動かせない)
     1. スケール因子とバックグラウンド
     2. 格子定数とゼロ点(または試料変位)
     3. ピーク幅 W → U, V → ローレンツ成分 X, Y → 非対称
@@ -29,6 +31,7 @@ import numpy as np
 
 from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind
+from kaisetsu.refine.cell_scan import scan_all_cells
 from kaisetsu.refine.residual import find_residual_features
 
 if TYPE_CHECKING:
@@ -51,7 +54,8 @@ class Step:
     #: 段階の前に走らせる準備(拘束を張るなど)。ログに出す文を返す
     prepare: Callable[[Project, Step], list[str]] | None = None
     #: "refine"(普通の段階)、"kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)、
-    #: "hump_trial"(残差の広いこぶを背景のハンプにして合うか試す)
+    #: "hump_trial"(残差の広いこぶを背景のハンプにして合うか試す)、
+    #: "cell_scan"(格子定数の初期値を振って谷を見つける。精密化はしない)
     kind: str = "refine"
 
 
@@ -79,11 +83,18 @@ class Recipe:
         if reset:
             project.fix_all()
         lb_cycles = 3 if _has_le_bail(project) else 0
-        if lb_cycles:
-            for _ in range(5):
-                project.le_bail_update()
+        lb_initialized = False
         results: list[FitResult] = []
         for step in self.steps:
+            if step.kind == "cell_scan":
+                # 格子定数が谷の外のまま Le Bail の強度を抽出すると意味の無い表になるので、
+                # 走査は抽出の初期化より前に走らせる
+                self._cell_scan(project, step)
+                continue
+            if lb_cycles and not lb_initialized:
+                for _ in range(5):
+                    project.le_bail_update()
+                lb_initialized = True
             if step.kind in ("kalpha2_trial", "hump_trial"):
                 trial_fn = self._kalpha2_trial if step.kind == "kalpha2_trial" else self._hump_trial
                 trial = trial_fn(project, step, iteration_progress)
@@ -214,6 +225,22 @@ class Recipe:
                 le_bail_cycles=3 if _has_le_bail(project) else 0,
             )
         return res
+
+    def _cell_scan(self, project: Project, step: Step) -> None:
+        """格子定数の初期値を振って谷を見つける(`kaisetsu.refine.cell_scan`)。
+
+        合成 LaB6(放射光級の幅)で初期値が +0.6% ずれると「格子定数とピーク位置」は谷を
+        見つけられず、±3% では発散した。走査は 1 点 = パターン計算 1 回で、数秒で済む。
+        """
+        prefix = f"レシピ '{self.name}' 段階 '{step.name}'"
+        try:
+            results = scan_all_cells(project)
+        except (PatternSizeError, ValueError, np.linalg.LinAlgError) as exc:
+            project.log.append(f"{prefix}: 走査でエラー({exc})。初期値のまま進めます")
+            return
+        for r in results:
+            if r.names:
+                project.log.append(f"{prefix}: 相 {r.phase}: {r.message}")
 
     def _kalpha2_trial(
         self,
@@ -555,6 +582,7 @@ def standard_recipe(
     try_no_kalpha2: bool = True,
     light_atom_uiso: bool = True,
     humps: bool = True,
+    cell_scan: bool = True,
 ) -> Recipe:
     """標準の段階的精密化レシピ。
 
@@ -578,8 +606,13 @@ def standard_recipe(
         humps: ピーク幅のあとで残差の広いこぶ(ガラスキャピラリ・非晶質成分)を背景のガウスの
             ハンプにして試し、Rwp が 0.5 ポイント以上下がれば採用する。人が足したハンプ
             (h*:hump*:*)は「スケールと背景」で背景と一緒に動く
+        cell_scan: 最初に格子定数の初期値を ±1% の範囲で振り(刻みは高角端のピーク幅)、
+            計算ピークが観測ピークに重なる谷の初期値から始める。初期値が谷の外だと最小二乗は
+            格子定数を動かせない(放射光級の鋭いピークでは 0.6% のずれで止まる)
     """
     r = Recipe("標準")
+    if cell_scan:
+        r.add("格子定数の初期値を振る", [], 1, kind="cell_scan")
     r.add("スケールと背景", [f"{hist}:bkg:*", f"{hist}:hump*:*", f"{hist}:{phase}:scale"], 10)
     if sample_displacement:
         # Bragg-Brentano では高さずれ、Debye-Scherrer では x, y ずれ(filter で振り分ける)

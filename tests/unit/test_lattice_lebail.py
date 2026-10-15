@@ -157,17 +157,18 @@ def test_recipe_position_and_width_choices() -> None:
                        geometry=GeometryKind.DEBYE_SCHERRER)  # fmt: skip
     names = [s.name for s in r.steps]
     assert names == [
+        "格子定数の初期値を振る",
         "背景",
         "格子定数とピーク位置",
         "ピーク幅 W",
         "ピーク幅 U, V, X, Y",
         "最終(全パラメータ)",
     ]
-    assert "h0:sample:disp_y" in r.steps[1].patterns
+    assert "h0:sample:disp_y" in r.steps[2].patterns
     r2 = le_bail_recipe("h0", position="distance", geometry=GeometryKind.BRAGG_BRENTANO)
-    assert "h0:sample:displacement" in r2.steps[1].patterns
+    assert "h0:sample:displacement" in r2.steps[2].patterns
     r3 = le_bail_recipe("h0", position="distance", is_tof=True, widths="none")
-    assert "h0:inst:zero" in r3.steps[1].patterns and len(r3.steps) == 3
+    assert "h0:inst:zero" in r3.steps[2].patterns and len(r3.steps) == 4
 
 
 @pytest.mark.slow

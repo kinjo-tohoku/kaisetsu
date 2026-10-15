@@ -201,6 +201,7 @@ def le_bail_recipe(
     widths: WidthMode = "sample",
     geometry: GeometryKind | None = None,
     is_tof: bool = False,
+    cell_scan: bool = True,
 ) -> Recipe:
     """Le Bail で格子定数を出すための段階的レシピ。
 
@@ -208,6 +209,9 @@ def le_bail_recipe(
     各段階で 3 回ずつ更新する。
     """
     r = Recipe("Le Bail 格子定数")
+    if cell_scan:
+        # 初期値が谷の外だと最小二乗は格子定数を動かせない(kaisetsu.refine.cell_scan)
+        r.add("格子定数の初期値を振る", [], 1, kind="cell_scan")
     r.add("背景", [f"{hist}:bkg:*"], 8)
     pos: list[str] = []
     if position == "zero" or (position == "distance" and is_tof):
@@ -409,7 +413,8 @@ def refine_lattice(
 
         recipe.run(proj, progress=_step_done)
         rf = proj.rfactors()["total"]
-        pos_names = [s for s in recipe.steps[1].patterns if ":cell:" not in s]
+        pos_step = next(s for s in recipe.steps if s.name == "格子定数とピーク位置")
+        pos_names = [s for s in pos_step.patterns if ":cell:" not in s]
         result = LatticeResult(
             name=label,
             path=path,

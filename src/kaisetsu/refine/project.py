@@ -1700,8 +1700,9 @@ class Project:
             elif tail in adp_tags and p.value > 0.1:
                 notes.append(
                     f"{p.name} が大きすぎます({p.value:.3f} Å²)。"
-                    "そのサイトの元素や占有率を疑ってください。"
+                    "そのサイトの元素や占有率、初期モデルの空間群を疑ってください。"
                 )
+        notes.extend(self._uiso_outliers())
         for p in ps.free():
             if math.isfinite(p.min) and abs(p.value - p.min) <= 1e-9 * max(1.0, abs(p.min)):
                 notes.append(
@@ -1754,6 +1755,34 @@ class Project:
                     "差のプロットに系統的な残差があれば、ピーク形状(U, V, W, X, Y)・背景の項数・"
                     "未同定のピーク(別の相)を確認してください。"
                 )
+        return notes
+
+    def _uiso_outliers(self) -> list[str]:
+        """同じ相の他のサイトに比べて U_iso が目立って大きいサイト(構造モデルの誤りのサイン)。
+
+        R 因子が良くても、空間群が違うと特定のサイトの変位パラメータが異常に大きくなる
+        (相見, 電気化学 94, 264 (2026): PbNiO3 を Pnma で解くと Ni の B 1.4 Å²、O 3.9 Å²、
+        Pbn21 なら正常)。最小の U_iso の 4 倍を超え、かつ 0.03 Å²(B ≈ 2.4 Å²)より大きい
+        サイトを知らせる。軽原子の U が重原子の 2〜3 倍になるのは普通なので 4 倍にしている。
+        """
+        notes: list[str] = []
+        for name in self.phases:
+            vals = {
+                p.name: p.value
+                for p in self.params
+                if p.name.startswith(f"{name}:") and p.name.endswith(":uiso") and p.value > 1e-6
+            }
+            if len(vals) < 2:
+                continue
+            lo = min(vals.values())
+            for pname, v in vals.items():
+                if v > 4.0 * lo and v > 0.03:
+                    notes.append(
+                        f"{pname} = {v:.3f} Å²(B ≈ {8 * math.pi**2 * v:.1f} Å²)は同じ相の"
+                        f"他のサイト(最小 {lo:.3f} Å²)より目立って大きいです。R 因子が良くても、"
+                        "初期モデルの空間群が違う、サイトの元素や占有率が違う可能性があります"
+                        "(変位パラメータの異常は構造モデルの誤りのサインです)。"
+                    )
         return notes
 
     def phase_fractions(self, hist: int = 0) -> dict[str, tuple[float, float]]:
