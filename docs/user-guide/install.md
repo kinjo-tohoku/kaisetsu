@@ -40,6 +40,13 @@ kaisetsu のインストーラにはまだコード署名を付けていない�
 
 Windows の「設定 → アプリ → インストールされているアプリ」から kaisetsu を削除する。
 
+### コマンドライン版(kaisetsu-cli)
+
+インストーラは GUI の `kaisetsu.exe` と一緒にコマンドライン版 `kaisetsu-cli.exe` も入れます。
+インストール時の「コマンドライン版 (kaisetsu-cli) を PATH に追加する」を付けておくと、
+コマンドプロンプトや PowerShell を開き直してから `kaisetsu-cli --help` で使えます
+(アンインストールで PATH からも外れます)。使い方は利用者ガイドの 7h 節。
+
 ### zip 版
 
 インストーラが使えない環境(共有 PC など)には `kaisetsu-windows.zip` もある。
@@ -58,6 +65,7 @@ uv tool install "kaisetsu[gui] @ git+https://github.com/kinjo-tohoku/kaisetsu"
 kaisetsu-gui
 ```
 
+コマンドラインは `kaisetsu --help`(GUI は `kaisetsu-gui`)。
 更新は `uv tool upgrade kaisetsu`(「更新を確認…」は新しい版を知らせるだけ)。Linux では Qt の実行に `libxcb-cursor0`、`libegl1`、
 `libxkbcommon0` などが要る(Ubuntu: `sudo apt install libxcb-cursor0 libegl1 libxkbcommon0`)。
 

@@ -306,6 +306,37 @@ CIF からは空間群と格子定数の初期値だけを使うので、原子�
 - Fit2D / Dioptas / pyFAI の .chi や .xy はそのまま読めます。強度が規格化されていてカウントで
   ないときは esd の絶対値が信用できません(χ² で割り戻しているので相対値は使えます)。
 
+## 7h. コマンドラインで使う(バッチ処理)
+
+GUI で保存したプロジェクト(`*.kaisetsu.json`)は、端末からも精密化できます。多数のデータを
+夜のうちに処理する、解析の手順をスクリプトに残す、といった使い方のためです。
+
+- インストーラで入れた場合: `kaisetsu-cli.exe`(インストール時に「PATH に追加」を付けていれば
+  どのフォルダからでも `kaisetsu-cli`。付けていなければ `%LOCALAPPDATA%\Programs\kaisetsu\kaisetsu-cli.exe`)。
+- Python で入れた場合(`uv tool install` / `pip install`): `kaisetsu` または `python -m kaisetsu`。
+
+```
+kaisetsu-cli refine   sample.kaisetsu.json                 標準手順で精密化して sample_refined.kaisetsu.json に保存
+kaisetsu-cli refine   sample.kaisetsu.json --csv out.csv --reflections refl.csv --cif out.cif
+kaisetsu-cli refine   sample.kaisetsu.json --recipe current --cycles 20   いまチェックの入っている量だけ
+kaisetsu-cli calc     sample.kaisetsu.json                 精密化せずに R 因子と診断だけ
+kaisetsu-cli lattice  map_*.xy --cif CeO2.cif --inst bl.json --csv cells.csv   Le Bail 格子定数(多数のデータ)
+kaisetsu-cli sequence start.kaisetsu.json T100.xy T200.xy T300.xy --csv seq.csv   連続データの逐次精密化
+kaisetsu-cli presets                                      装置プリセットの一覧(--preset cu など)
+kaisetsu-cli selftest                                     動作確認
+```
+
+`refine` のオプションは GUI の「標準の手順」ダイアログと同じです(`--no-coordinates`、`--no-adp`、
+`--occupancy`、`--displacement`、`--preferred-orientation`、`--roughness`、`--no-cell-scan`、
+`--no-kalpha2-trial`、`--no-humps`、`--cycles`)。入力のプロジェクトは上書きせず、`--out` か
+`<名前>_refined.kaisetsu.json` に保存します。結果のプロジェクトは GUI で開いて図を確認できます。
+`lattice` の装置は、GUI の装置設定で保存したテンプレート(.json)、GSAS-II の .instprm、GSAS の .prm、
+またはプリセット(`--preset cu`、`co`、`synchrotron`、`neutron`、番号)で指定します。
+`sequence` は既定ではプロジェクトでチェックの入っている量を動かし、失敗したデータでは格子定数を
+振り直して再試行します。各コマンドの `--help` に全オプションがあります。終了コードは成功 0、失敗 1。
+
+Python から直接使うなら `from kaisetsu.api import *`(README のスクリプト例)。
+
 ## 8. パラメータ名の規則
 
 ```

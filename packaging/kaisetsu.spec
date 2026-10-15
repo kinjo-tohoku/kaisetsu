@@ -3,7 +3,8 @@
 
     uv run --group build pyinstaller packaging/kaisetsu.spec --noconfirm
 
-出力は dist/kaisetsu/kaisetsu.exe。data/public(サンプルデータ)も同梱する。
+出力は dist/kaisetsu/kaisetsu.exe(GUI)と kaisetsu-cli.exe(コマンドライン、同じフォルダを共有)。
+data/public(サンプルデータ)も同梱する。
 インストーラまで作るときは packaging/build_windows.ps1 を使う。
 PyInstaller 自体は GPL(ブートローダ例外付き)で、生成した配布物にはその制約は及ばない
 (配布物のライセンスは kaisetsu と依存ライブラリのものになる)。
@@ -82,8 +83,25 @@ exe = EXE(  # noqa: F821
     console=False,
     icon=str(ROOT / "packaging" / "kaisetsu.ico"),
 )
+# コマンドライン版: 同じ解析結果(pyz)を使い、起動スクリプトだけ差し替えたコンソール exe
+cli_scripts = [s for s in a.scripts if not str(s[1]).replace("\\", "/").endswith("packaging/launch.py")]
+cli_scripts.append(("launch_cli", str(ROOT / "packaging" / "launch_cli.py"), "PYSOURCE"))
+exe_cli = EXE(  # noqa: F821
+    pyz,
+    cli_scripts,
+    [],
+    exclude_binaries=True,
+    name="kaisetsu-cli",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+    icon=str(ROOT / "packaging" / "kaisetsu.ico"),
+)
 coll = COLLECT(  # noqa: F821
     exe,
+    exe_cli,
     a.binaries,
     a.datas,
     strip=False,

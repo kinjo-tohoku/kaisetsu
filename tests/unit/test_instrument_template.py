@@ -49,7 +49,7 @@ def test_template_errors(tmp_path: Path) -> None:
 
 def test_instrument_from_preset() -> None:
     pytest.importorskip("PySide6")
-    from kaisetsu.gui.dialogs import PRESETS, instrument_from_preset
+    from kaisetsu.pattern.presets import PRESETS, instrument_from_preset
 
     for name in PRESETS:
         inst, smp = instrument_from_preset(name)

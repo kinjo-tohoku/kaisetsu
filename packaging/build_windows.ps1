@@ -43,6 +43,11 @@ if ($proc.ExitCode -ne 0 -or -not $result.StartsWith("ok ")) {
     throw "起動確認に失敗しました(終了コード $($proc.ExitCode))"
 }
 
+# 3b. コマンドライン版の確認(サンプルデータで 1 回計算する)
+Write-Host "== コマンドライン版の確認"
+& "dist\kaisetsu\kaisetsu-cli.exe" selftest
+if ($LASTEXITCODE -ne 0) { throw "kaisetsu-cli.exe selftest に失敗しました(終了コード $LASTEXITCODE)" }
+
 # 4. Inno Setup
 $candidates = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

@@ -67,6 +67,47 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\kaisetsu.exe"; Tasks: desktop
 [Run]
 Filename: "{app}\kaisetsu.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
+[Tasks]
+Name: "addtopath"; Description: "コマンドライン版 (kaisetsu-cli) を PATH に追加する"; GroupDescription: "コマンドライン:"
+
+[Registry]
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
+
+[Code]
+function NeedsAddPath(Param: string): boolean;
+var
+  OrigPath: string;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', OrigPath) then
+  begin
+    Result := True;
+    exit;
+  end;
+  Result := Pos(';' + Uppercase(Param) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
+end;
+
+procedure RemoveFromPath(Dir: string);
+var
+  OrigPath, Padded: string;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', OrigPath) then
+    exit;
+  Padded := ';' + OrigPath + ';';
+  P := Pos(';' + Uppercase(Dir) + ';', Uppercase(Padded));
+  if P = 0 then
+    exit;
+  Delete(Padded, P, Length(Dir) + 1);
+  Padded := Copy(Padded, 2, Length(Padded) - 2);
+  RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Padded);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RemoveFromPath(ExpandConstant('{app}'));
+end;
+
 [UninstallDelete]
 ; numba のキャッシュなど、実行時にできるファイルも消す
 Type: filesandordirs; Name: "{app}"

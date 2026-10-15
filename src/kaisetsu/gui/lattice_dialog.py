@@ -34,11 +34,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kaisetsu.gui.dialogs import PRESETS, instrument_from_preset
 from kaisetsu.gui.i18n import tr
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.io.project import INSTRUMENT_TEMPLATE_FILTER, load_instrument_template
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
+from kaisetsu.pattern.presets import PRESETS, instrument_from_preset
 from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.refine.lattice import (
     CELL_NAMES,

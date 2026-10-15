@@ -38,6 +38,18 @@ uv run python validation/gsas2/run_gsas2.py   # GSAS-II で参照値を再生成
 
 Windows のコンソールで日本語が化ける場合は `$env:PYTHONUTF8 = "1"` を設定する。
 
+### コマンドライン
+
+GUI で保存したプロジェクトを端末から精密化できます(インストーラ版は `kaisetsu-cli.exe`、
+Python で入れた場合は `kaisetsu` / `python -m kaisetsu`)。
+
+```
+kaisetsu refine sample.kaisetsu.json --csv pattern.csv --cif refined.cif
+kaisetsu lattice map_*.xy --cif CeO2.cif --preset synchrotron --csv cells.csv
+kaisetsu sequence start.kaisetsu.json T*.xy --csv seq.csv
+kaisetsu --help
+```
+
 ### スクリプト例(Rietveld 精密化)
 
 ```python

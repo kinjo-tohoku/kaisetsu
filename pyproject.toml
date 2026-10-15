@@ -114,6 +114,7 @@ show_missing = true
 skip_covered = true
 
 [project.scripts]
+kaisetsu = "kaisetsu.cli:main"
 kaisetsu-gui = "kaisetsu.gui.app:main"
 
 [project.urls]

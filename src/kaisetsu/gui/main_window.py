@@ -57,6 +57,7 @@ from kaisetsu.gui.settings import app_settings
 from kaisetsu.gui.structure_view import StructureView
 from kaisetsu.gui.update_dialog import SETTING_CHECK_ON_START, UpdateChecker, check_on_start
 from kaisetsu.gui.worker import RefineThread, RefineWorker
+from kaisetsu.io.export import write_pattern_csv, write_pdf_csv, write_reflections_csv
 from kaisetsu.io.project import load_project, save_project
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
@@ -694,15 +695,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        i = self.current_hist
-        h = self.project.histograms[i]
-        res = self.project.calculate(i)
-        cols = [res.x, h.data.y, res.y_calc, res.y_background, h.data.y - res.y_calc]
-        header = "two_theta,y_obs,y_calc,y_bkg,diff"
-        for name, yp in zip(h.contributions, res.y_phases, strict=True):
-            cols.append(yp)
-            header += f",{name}"
-        np.savetxt(path, np.column_stack(cols), delimiter=",", header=header, comments="")
+        write_pattern_csv(self.project, self.current_hist, path)
         self.log(f"計算パターンを書き出しました: {path}")
 
     def _export_pdf_csv(self) -> None:
@@ -711,15 +704,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        i = self.current_pdf
-        g = self.project.pdf_datasets[i]
-        res = self.project.calculate_pdf(i)
-        cols = [res.r, g.data.g, res.g_calc, g.data.g - res.g_calc]
-        header = "r,G_obs,G_calc,diff"
-        for name, gp in zip(g.phases, res.g_phases, strict=True):
-            cols.append(gp)
-            header += f",{name}"
-        np.savetxt(path, np.column_stack(cols), delimiter=",", header=header, comments="")
+        write_pdf_csv(self.project, self.current_pdf, path)
         self.log(f"計算 G(r) を書き出しました: {path}")
 
     def export_reflections_csv(self) -> None:
@@ -730,17 +715,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        i = self.current_hist
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("phase,h,k,l,mult,d,two_theta,F2_calc,F2_obs,I_calc,I_obs,fwhm\n")
-            for name in self.project.histograms[i].contributions:
-                rep = self.project.reflection_report(i, name)
-                for k in range(len(rep.hkl)):
-                    hh, kk, ll = rep.hkl[k]
-                    f.write(
-                        f"{name},{hh},{kk},{ll},{rep.multiplicity[k]},{rep.d[k]:.5f},{rep.two_theta[k]:.4f},"
-                        f"{rep.f2_calc[k]:.4f},{rep.f2_obs[k]:.4f},{rep.i_calc[k]:.5g},{rep.i_obs[k]:.5g},{rep.fwhm[k]:.4f}\n"
-                    )
+        write_reflections_csv(self.project, self.current_hist, path)
         self.log(f"反射リストを書き出しました: {path}")
 
     def export_cif(self) -> None:

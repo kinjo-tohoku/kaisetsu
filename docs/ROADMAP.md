@@ -307,3 +307,9 @@ Phase 0〜6 は完了(進捗表参照)。この先の優先順位:
    超える U_iso を「空間群・元素・占有率の疑い」として診断に出す。(d) 利用者ガイドに内標準法と
    精密化順序(ゼロ点を先に動かすと格子定数のずれを吸う)の注意。AutoRietveld 本体は RIETAN-FP が
    要るので依存にはしない。
+   コマンドライン `kaisetsu`(`src/kaisetsu/cli.py`: refine / calc / lattice / sequence / presets /
+   selftest。ユーザー「インストールした場合 CUI では使えない? ローカルの PC にいろいろさせておきたい」
+   2026-10-15、v0.1.8)。配布物は同じフォルダに GUI の kaisetsu.exe とコンソールの kaisetsu-cli.exe
+   (PyInstaller の Analysis を共有して起動スクリプトだけ差し替え)、インストーラに「PATH に追加」の
+   タスク(HKCU の Environment\Path、アンインストールで外す)。装置プリセットは
+   `pattern/presets.py`、CSV 出力は `io/export.py` に出して GUI と共用。
