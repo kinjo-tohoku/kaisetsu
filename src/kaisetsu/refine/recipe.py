@@ -53,6 +53,8 @@ class Step:
     filter: Callable[[Project, Parameter], bool] | None = None
     #: 段階の前に走らせる準備(拘束を張るなど)。ログに出す文を返す
     prepare: Callable[[Project, Step], list[str]] | None = None
+    #: 段階の後に走らせる点検。(ログに出す文, もう一度精密化するか)を返す
+    after: Callable[[Project, Step], tuple[list[str], bool]] | None = None
     #: "refine"(普通の段階)、"kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)、
     #: "hump_trial"(残差の広いこぶを背景のハンプにして合うか試す)、
     #: "cell_scan"(格子定数の初期値を振って谷を見つける。精密化はしない)
@@ -147,6 +149,16 @@ class Recipe:
                 raise PatternSizeError(msg) from exc
             if self.guard_widths:
                 res = self._guard_widths(project, step, snapshot, res, iteration_progress)
+            if step.after is not None:
+                lines, again = step.after(project, step)
+                for line in lines:
+                    project.log.append(f"レシピ '{self.name}' 段階 '{step.name}': {line}")
+                if again and project.params.free():
+                    res = project.refine(
+                        max_cycles=step.max_cycles,
+                        progress=iteration_progress,
+                        le_bail_cycles=lb_cycles,
+                    )
             project.log.append(
                 f"レシピ '{self.name}' 段階 '{step.name}': {project.rfactors()['total']}"
             )
@@ -462,40 +474,96 @@ def light_atom_uiso_groups(project: Project) -> list[tuple[str, list[str], float
     return out
 
 
+def _tie_uiso_group(
+    project: Project, phase: str, labels: list[str]
+) -> tuple[str, list[str]] | None:
+    """サイト群の U_iso を 1 つの共通パラメータに拘束する。(主パラメータ, 従属) を返す。
+
+    すでに拘束・固定されているサイトは触らない。主は既に他(混合サイトの鏡像)の主になっている
+    ものがあればそれ。共通の初期値は群の平均(負や 0 からは始めない)。
+    """
+    names = [f"{phase}:{lab}:uiso" for lab in labels]
+    names = [n for n in names if n in project.params and not project.params[n].locked]
+    masters_of_others = {m for q in project.params if q.tie is not None for m in q.tie.masters}
+    candidates = [n for n in names if project.params[n].tie is None]
+    if len(candidates) < 2:
+        return None
+    master = next((n for n in candidates if n in masters_of_others), candidates[0])
+    dependents = [n for n in candidates if n != master and n not in masters_of_others]
+    if not dependents:
+        return None
+    values = [project.params[n].value for n in [master, *dependents]]
+    positive = [v for v in values if v > 0.0]
+    mean = float(np.mean(positive)) if positive else 0.01
+    project.params[master].value = max(mean, 0.005)
+    # 共通の U_iso が負なのは意味が無い(個別の負は「決まらない」印だが、共通なら 0 で止める)
+    project.params[master].min = max(project.params[master].min, 0.0)
+    for n in dependents:
+        project.tie(n, master)
+    project.params.evaluate_ties()
+    project.params.apply_all()
+    return master, dependents
+
+
 def _tie_light_atom_uiso(project: Project, step: Step) -> list[str]:
     """重原子が散乱を支配する相では、軽原子の U_iso を 1 つの共通パラメータにする。
 
     Te や Bi と共存する O, C, Li の U_iso は実験室 X 線では個別に決まらず、下限に張り付くか
     負になる(opXRD の 13 本中 5 本)。人がやるように、軽原子の U_iso を共通にして動かす
     (固定よりも、共通の 1 つなら決まることが多い)。すでに拘束されているサイトは触らない。
+    割合が閾値を超えていて個別に動かした場合は、段階の後の `_retie_negative_light_uiso` が
+    負や下限のサイトを見て共通化する。
     """
     msgs: list[str] = []
     for phase, labels, frac in light_atom_uiso_groups(project):
         if frac >= LIGHT_ATOM_FRACTION:
             continue
-        names = [f"{phase}:{lab}:uiso" for lab in labels]
-        names = [n for n in names if n in project.params and not project.params[n].locked]
-        masters_of_others = {m for q in project.params if q.tie is not None for m in q.tie.masters}
-        candidates = [n for n in names if project.params[n].tie is None]
-        if len(candidates) < 2:
+        tied = _tie_uiso_group(project, phase, labels)
+        if tied is None:
             continue
-        # 主パラメータ: 既に他(混合サイトの鏡像)の主になっているものがあればそれ
-        master = next((n for n in candidates if n in masters_of_others), candidates[0])
-        dependents = [n for n in candidates if n != master and n not in masters_of_others]
-        if not dependents:
-            continue
-        mean = float(np.mean([project.params[n].value for n in [master, *dependents]]))
-        project.params[master].value = max(mean, 0.005)  # 負や 0 から始めない
-        for n in dependents:
-            project.tie(n, master)
-        project.params.evaluate_ties()
-        project.params.apply_all()
+        master, dependents = tied
         shown = ", ".join(n.split(":")[1] for n in [master, *dependents])
         msgs.append(
             f"相 {phase}: 重原子が散乱能の {100 * (1 - frac):.0f}% を占め軽原子の U_iso は個別に"
             f"決まらないので、{shown} の U_iso を共通にします(主パラメータ {master})"
         )
     return msgs
+
+
+def _retie_negative_light_uiso(project: Project, step: Step) -> tuple[list[str], bool]:
+    """段階の後: 個別に動かした軽原子の U_iso が負か下限に張り付いていれば、共通化してやり直す。
+
+    割合の閾値(LIGHT_ATOM_FRACTION)は目安でしかなく、COD 2311093(Na2HfSi2O7、軽原子 31.5%)では
+    閾値をわずかに超えて個別に動かした O 7 サイトのうち 4 つが負になった(著者は O の U を 1 つに
+    拘束)。データが決めてくれない証拠は負や下限なので、それを見て共通化する。
+    """
+    msgs: list[str] = []
+    again = False
+    for phase, labels, _frac in light_atom_uiso_groups(project):
+        names = [f"{phase}:{lab}:uiso" for lab in labels]
+        free = [n for n in names if n in project.params and project.params[n].vary
+                and project.params[n].tie is None and not project.params[n].locked]  # fmt: skip
+        if len(free) < 2:
+            continue
+        bad = [
+            n
+            for n in free
+            if project.params[n].value < 0.0
+            or project.params[n].value <= project.params[n].min + 1e-9
+        ]
+        if not bad:
+            continue
+        tied = _tie_uiso_group(project, phase, labels)
+        if tied is None:
+            continue
+        master, dependents = tied
+        shown = ", ".join(n.split(":")[1] for n in bad)
+        msgs.append(
+            f"相 {phase}: 個別に動かした軽原子の U_iso のうち {shown} が負か下限に張り付いたので、"
+            f"{len(dependents) + 1} サイトの U_iso を共通にしてやり直します(主パラメータ {master})"
+        )
+        again = True
+    return msgs, again
 
 
 def _is_phase_param(project: Project, p: Parameter) -> bool:
@@ -602,7 +670,8 @@ def standard_recipe(
         try_no_kalpha2: ピーク幅のあとで Kα2 を外した方が合うか試し、Rwp が 0.3 ポイント以上
             下がれば採用する(ラベルが Kα1 でも単色化されていないデータがあり、逆もある)
         light_atom_uiso: 重原子が散乱能の 70% 以上を占める相では、軽原子(Z ≤ 10)の U_iso を
-            共通の 1 つにする(個別には決まらず下限に張り付くため)
+            共通の 1 つにする(個別には決まらず下限に張り付くため)。閾値未満で個別に動かした
+            場合も、負か下限に張り付いたサイトがあれば共通化してやり直す
         humps: ピーク幅のあとで残差の広いこぶ(ガラスキャピラリ・非晶質成分)を背景のガウスの
             ハンプにして試し、Rwp が 0.5 ポイント以上下がれば採用する。人が足したハンプ
             (h*:hump*:*)は「スケールと背景」で背景と一緒に動く
@@ -690,6 +759,7 @@ def standard_recipe(
             20,
             filter=_is_phase_param,
             prepare=_tie_light_atom_uiso if light_atom_uiso else None,
+            after=_retie_negative_light_uiso if light_atom_uiso else None,
         )
     if roughness:
         r.add(

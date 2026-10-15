@@ -52,6 +52,9 @@ class XrayScatteringFactors:
         if key in self._table:
             return key
         el, q = split_species(key)
+        if el in ("D", "T"):
+            # 重水素・三重水素は電子が 1 個で、X 線の散乱因子は H と同じ(中性子の CIF に多い)
+            return "H"
         if q != 0 and el in self._table:
             log.warning(
                 "散乱因子テーブル %s に %s が無いので中性原子 %s を使います",
