@@ -203,6 +203,7 @@ def test_standard_recipe_step_names_and_options() -> None:
         "格子定数とピーク位置",
         "ピーク幅 W",
         "ピーク幅 U, V, X, Y",
+        "残差のこぶを背景に試す",
         "Kα2 なしを試す",
         "非対称(放射光)",
         "原子座標",
@@ -211,3 +212,7 @@ def test_standard_recipe_step_names_and_options() -> None:
     ]
     names = [s.name for s in standard_recipe("*", "h0", try_no_kalpha2=False).steps]
     assert "Kα2 なしを試す" not in names
+    names = [s.name for s in standard_recipe("*", "h0", humps=False).steps]
+    assert "残差のこぶを背景に試す" not in names
+    # 人が足したハンプは「スケールと背景」で動く
+    assert "h0:hump*:*" in standard_recipe("*", "h0").steps[0].patterns

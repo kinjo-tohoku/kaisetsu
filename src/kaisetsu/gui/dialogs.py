@@ -530,6 +530,13 @@ class RecipeDialog(QDialog):
             "重原子が散乱能の 70% 以上を占める相では、軽原子(Z ≤ 10)の U_iso は個別に決まらず"
             "下限に張り付きます。共通の 1 つにして動かします"
         )
+        self.humps = QCheckBox("残差の広いこぶを背景のハンプにして試す(ガラスキャピラリ・非晶質)")
+        self.humps.setChecked(True)
+        self.humps.setToolTip(
+            "ピーク幅のあとで残差に幅の広い山が残っていれば、背景にガウスのハンプを足して精密化し、"
+            "Rwp が 0.5 ポイント以上下がれば採用します。「背景の設定」で足したハンプは"
+            "「スケールと背景」で背景と一緒に動きます"
+        )
         for w in (
             self.coords,
             self.adp,
@@ -540,6 +547,7 @@ class RecipeDialog(QDialog):
             self.rough,
             self.ka2,
             self.light,
+            self.humps,
         ):
             form.addRow(w)
         self.cycles = QSpinBox()
@@ -567,6 +575,7 @@ class RecipeDialog(QDialog):
             roughness=self.rough.isChecked(),
             try_no_kalpha2=self.ka2.isChecked(),
             light_atom_uiso=self.light.isChecked(),
+            humps=self.humps.isChecked(),
         )
         for s in r.steps:
             s.max_cycles = (

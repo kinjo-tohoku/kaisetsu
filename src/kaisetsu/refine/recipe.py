@@ -29,6 +29,7 @@ import numpy as np
 
 from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind
+from kaisetsu.refine.residual import find_residual_features
 
 if TYPE_CHECKING:
     from kaisetsu.refine.lsq import FitResult
@@ -49,7 +50,8 @@ class Step:
     filter: Callable[[Project, Parameter], bool] | None = None
     #: 段階の前に走らせる準備(拘束を張るなど)。ログに出す文を返す
     prepare: Callable[[Project, Step], list[str]] | None = None
-    #: "refine"(普通の段階)か "kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)
+    #: "refine"(普通の段階)、"kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)、
+    #: "hump_trial"(残差の広いこぶを背景のハンプにして合うか試す)
     kind: str = "refine"
 
 
@@ -82,8 +84,9 @@ class Recipe:
                 project.le_bail_update()
         results: list[FitResult] = []
         for step in self.steps:
-            if step.kind == "kalpha2_trial":
-                trial = self._kalpha2_trial(project, step, iteration_progress)
+            if step.kind in ("kalpha2_trial", "hump_trial"):
+                trial_fn = self._kalpha2_trial if step.kind == "kalpha2_trial" else self._hump_trial
+                trial = trial_fn(project, step, iteration_progress)
                 if trial is not None:
                     results.append(trial)
                     if progress is not None:
@@ -280,6 +283,81 @@ class Recipe:
         )
         return None
 
+    def _hump_trial(
+        self,
+        project: Project,
+        step: Step,
+        iteration_progress: Callable[[int, float], None] | None,
+    ) -> FitResult | None:
+        """残差に残った広いこぶ(ガラスキャピラリ・非晶質成分)を背景のハンプにして合うか試す。
+
+        各ヒストグラムの残差を `find_residual_features` で点検し、幅が代表のピーク幅の 4 倍を
+        超える山(高さが正味の最大強度の HUMP_MIN_FRACTION 以上、1 ヒストグラムに 3 つまで)を
+        ガウスのハンプとして背景に足し、背景・スケールと一緒に精密化する。Rwp が HUMP_GAIN
+        (0.5 ポイント)以上下がれば採用して以後の段階でもハンプを動かし、そうでなければ外して
+        値を戻す。Chebyshev の項数を増やしても広いこぶは吸えるが、ピークの裾まで吸い始める
+        (PbSO4 に幅 12° のこぶを合成した試験: 12 項 Rwp 28% → ハンプ 8%、20 項 11%)。
+        """
+        prefix = f"レシピ '{self.name}' 段階 '{step.name}'"
+        values = project.snapshot()
+        tables = {
+            name: {i: dict(t) for i, t in ph.f2_tables.items()}
+            for name, ph in project.phases.items()
+        }
+        rwp0 = project.rfactors()["total"].rwp
+        added: dict[int, int] = {}
+        notes: list[str] = []
+        for i in range(len(project.histograms)):
+            feats = find_residual_features(project, i, min_fraction=HUMP_MIN_FRACTION)
+            cands = feats.humps[:HUMP_MAX_PER_HISTOGRAM]
+            if not cands:
+                continue
+            for hm in cands:
+                project.add_hump(i, hm.center, hm.fwhm, hm.height)
+                notes.append(
+                    f"h{i}: {hm.center:.1f}{feats.unit} を中心に幅 {hm.fwhm:.1f}{feats.unit}"
+                    f"(高さは最大ピークの {100 * hm.height / feats.net_max:.0f}%)"
+                )
+            added[i] = len(cands)
+        if not added:
+            project.log.append(f"{prefix}: 残差に広いこぶは無いので飛ばします")
+            return None
+        names = [q.name for q in project.params.select("h*:hump*:*", "h*:bkg:*", "h*:*:scale")]
+        project.vary(*names)
+        res: FitResult | None = None
+        rwp1 = float("inf")
+        try:
+            res = project.refine(
+                max_cycles=step.max_cycles,
+                progress=iteration_progress,
+                le_bail_cycles=3 if _has_le_bail(project) else 0,
+            )
+            rwp1 = project.rfactors()["total"].rwp
+        except (PatternSizeError, ValueError, np.linalg.LinAlgError) as exc:
+            project.log.append(f"{prefix}: こぶをハンプにする試行でエラー({exc})")
+        if res is not None and rwp0 - rwp1 >= HUMP_GAIN:
+            project.log.append(
+                f"{prefix}: 残差の広いこぶを背景のガウスのハンプにしました("
+                + "、".join(notes)
+                + f"。Rwp {100 * rwp0:.2f}% → {100 * rwp1:.2f}%)。非晶質成分(ガラスキャピラリ"
+                "など)の可能性があります。第二相の広いピークなら、その相の CIF を足してください。"
+                "パラメータは h*:hump*:center|fwhm|height です"
+            )
+            return res
+        for i, n in added.items():
+            del project.histograms[i].humps[-n:]
+        project.build_parameters()
+        project.restore(values)
+        for name, tbl in tables.items():
+            project.phases[name].f2_tables = tbl
+        for h in project.histograms:
+            h.result = None
+        project.log.append(
+            f"{prefix}: 残差のこぶ(" + "、".join(notes) + f")を背景のハンプにしても良くなりません"
+            f"(Rwp {100 * rwp0:.2f}% → {100 * rwp1:.2f}%)。ハンプ無しのまま進めます"
+        )
+        return None
+
 
 #: 軽原子とみなす原子番号の上限(H〜Ne)。X 線では重原子が共存すると U_iso が個別に決まらない
 LIGHT_ATOM_Z_MAX = 10
@@ -287,6 +365,12 @@ LIGHT_ATOM_Z_MAX = 10
 LIGHT_ATOM_FRACTION = 0.3
 #: Kα2 なしを採用する Rwp の改善の下限(0.3 ポイント)
 KALPHA2_GAIN = 0.003
+#: 残差のこぶを背景のハンプとして採用する Rwp の改善の下限(0.5 ポイント)
+HUMP_GAIN = 0.005
+#: ハンプの候補にする、こぶの高さの正味の最大強度に対する下限
+HUMP_MIN_FRACTION = 0.05
+#: 1 ヒストグラムあたり試すこぶの数の上限
+HUMP_MAX_PER_HISTOGRAM = 3
 #: 放射光とみなす波長の上限 [Å](軸発散 SH/L も動かす)
 SYNCHROTRON_WAVELENGTH_MAX = 1.2
 
@@ -469,6 +553,7 @@ def standard_recipe(
     roughness: bool = False,
     try_no_kalpha2: bool = True,
     light_atom_uiso: bool = True,
+    humps: bool = True,
 ) -> Recipe:
     """標準の段階的精密化レシピ。
 
@@ -489,9 +574,12 @@ def standard_recipe(
             下がれば採用する(ラベルが Kα1 でも単色化されていないデータがあり、逆もある)
         light_atom_uiso: 重原子が散乱能の 70% 以上を占める相では、軽原子(Z ≤ 10)の U_iso を
             共通の 1 つにする(個別には決まらず下限に張り付くため)
+        humps: ピーク幅のあとで残差の広いこぶ(ガラスキャピラリ・非晶質成分)を背景のガウスの
+            ハンプにして試し、Rwp が 0.5 ポイント以上下がれば採用する。人が足したハンプ
+            (h*:hump*:*)は「スケールと背景」で背景と一緒に動く
     """
     r = Recipe("標準")
-    r.add("スケールと背景", [f"{hist}:bkg:*", f"{hist}:{phase}:scale"], 10)
+    r.add("スケールと背景", [f"{hist}:bkg:*", f"{hist}:hump*:*", f"{hist}:{phase}:scale"], 10)
     if sample_displacement:
         # Bragg-Brentano では高さずれ、Debye-Scherrer では x, y ずれ(filter で振り分ける)
         r.add(
@@ -536,6 +624,8 @@ def standard_recipe(
         ],
         15,
     )
+    if humps:
+        r.add("残差のこぶを背景に試す", [], 10, kind="hump_trial")
     if try_no_kalpha2:
         r.add("Kα2 なしを試す", [], 10, kind="kalpha2_trial")
     if asymmetry:

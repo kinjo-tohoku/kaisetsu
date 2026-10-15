@@ -135,6 +135,12 @@ class RunPage(QWizardPage):
         self.ka2.setChecked(True)
         self.light = QCheckBox("軽原子の U_iso を共通にする(重原子が散乱を支配するとき)")
         self.light.setChecked(True)
+        self.humps = QCheckBox("残差の広いこぶを背景のハンプにして試す(ガラスキャピラリ・非晶質)")
+        self.humps.setChecked(True)
+        self.humps.setToolTip(
+            "ピーク幅のあとで残差に幅の広い山が残っていれば、背景にガウスのハンプを足して精密化し、"
+            "Rwp が 0.5 ポイント以上下がれば採用します(ログに中心と幅が出ます)"
+        )
         self.lebail = QCheckBox(
             "Le Bail(構造を使わない)も走らせて、プロファイルと背景だけの Rwp の下限を出す"
         )
@@ -143,7 +149,16 @@ class RunPage(QWizardPage):
             "Rietveld の Rwp が Le Bail より大きく悪ければ、残りの差は構造モデルの問題"
             "(占有率・選択配向・第二相)です。差が小さければピーク形状や背景の限界です"
         )
-        for w in (self.coords, self.adp, self.disp, self.rough, self.ka2, self.light, self.lebail):
+        for w in (
+            self.coords,
+            self.adp,
+            self.disp,
+            self.rough,
+            self.ka2,
+            self.light,
+            self.humps,
+            self.lebail,
+        ):
             layout.addWidget(w)
         row = QHBoxLayout()
         row.addWidget(QLabel("背景(Chebyshev)の項数:"))
@@ -214,6 +229,7 @@ class StartWizard(QWizard):
             roughness=self.page_run.rough.isChecked(),
             try_no_kalpha2=self.page_run.ka2.isChecked(),
             light_atom_uiso=self.page_run.light.isChecked(),
+            humps=self.page_run.humps.isChecked(),
         )
         companion = None
         if self.page_run.lebail.isChecked():
