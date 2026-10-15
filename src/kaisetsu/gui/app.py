@@ -40,11 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         import os
 
         os.environ["KAISETSU_NO_UPDATE_CHECK"] = "1"  # 起動確認では GitHub に行かない
-    from PySide6.QtCore import QSettings
-
     from kaisetsu.gui.i18n import set_language
+    from kaisetsu.gui.settings import app_settings
 
-    lang = str(QSettings("kaisetsu", "kaisetsu").value("language", "ja"))
+    lang = str(app_settings().value("language", "ja"))
     if "--lang" in args:
         i = args.index("--lang")
         if i + 1 < len(args):

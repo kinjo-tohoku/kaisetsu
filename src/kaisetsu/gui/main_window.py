@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTableView,
     QToolBar,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -39,11 +40,20 @@ from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
 from kaisetsu.gui.background_dialog import BackgroundDialog
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
+from kaisetsu.gui.flow_layout import FlowLayout
 from kaisetsu.gui.help_viewer import HelpWindow
 from kaisetsu.gui.i18n import tr
-from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
+from kaisetsu.gui.param_model import (
+    COL_DESC,
+    COL_NAME,
+    COL_UNIT,
+    COL_VARY,
+    ParameterFilter,
+    ParameterModel,
+)
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.gui.plot_widget import HistoryPlot, PatternPlot, PDFPlot
+from kaisetsu.gui.settings import app_settings
 from kaisetsu.gui.structure_view import StructureView
 from kaisetsu.gui.update_dialog import SETTING_CHECK_ON_START, UpdateChecker, check_on_start
 from kaisetsu.gui.worker import RefineThread, RefineWorker
@@ -67,6 +77,12 @@ CIF_FILTER = "CIF (*.cif);;すべて (*)"
 PROJECT_FILTER = "kaisetsu プロジェクト (*.kaisetsu.json *.json);;すべて (*)"
 IMAGE_FILTER = "PNG 画像 (*.png);;SVG 画像 (*.svg)"
 
+# 窓の大きさとドックの配置(幅・表示/非表示)を次回の起動に引き継ぐ
+SETTING_GEOMETRY = "mainwindow/geometry"
+SETTING_STATE = "mainwindow/state"
+# 初回起動のパラメータ欄の幅(以後は利用者が変えた幅を記憶する)
+PARAM_DOCK_WIDTH = 440
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -85,11 +101,12 @@ class MainWindow(QMainWindow):
         self._worker: RefineWorker | None = None
         # 直前の精密化(または初期値に戻す操作)の前の値。Ctrl+Z で戻す
         self._undo_values: dict[str, float] | None = None
-        self.settings = QSettings("kaisetsu", "kaisetsu")
+        self.settings = app_settings()
         self._help_window: HelpWindow | None = None
 
         self._build_ui()
         self._build_menu()
+        self._restore_layout()
         self._refresh_all()
 
         # 新しい版の確認(ヘルプ → 更新を確認、起動時は 1 日 1 回)
@@ -106,7 +123,7 @@ class MainWindow(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["プロジェクト"])
         self.tree.itemClicked.connect(self._on_tree_clicked)
-        self.tree.setMinimumWidth(220)
+        self.tree.setMinimumWidth(160)
 
         self.plot = PatternPlot()
         self.plot.excludeRequested.connect(self._on_exclude_requested)
@@ -150,7 +167,8 @@ class MainWindow(QMainWindow):
         filt.addWidget(self.only_free)
         filt.addWidget(self.show_advanced)
         v.addLayout(filt)
-        quick = QHBoxLayout()
+        # 幅が足りなければ折り返す(横並びだと欄をその合計幅より狭くできない)
+        quick = FlowLayout()
         # (表示名, glob, 種類)。種類で相の量とヒストグラムの量を区別する
         # (例: 「U」で装置の U まで出ないように)
         for label, pat, scope in (
@@ -164,11 +182,12 @@ class MainWindow(QMainWindow):
             ("スケール", "*:*:scale", "all"),
             ("PDF", "g*:*", "hist"),
         ):
-            b = QPushButton(tr(label))
-            b.setFlat(True)
+            # QToolButton は QPushButton(最小 75 px)より幅を取らない
+            b = QToolButton()
+            b.setText(tr(label))
+            b.setAutoRaise(True)
             b.clicked.connect(lambda _=False, p=pat, s=scope: self._quick_filter(p, s))
             quick.addWidget(b)
-        quick.addStretch(1)
         v.addLayout(quick)
         self.param_model = ParameterModel(self.project.params)
         self.param_filter = ParameterFilter()
@@ -180,6 +199,10 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(
             COL_NAME, QHeaderView.ResizeMode.ResizeToContents
         )
+        for col in (COL_VARY, COL_UNIT):
+            self.table.horizontalHeader().setSectionResizeMode(
+                col, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.table.horizontalHeader().setSectionResizeMode(COL_DESC, QHeaderView.ResizeMode.Stretch)
         hint = QLabel(
             "「精密化」列にチェックを付けた量が、精密化(F9)で動きます。"
@@ -190,7 +213,7 @@ class MainWindow(QMainWindow):
         hint.setStyleSheet("color: #444;")
         v.addWidget(hint)
         v.addWidget(self.table, 1)
-        btns = QHBoxLayout()
+        btns = FlowLayout()
         self.btn_vary_shown = QPushButton(tr("表示中の項目に全部チェック"))
         self.btn_vary_shown.setToolTip(
             "いま表に表示されている(絞り込み後の)パラメータの「精密化」をまとめてオンにします"
@@ -213,7 +236,7 @@ class MainWindow(QMainWindow):
         v.addLayout(btns)
         dock.setWidget(panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        dock.setMinimumWidth(400)
+        # 最小幅は中身(絞り込みの行)で決まり、ノート PC では 300 px 程度まで狭くできる
         self.param_dock = dock
         self.filter_edit.textChanged.connect(self._on_filter_text)
         self.only_free.toggled.connect(self.param_filter.set_only_free)
@@ -1500,7 +1523,22 @@ class MainWindow(QMainWindow):
     def _remember_dir(self, path: str) -> None:
         remember_dir(path, self.settings)
 
+    def _restore_layout(self) -> None:
+        """前回の窓の大きさとドックの配置を戻す。初回はパラメータ欄を既定の幅にする。"""
+        geometry = self.settings.value(SETTING_GEOMETRY)
+        if isinstance(geometry, QByteArray) and not geometry.isEmpty():
+            self.restoreGeometry(geometry)
+        state = self.settings.value(SETTING_STATE)
+        if isinstance(state, QByteArray) and not state.isEmpty() and self.restoreState(state):
+            return
+        self.resizeDocks([self.param_dock], [PARAM_DOCK_WIDTH], Qt.Orientation.Horizontal)
+
+    def _save_layout(self) -> None:
+        self.settings.setValue(SETTING_GEOMETRY, self.saveGeometry())
+        self.settings.setValue(SETTING_STATE, self.saveState())
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_layout()
         if self._thread is not None and self._thread.isRunning():
             if self._worker is not None:
                 self._worker.cancel()

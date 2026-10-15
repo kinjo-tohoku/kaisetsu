@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings
 
+from kaisetsu.gui.settings import app_settings
+
 
 def sample_data_dir() -> Path | None:
     """リポジトリから動かしているときの data/public(無ければ None)。"""
@@ -18,7 +20,7 @@ def sample_data_dir() -> Path | None:
 
 def last_dir(settings: QSettings | None = None) -> str:
     """前回使ったフォルダ。初回はサンプルデータのフォルダ、無ければホーム。"""
-    settings = settings or QSettings("kaisetsu", "kaisetsu")
+    settings = settings or app_settings()
     saved = settings.value("last_dir")
     if saved and Path(str(saved)).is_dir():
         return str(saved)
@@ -27,5 +29,5 @@ def last_dir(settings: QSettings | None = None) -> str:
 
 
 def remember_dir(path: str, settings: QSettings | None = None) -> None:
-    settings = settings or QSettings("kaisetsu", "kaisetsu")
+    settings = settings or app_settings()
     settings.setValue("last_dir", str(Path(path).parent))
