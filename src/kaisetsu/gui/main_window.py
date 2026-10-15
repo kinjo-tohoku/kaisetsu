@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -39,6 +39,7 @@ from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
 from kaisetsu.gui.background_dialog import BackgroundDialog
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
+from kaisetsu.gui.help_viewer import HelpWindow
 from kaisetsu.gui.i18n import tr
 from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, ParameterModel
 from kaisetsu.gui.paths import last_dir, remember_dir
@@ -53,6 +54,7 @@ from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.pdf.data import PDFData, read_pdf_data
 from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.refine.recipe import Recipe
+from kaisetsu.userdocs import GUIDE_URL, user_guide_dir
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +86,7 @@ class MainWindow(QMainWindow):
         # 直前の精密化(または初期値に戻す操作)の前の値。Ctrl+Z で戻す
         self._undo_values: dict[str, float] | None = None
         self.settings = QSettings("kaisetsu", "kaisetsu")
+        self._help_window: HelpWindow | None = None
 
         self._build_ui()
         self._build_menu()
@@ -367,6 +370,14 @@ class MainWindow(QMainWindow):
         m_view.addAction(self.history_dock.toggleViewAction())
 
         m_help = mb.addMenu(tr("ヘルプ(&H)"))
+        self.act_guide = self._add_action(
+            m_help, tr("利用者ガイド(&G)"), lambda: self.show_user_guide(), "F1"
+        )
+        self._add_action(
+            m_help, tr("インストールと更新の説明"), lambda: self.show_user_guide("install.md")
+        )
+        self._add_action(m_help, tr("オンラインの説明書(GitHub)…"), self.open_online_guide)
+        m_help.addSeparator()
         self._add_action(m_help, tr("パラメータ名の規則"), self.show_naming_help)
         m_help.addSeparator()
         self._add_action(m_help, tr("更新を確認(&U)…"), self.check_for_updates)
@@ -1394,6 +1405,25 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # ヘルプ
     # ------------------------------------------------------------------
+    def show_user_guide(self, doc: str = "getting-started.md", heading: str | None = None) -> None:
+        """ヘルプ → 利用者ガイド(F1)。同梱の説明書を別窓で開く。同梱されていなければ GitHub を開く。"""
+        if user_guide_dir() is None:
+            self.log(
+                tr("説明書がこの配布物に入っていないので、GitHub の説明書をブラウザで開きます")
+            )
+            self.open_online_guide()
+            return
+        if self._help_window is None:
+            self._help_window = HelpWindow(self)
+        self._help_window.show_doc(doc, heading)
+        self._help_window.show()
+        self._help_window.raise_()
+        self._help_window.activateWindow()
+
+    def open_online_guide(self) -> None:
+        """ヘルプ → オンラインの説明書。GitHub の説明書をブラウザで開く。"""
+        QDesktopServices.openUrl(QUrl(GUIDE_URL))
+
     def show_naming_help(self) -> None:
         QMessageBox.information(
             self,

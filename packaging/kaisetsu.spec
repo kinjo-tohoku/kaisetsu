@@ -22,6 +22,9 @@ datas += collect_data_files("pyqtgraph")
 sample_dir = ROOT / "data" / "public"
 if sample_dir.is_dir():
     datas.append((str(sample_dir), "data/public"))
+docs_dir = ROOT / "docs" / "user-guide"  # ヘルプ → 利用者ガイドで表示する説明書
+if docs_dir.is_dir():
+    datas.append((str(docs_dir), "docs/user-guide"))
 
 hiddenimports = []
 hiddenimports += collect_submodules("kaisetsu")

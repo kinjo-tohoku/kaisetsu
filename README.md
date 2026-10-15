@@ -9,7 +9,7 @@
 
 - Windows: **[kaisetsu-windows-setup.exe](https://github.com/kinjo-tohoku/kaisetsu/releases/latest/download/kaisetsu-windows-setup.exe)**(インストーラ、管理者権限不要)
 - 手順と「Windows によって PC が保護されました」が出たときの対処: [インストール](docs/user-guide/install.md)
-- 使い方: [はじめに](docs/user-guide/getting-started.md)
+- 使い方: [はじめに](docs/user-guide/getting-started.md)(アプリの中でも ヘルプ → 「利用者ガイド」(F1)で読める)
 - ライセンス: MIT([LICENSE](LICENSE))。同梱ライブラリのライセンスは配布物の `THIRD_PARTY_LICENSES.txt`
 
 ## 現在の状態

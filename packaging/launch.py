@@ -11,6 +11,8 @@ def main() -> int:
     # 配布フォルダ内のサンプルデータを初期フォルダの候補にする
     base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(sys.argv[0]))
     os.environ.setdefault("KAISETSU_SAMPLE_DIR", os.path.join(base, "data", "public"))
+    # 同梱の説明書(ヘルプ → 利用者ガイド)
+    os.environ.setdefault("KAISETSU_DOCS_DIR", os.path.join(base, "docs", "user-guide"))
     from kaisetsu.gui.app import main as gui_main
 
     return gui_main(sys.argv[1:])
