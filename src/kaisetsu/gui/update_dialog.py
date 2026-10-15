@@ -341,6 +341,7 @@ class UpdateChecker(QObject):
         self.last_info: ReleaseInfo | None = None
         self.last_error = ""
         self._manual = False
+        self._busy = False
         self._thread: QThread | None = None
         self._worker: _CheckWorker | None = None
 
@@ -349,8 +350,12 @@ class UpdateChecker(QObject):
 
     def check(self, *, manual: bool) -> bool:
         """確認を始める。すでに走っていれば False。"""
-        if self._thread is not None and self._thread.isRunning():
+        if self._busy:
             return False
+        if self._thread is not None and self._thread.isRunning():
+            # 前回の結果は受け取り済みで、スレッドが終わるところ(macOS では数十 ms かかる)
+            self._thread.wait(5000)
+        self._busy = True
         self._manual = manual
         self._worker = _CheckWorker(self.fetch)
         self._thread = QThread(self)
@@ -368,6 +373,7 @@ class UpdateChecker(QObject):
             self._thread.wait(msec)
 
     def _done(self, info: object, error: str) -> None:
+        self._busy = False
         self.settings.setValue(SETTING_LAST_CHECK, _now().isoformat(timespec="seconds"))
         self.last_error = error
         self.last_info = info if isinstance(info, ReleaseInfo) else None
