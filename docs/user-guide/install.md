@@ -25,7 +25,16 @@ kaisetsu のインストーラにはまだコード署名を付けていない�
 
 ### 更新
 
-新しいインストーラを実行すれば上書きされる(設定とプロジェクトファイルはそのまま)。
+起動時に 1 日 1 回、新しい版があるか GitHub に問い合わせる(ヘルプ → 「更新を確認…」でいつでも)。
+新しい版があれば変更点が出るので「ダウンロードしてインストール」を押す。インストーラを
+ダウンロードしたあと kaisetsu が終了してインストーラが起動するので、「次へ」で進める
+(設定とプロジェクトファイルはそのまま残る)。「この版は知らせない」を選ぶとその版については
+起動時に出なくなる。自動確認はヘルプ → 「起動時に更新を確認する」で止められる。
+
+自分で新しいインストーラをダウンロードして実行しても同じ(上書きされる)。
+
+確認は GitHub にアクセスするだけで、こちらから送る情報は無い。プロキシが要るネットワークでは
+環境変数 `HTTPS_PROXY`(例 `http://proxy.example.co.jp:8080`)を設定しておく。
 
 ### アンインストール
 
@@ -34,7 +43,8 @@ Windows の「設定 → アプリ → インストールされているアプ�
 ### zip 版
 
 インストーラが使えない環境(共有 PC など)には `kaisetsu-windows.zip` もある。
-展開して `kaisetsu.exe` を実行する。
+展開して `kaisetsu.exe` を実行する。更新は新しい zip を展開してフォルダごと差し替える
+(「更新を確認…」は新しい版を知らせ、ダウンロードページを開くところまで)。
 
 ## macOS / Linux / Python が入っている Windows
 
@@ -48,7 +58,7 @@ uv tool install "kaisetsu[gui] @ git+https://github.com/kinjo-tohoku/kaisetsu"
 kaisetsu-gui
 ```
 
-更新は `uv tool upgrade kaisetsu`。Linux では Qt の実行に `libxcb-cursor0`、`libegl1`、
+更新は `uv tool upgrade kaisetsu`(「更新を確認…」は新しい版を知らせるだけ)。Linux では Qt の実行に `libxcb-cursor0`、`libegl1`、
 `libxkbcommon0` などが要る(Ubuntu: `sudo apt install libxcb-cursor0 libegl1 libxkbcommon0`)。
 
 ## 開発版(ソースから)

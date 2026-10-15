@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -44,6 +44,7 @@ from kaisetsu.gui.param_model import COL_DESC, COL_NAME, ParameterFilter, Parame
 from kaisetsu.gui.paths import last_dir, remember_dir
 from kaisetsu.gui.plot_widget import HistoryPlot, PatternPlot, PDFPlot
 from kaisetsu.gui.structure_view import StructureView
+from kaisetsu.gui.update_dialog import SETTING_CHECK_ON_START, UpdateChecker, check_on_start
 from kaisetsu.gui.worker import RefineThread, RefineWorker
 from kaisetsu.io.project import load_project, save_project
 from kaisetsu.io.readers import read_powder_data
@@ -87,6 +88,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._refresh_all()
+
+        # 新しい版の確認(ヘルプ → 更新を確認、起動時は 1 日 1 回)
+        self.updater = UpdateChecker(
+            self, self.settings, log=self.log, confirm_quit=self._confirm_discard
+        )
+        if self.updater.should_auto_check():
+            QTimer.singleShot(1500, lambda: self.updater.check(manual=False))
 
     # ------------------------------------------------------------------
     # UI 構築
@@ -353,6 +361,16 @@ class MainWindow(QMainWindow):
 
         m_help = mb.addMenu(tr("ヘルプ(&H)"))
         self._add_action(m_help, tr("パラメータ名の規則"), self.show_naming_help)
+        m_help.addSeparator()
+        self._add_action(m_help, tr("更新を確認(&U)…"), self.check_for_updates)
+        self.act_auto_update = QAction(tr("起動時に更新を確認する"), self)
+        self.act_auto_update.setCheckable(True)
+        self.act_auto_update.setChecked(check_on_start(self.settings))
+        self.act_auto_update.toggled.connect(
+            lambda on: self.settings.setValue(SETTING_CHECK_ON_START, bool(on))
+        )
+        m_help.addAction(self.act_auto_update)
+        m_help.addSeparator()
         self._add_action(m_help, tr("バージョン情報(&A)"), self.show_about)
 
         self._build_toolbar()
@@ -1370,6 +1388,10 @@ class MainWindow(QMainWindow):
             "絞り込み欄では * と ? が使えます(例: *:cell:*, h0:inst:[uvw])。",
         )
 
+    def check_for_updates(self) -> None:
+        """ヘルプ → 更新を確認。結果はダイアログかメッセージで出る。"""
+        self.updater.check(manual=True)
+
     def show_about(self) -> None:
         QMessageBox.about(
             self,
@@ -1429,6 +1451,7 @@ class MainWindow(QMainWindow):
             if self._worker is not None:
                 self._worker.cancel()
             self._thread.wait(5000)
+        self.updater.wait(3000)
         event.accept()
 
 

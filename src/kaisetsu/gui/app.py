@@ -37,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
         has_path = i + 1 < len(args) and not args[i + 1].startswith("--")
         smoke_out = args[i + 1] if has_path else ""
         del args[i : i + (2 if has_path else 1)]
+        import os
+
+        os.environ["KAISETSU_NO_UPDATE_CHECK"] = "1"  # 起動確認では GitHub に行かない
     from PySide6.QtCore import QSettings
 
     from kaisetsu.gui.i18n import set_language

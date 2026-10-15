@@ -53,6 +53,13 @@ EN: dict[str, str] = {
     "ヘルプ(&H)": "&Help",
     "パラメータ名の規則": "Parameter naming",
     "バージョン情報(&A)": "&About",
+    "更新を確認(&U)…": "Check for &updates…",
+    "起動時に更新を確認する": "Check for updates at startup",
+    "更新の確認": "Software update",
+    "ダウンロードしてインストール": "Download and install",
+    "ダウンロードページを開く": "Open download page",
+    "この版は知らせない": "Skip this version",
+    "あとで": "Later",
     # ツールバー
     "ウィザード": "Wizard",
     "データ読込": "Load data",
