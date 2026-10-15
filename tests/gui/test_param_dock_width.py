@@ -19,7 +19,8 @@ from kaisetsu.gui.settings import app_settings
 def test_param_dock_can_be_narrow(qtbot) -> None:
     win = MainWindow()
     qtbot.addWidget(win)
-    win.resize(1100, 700)
+    # オフスクリーンの画面(800×600)に収まる大きさ(収まらないと窓が詰められ、ドックの幅も変わる)
+    win.resize(780, 560)
     win.show()
     QApplication.processEvents()
     # 以前はドックの最小幅 400 px と横並びのボタン(9 個 + 3 個)で 600 px 以上から狭くできなかった
@@ -28,10 +29,10 @@ def test_param_dock_can_be_narrow(qtbot) -> None:
     win.resizeDocks([win.param_dock], [260], Qt.Orientation.Horizontal)
     QApplication.processEvents()
     assert win.param_dock.width() <= 270
-    # 広げるのも自由
-    win.resizeDocks([win.param_dock], [600], Qt.Orientation.Horizontal)
+    # 広げるのも自由(窓 780 px から中央の最小幅を引いても 500 px は入る)
+    win.resizeDocks([win.param_dock], [500], Qt.Orientation.Horizontal)
     QApplication.processEvents()
-    assert win.param_dock.width() >= 590
+    assert win.param_dock.width() >= 490
 
 
 def test_layout_is_remembered(qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
