@@ -124,7 +124,7 @@ def test_instrument_and_recipe_dialogs(qtbot) -> None:
     rd.disp.setChecked(True)
     r = rd.recipe()
     names = [s.name for s in r.steps]
-    assert names[0] == "スケールと背景" and "原子座標" in names
+    assert names[:2] == ["格子定数の初期値を振る", "スケールと背景"] and "原子座標" in names
     assert any("sample:displacement" in p for s in r.steps for p in s.patterns)
 
 
