@@ -22,11 +22,13 @@ Le Bail 相があるときは、最初に強度の更新を 5 回回してから
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from kaisetsu.errors import PatternSizeError
-from kaisetsu.pattern.instrument import GeometryKind
+from kaisetsu.pattern.instrument import CWInstrument, GeometryKind
 
 if TYPE_CHECKING:
     from kaisetsu.refine.lsq import FitResult
@@ -45,6 +47,10 @@ class Step:
     description: str = ""
     # patterns に一致したパラメータをさらに絞る条件(None なら全部)
     filter: Callable[[Project, Parameter], bool] | None = None
+    #: 段階の前に走らせる準備(拘束を張るなど)。ログに出す文を返す
+    prepare: Callable[[Project, Step], list[str]] | None = None
+    #: "refine"(普通の段階)か "kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)
+    kind: str = "refine"
 
 
 @dataclass
@@ -76,6 +82,16 @@ class Recipe:
                 project.le_bail_update()
         results: list[FitResult] = []
         for step in self.steps:
+            if step.kind == "kalpha2_trial":
+                trial = self._kalpha2_trial(project, step, iteration_progress)
+                if trial is not None:
+                    results.append(trial)
+                    if progress is not None:
+                        progress(step, trial)
+                continue
+            if step.prepare is not None:
+                for line in step.prepare(project, step):
+                    project.log.append(f"レシピ '{self.name}' 段階 '{step.name}': {line}")
             available: list[str] = []
             for pat in step.patterns:
                 for p in project.params.select(pat):
@@ -85,6 +101,12 @@ class Recipe:
                 for pat in step.fix:
                     if project.params.select(pat):
                         project.fix(pat)
+            if step.patterns and not available:
+                # 対象が無い段階(平板でない試料の表面粗さ、実験室データの放射光向け非対称など)
+                project.log.append(
+                    f"レシピ '{self.name}' 段階 '{step.name}': 対象のパラメータが無いので飛ばします"
+                )
+                continue
             if available:
                 project.vary(*available)
             if not project.params.free():
@@ -190,9 +212,178 @@ class Recipe:
             )
         return res
 
+    def _kalpha2_trial(
+        self,
+        project: Project,
+        step: Step,
+        iteration_progress: Callable[[int, float], None] | None,
+    ) -> FitResult | None:
+        """Kα2 を外した方が合うか試し、良い方を採る。
+
+        データのラベルが Kα1 だけでも単色化されていないことがあり、その逆もある(opXRD の
+        実験室データ 13 本中、Kα2 なしが効いたのは 2 本、Kα2 なしにすると悪化が 1 本)。
+        今の自由パラメータのまま Kα2 の強度比を 0 にして精密化し、Rwp が KALPHA2_GAIN
+        (0.3 ポイント)以上下がれば採用、そうでなければ値も比も元に戻す。
+        Kα2 の無い装置(放射光、中性子、単色化済み)なら何もしない。
+        """
+        targets = [
+            h
+            for h in project.histograms
+            if isinstance(h.instrument, CWInstrument)
+            and h.instrument.radiation.is_xray
+            and h.instrument.radiation.wavelength2 is not None
+            and h.instrument.radiation.ratio2 > 0.0
+        ]
+        prefix = f"レシピ '{self.name}' 段階 '{step.name}'"
+        if not targets or not project.params.free():
+            project.log.append(f"{prefix}: Kα2 の無い装置なので飛ばします")
+            return None
+        values = project.snapshot()
+        tables = {
+            name: {i: dict(t) for i, t in ph.f2_tables.items()}
+            for name, ph in project.phases.items()
+        }
+        rwp0 = project.rfactors()["total"].rwp
+        ratios: list[float] = []
+        for h in targets:
+            assert isinstance(h.instrument, CWInstrument)
+            ratios.append(h.instrument.radiation.ratio2)
+            h.instrument.radiation = replace(h.instrument.radiation, ratio2=0.0)
+        res: FitResult | None = None
+        rwp1 = float("inf")
+        try:
+            res = project.refine(
+                max_cycles=step.max_cycles,
+                progress=iteration_progress,
+                le_bail_cycles=3 if _has_le_bail(project) else 0,
+            )
+            rwp1 = project.rfactors()["total"].rwp
+        except (PatternSizeError, ValueError, np.linalg.LinAlgError) as exc:
+            project.log.append(f"{prefix}: Kα2 なしの試行でエラー({exc})")
+        if res is not None and rwp0 - rwp1 >= KALPHA2_GAIN:
+            project.log.append(
+                f"{prefix}: Kα2 なしの方が合います(Rwp {100 * rwp0:.2f}% → {100 * rwp1:.2f}%)。"
+                "単色化されたデータとみなして Kα2 を外しました"
+            )
+            return res
+        for h, r2 in zip(targets, ratios, strict=True):
+            assert isinstance(h.instrument, CWInstrument)
+            h.instrument.radiation = replace(h.instrument.radiation, ratio2=r2)
+        project.restore(values)
+        for name, tbl in tables.items():
+            project.phases[name].f2_tables = tbl
+        for h in project.histograms:
+            h.result = None
+        project.log.append(
+            f"{prefix}: Kα2 なしでは良くなりません(Rwp {100 * rwp0:.2f}% → {100 * rwp1:.2f}%)。"
+            "Kα2 ありのまま進めます"
+        )
+        return None
+
+
+#: 軽原子とみなす原子番号の上限(H〜Ne)。X 線では重原子が共存すると U_iso が個別に決まらない
+LIGHT_ATOM_Z_MAX = 10
+#: 軽原子の散乱能(占有率 × 多重度 × Z、中性子では |b|)の割合がこれ未満なら U_iso を共通にする
+LIGHT_ATOM_FRACTION = 0.3
+#: Kα2 なしを採用する Rwp の改善の下限(0.3 ポイント)
+KALPHA2_GAIN = 0.003
+#: 放射光とみなす波長の上限 [Å](軸発散 SH/L も動かす)
+SYNCHROTRON_WAVELENGTH_MAX = 1.2
+
 
 def _has_le_bail(project: Project) -> bool:
     return any(ph.le_bail and ph.f2_update for ph in project.phases.values())
+
+
+def _is_synchrotron(project: Project, p: Parameter) -> bool:
+    """ヒストグラムパラメータが放射光(CW X 線、λ < 1.2 Å)のものか。"""
+    h = _hist_of(project, p)
+    if h is None or h.is_tof or not isinstance(h.instrument, CWInstrument):
+        return False
+    rad = h.instrument.radiation
+    return rad.is_xray and rad.wavelength < SYNCHROTRON_WAVELENGTH_MAX
+
+
+def light_atom_uiso_groups(project: Project) -> list[tuple[str, list[str], float]]:
+    """相ごとの軽原子サイト(等方性 U のもの)と、軽原子が散乱能に占める割合。
+
+    散乱能はサイトごとに 占有率 × 多重度 × Z(X 線)。すべてのヒストグラムが中性子なら
+    |b| を使う(中性子では軽原子も強く散乱するので、普通は共通化の条件に入らない)。
+
+    Returns:
+        [(相の名前, [軽原子サイトのラベル], 軽原子の割合)]。Le Bail / Pawley の相は除く
+    """
+    from kaisetsu.scattering import NeutronScatteringLengths, XrayScatteringFactors
+
+    neutron = bool(project.histograms) and all(
+        h.is_tof or (isinstance(h.instrument, CWInstrument) and h.instrument.radiation.is_neutron)
+        for h in project.histograms
+    )
+    ntab = NeutronScatteringLengths() if neutron else None
+    out: list[tuple[str, list[str], float]] = []
+    for ph in project.phases.values():
+        if ph.le_bail or ph.pawley:
+            continue
+        st = ph.structure
+        total = 0.0
+        light_power = 0.0
+        light: list[str] = []
+        for site, m in zip(st.sites, st.multiplicities(), strict=True):
+            try:
+                z = XrayScatteringFactors.atomic_number(site.species)
+            except ValueError:
+                continue
+            power = float(z)
+            if ntab is not None:
+                try:
+                    power = abs(ntab.scattering_length(site.species))
+                except (KeyError, ValueError):
+                    pass
+            w = float(site.occupancy) * float(m) * power
+            total += w
+            if z <= LIGHT_ATOM_Z_MAX:
+                light_power += w
+                if site.u_aniso is None:
+                    light.append(site.label)
+        if total > 0 and light:
+            out.append((ph.name, light, light_power / total))
+    return out
+
+
+def _tie_light_atom_uiso(project: Project, step: Step) -> list[str]:
+    """重原子が散乱を支配する相では、軽原子の U_iso を 1 つの共通パラメータにする。
+
+    Te や Bi と共存する O, C, Li の U_iso は実験室 X 線では個別に決まらず、下限に張り付くか
+    負になる(opXRD の 13 本中 5 本)。人がやるように、軽原子の U_iso を共通にして動かす
+    (固定よりも、共通の 1 つなら決まることが多い)。すでに拘束されているサイトは触らない。
+    """
+    msgs: list[str] = []
+    for phase, labels, frac in light_atom_uiso_groups(project):
+        if frac >= LIGHT_ATOM_FRACTION:
+            continue
+        names = [f"{phase}:{lab}:uiso" for lab in labels]
+        names = [n for n in names if n in project.params and not project.params[n].locked]
+        masters_of_others = {m for q in project.params if q.tie is not None for m in q.tie.masters}
+        candidates = [n for n in names if project.params[n].tie is None]
+        if len(candidates) < 2:
+            continue
+        # 主パラメータ: 既に他(混合サイトの鏡像)の主になっているものがあればそれ
+        master = next((n for n in candidates if n in masters_of_others), candidates[0])
+        dependents = [n for n in candidates if n != master and n not in masters_of_others]
+        if not dependents:
+            continue
+        mean = float(np.mean([project.params[n].value for n in [master, *dependents]]))
+        project.params[master].value = max(mean, 0.005)  # 負や 0 から始めない
+        for n in dependents:
+            project.tie(n, master)
+        project.params.evaluate_ties()
+        project.params.apply_all()
+        shown = ", ".join(n.split(":")[1] for n in [master, *dependents])
+        msgs.append(
+            f"相 {phase}: 重原子が散乱能の {100 * (1 - frac):.0f}% を占め軽原子の U_iso は個別に"
+            f"決まらないので、{shown} の U_iso を共通にします(主パラメータ {master})"
+        )
+    return msgs
 
 
 def _is_phase_param(project: Project, p: Parameter) -> bool:
@@ -273,9 +464,11 @@ def standard_recipe(
     adp: bool = True,
     occupancy: bool = False,
     sample_displacement: bool = False,
-    asymmetry: bool = False,
+    asymmetry: bool | None = None,
     preferred_orientation: bool = False,
     roughness: bool = False,
+    try_no_kalpha2: bool = True,
+    light_atom_uiso: bool = True,
 ) -> Recipe:
     """標準の段階的精密化レシピ。
 
@@ -285,11 +478,17 @@ def standard_recipe(
         coordinates, adp, occupancy: 構造パラメータを動かすか
         sample_displacement: ゼロ点の代わりに試料変位を動かす(Bragg-Brentano では高さずれ、
             Debye-Scherrer では x, y ずれ)。平板試料では推奨
-        asymmetry: 軸発散 SH/L(FCJ 非対称)を動かす
+        asymmetry: 軸発散 SH/L(FCJ 非対称)を動かす。None(既定)なら放射光(λ < 1.2 Å)の
+            ヒストグラムだけ動かす(FWHM 0.02° 級のピークでは形が合わないと最強ピークの残差が
+            Rwp を決める)
         preferred_orientation: March-Dollase r を動かす
         roughness: 表面粗さ(Suortti の a。b は 1 に固定)を動かす。Bragg-Brentano の
             ヒストグラムだけに適用。
             吸収の強い試料で変位パラメータが負になるときに有効
+        try_no_kalpha2: ピーク幅のあとで Kα2 を外した方が合うか試し、Rwp が 0.3 ポイント以上
+            下がれば採用する(ラベルが Kα1 でも単色化されていないデータがあり、逆もある)
+        light_atom_uiso: 重原子が散乱能の 70% 以上を占める相では、軽原子(Z ≤ 10)の U_iso を
+            共通の 1 つにする(個別には決まらず下限に張り付くため)
     """
     r = Recipe("標準")
     r.add("スケールと背景", [f"{hist}:bkg:*", f"{hist}:{phase}:scale"], 10)
@@ -337,8 +536,12 @@ def standard_recipe(
         ],
         15,
     )
+    if try_no_kalpha2:
+        r.add("Kα2 なしを試す", [], 10, kind="kalpha2_trial")
     if asymmetry:
         r.add("非対称", [f"{hist}:inst:sh_l"], 10)
+    elif asymmetry is None:
+        r.add("非対称(放射光)", [f"{hist}:inst:sh_l"], 10, filter=_is_synchrotron)
     if preferred_orientation:
         r.add("選択配向", [f"{hist}:{phase}:md_r"], 10)
     if coordinates:
@@ -362,6 +565,7 @@ def standard_recipe(
             ],
             20,
             filter=_is_phase_param,
+            prepare=_tie_light_atom_uiso if light_atom_uiso else None,
         )
     if roughness:
         r.add(

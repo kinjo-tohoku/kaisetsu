@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -33,12 +34,19 @@ class RefineWorker(QObject):
     finished = Signal(bool, str)
 
     def __init__(
-        self, project: Project, recipe: Recipe | None = None, max_cycles: int = 20
+        self,
+        project: Project,
+        recipe: Recipe | None = None,
+        max_cycles: int = 20,
+        *,
+        companion: Callable[[Callable[[str], None]], str] | None = None,
     ) -> None:
         super().__init__()
         self.project = project
         self.recipe = recipe
         self.max_cycles = max_cycles
+        #: レシピの後に走らせる付随処理(ウィザードの Le Bail 並走)。ログに出す文を返す
+        self.companion = companion
         self._cancel = False
         self._step_name = ""
 
@@ -98,11 +106,38 @@ class RefineWorker(QObject):
                 self.project.refine(max_cycles=self.max_cycles, progress=self._on_iteration)
             rf = self.project.rfactors()["total"]
             label = "Rw" if self.project.pdf_datasets and not self.project.histograms else "Rwp"
-            self.finished.emit(True, f"完了: {label} = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}")
+            message = f"完了: {label} = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}"
+            if self.companion is not None:
+                message += "\n" + self._run_companion()
+            self.finished.emit(True, message)
         except RefinementCancelled:
             self.finished.emit(False, "中止しました(途中までの値が入っています)")
         except Exception as exc:
             self.finished.emit(False, f"エラー: {exc}\n{traceback.format_exc(limit=3)}")
+
+    def _run_companion(self) -> str:
+        """付随処理(Le Bail 並走など)。参考情報なので失敗しても本体の結果は残す。"""
+        assert self.companion is not None
+        self._step_name = "Le Bail 並走"
+        self.progress.emit(
+            "[Le Bail 並走] 開始(構造を使わずプロファイルと背景だけで合わせ、Rwp の下限を出します)"
+        )
+        self.step_started.emit(self._step_name)
+
+        def _prog(msg: str) -> None:
+            if self._cancel:
+                raise RefinementCancelled()
+            self.progress.emit(f"  [Le Bail 並走] {msg}")
+
+        try:
+            text = self.companion(_prog)
+        except RefinementCancelled:
+            raise
+        except Exception as exc:
+            text = f"Le Bail 並走でエラー: {exc}"
+        self._step_name = ""
+        self.progress.emit(text)
+        return text
 
 
 class RefineThread(QThread):

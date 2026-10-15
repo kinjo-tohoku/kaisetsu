@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -129,21 +131,35 @@ class RunPage(QWizardPage):
             "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
         )
         self.rough = QCheckBox("表面粗さも動かす(重い元素など吸収の強い試料。Bragg-Brentano)")
-        layout.addWidget(self.coords)
-        layout.addWidget(self.adp)
-        layout.addWidget(self.disp)
-        layout.addWidget(self.rough)
+        self.ka2 = QCheckBox("Kα2 なしも試して良い方を採る(単色化されたデータかどうか)")
+        self.ka2.setChecked(True)
+        self.light = QCheckBox("軽原子の U_iso を共通にする(重原子が散乱を支配するとき)")
+        self.light.setChecked(True)
+        self.lebail = QCheckBox(
+            "Le Bail(構造を使わない)も走らせて、プロファイルと背景だけの Rwp の下限を出す"
+        )
+        self.lebail.setChecked(True)
+        self.lebail.setToolTip(
+            "Rietveld の Rwp が Le Bail より大きく悪ければ、残りの差は構造モデルの問題"
+            "(占有率・選択配向・第二相)です。差が小さければピーク形状や背景の限界です"
+        )
+        for w in (self.coords, self.adp, self.disp, self.rough, self.ka2, self.light, self.lebail):
+            layout.addWidget(w)
         row = QHBoxLayout()
         row.addWidget(QLabel("背景(Chebyshev)の項数:"))
         self.n_background = QSpinBox()
         self.n_background.setRange(1, 36)
-        self.n_background.setValue(8)
-        self.n_background.setToolTip("目安 6〜12。低角の立ち上がりが合わなければ増やす")
+        self.n_background.setValue(12)
+        self.n_background.setToolTip(
+            "目安 8〜16。低角の立ち上がりやキャピラリのこぶが合わなければ増やす"
+            "(公開データ 13 本では 8 → 16 項で 8 本が改善)"
+        )
         row.addWidget(self.n_background)
         row.addStretch(1)
         layout.addLayout(row)
         layout.addWidget(QLabel(
-            "手順: スケールと背景 → 格子定数とピーク位置 → ピーク幅 → 原子座標 → 変位パラメータ\n"
+            "手順: スケールと背景 → 格子定数とピーク位置 → ピーク幅 → (Kα2 なしを試す) → "
+            "原子座標 → 変位パラメータ\n"
             "Rwp が大きく変わらなくなれば収束です。結果はパラメータ表と「結果の要約」で確認できます。"
         ))  # fmt: skip
         layout.addStretch(1)
@@ -180,6 +196,8 @@ class StartWizard(QWizard):
 
     def accept(self) -> None:
         inst, smp = self.page_inst.dialog.result_instrument()
+        # Le Bail 並走は精密化前の装置から始める(本体の精密化が inst を書き換えるので複製)
+        inst_copy, smp_copy = copy.deepcopy(inst), copy.deepcopy(smp)
         main = self.main
         main.load_data_file(
             self.page_data.edit.text(), inst, smp, n_background=self.page_run.n_background.value()
@@ -194,9 +212,75 @@ class StartWizard(QWizard):
             adp=self.page_run.adp.isChecked(),
             sample_displacement=self.page_run.disp.isChecked(),
             roughness=self.page_run.rough.isChecked(),
+            try_no_kalpha2=self.page_run.ka2.isChecked(),
+            light_atom_uiso=self.page_run.light.isChecked(),
         )
+        companion = None
+        if self.page_run.lebail.isChecked():
+            companion = le_bail_companion(
+                main,
+                self.page_data.edit.text(),
+                self.page_phase.edit.text(),
+                inst_copy,
+                smp_copy,
+                n_background=self.page_run.n_background.value(),
+                position="distance" if self.page_run.disp.isChecked() else "zero",
+            )
         super().accept()
-        main.run_recipe(recipe)
+        main.run_recipe(recipe, companion=companion)
+
+
+def le_bail_companion(
+    main: MainWindow,
+    data_path: str,
+    cif_path: str,
+    inst: object,
+    sample: object,
+    *,
+    n_background: int,
+    position: str,
+) -> Callable[[Callable[[str], None]], str]:
+    """Rietveld のあとに同じデータを Le Bail で合わせ、Rwp の下限と比べる文を返す処理を作る。
+
+    Le Bail が Rietveld より明らかに良ければ、残りの差はプロファイルや背景では説明できない
+    分で、構造モデル(占有率・選択配向・第二相)の問題(opXRD の比較で NbBr4 4.5% 対 7.6%)。
+    """
+
+    def run(progress: Callable[[str], None]) -> str:
+        from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
+        from kaisetsu.pattern.tof import TOFInstrument
+        from kaisetsu.refine.lattice import refine_lattice
+
+        assert isinstance(inst, CWInstrument | TOFInstrument)
+        assert isinstance(sample, SampleGeometry)
+        r = refine_lattice(
+            data_path,
+            [cif_path],
+            inst,
+            sample,
+            n_background=n_background,
+            position=position,
+            widths="instrument",
+            progress=progress,
+            keep_project=False,
+        )
+        if not r.ok:
+            return f"Le Bail 並走: 失敗しました({r.message})"
+        lb = 100 * r.rwp
+        rv = 100 * main.project.rfactors()["total"].rwp
+        diff = rv - lb
+        if diff > max(1.0, 0.2 * rv):
+            return (
+                f"Le Bail(構造なし)の Rwp = {lb:.2f}%。Rietveld の {rv:.2f}% との差 {diff:.1f} ポイントは"
+                "プロファイルや背景では説明できない分です。構造モデル(占有率・選択配向・第二相)を"
+                "疑ってください"
+            )
+        return (
+            f"Le Bail(構造なし)の Rwp = {lb:.2f}%。Rietveld の {rv:.2f}% との差は小さく、"
+            "残る残差はピーク形状や背景の限界です"
+        )
+
+    return run
 
 
 def _phase_name(path: str) -> str:

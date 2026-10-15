@@ -518,7 +518,29 @@ class RecipeDialog(QDialog):
         self.rough = QCheckBox(
             "表面粗さを動かす(吸収の強い試料で U が負になるとき。Bragg-Brentano)"
         )
-        for w in (self.coords, self.adp, self.occ, self.disp, self.asym, self.po, self.rough):
+        self.ka2 = QCheckBox("Kα2 なしも試して良い方を採る(単色化されたデータかどうか)")
+        self.ka2.setChecked(True)
+        self.ka2.setToolTip(
+            "ピーク幅のあとで Kα2 の強度比を 0 にして精密化し、Rwp が 0.3 ポイント以上下がれば"
+            "採用します。Kα2 の無い装置(放射光・中性子)では何もしません"
+        )
+        self.light = QCheckBox("軽原子の U_iso を共通にする(重原子が散乱を支配するとき)")
+        self.light.setChecked(True)
+        self.light.setToolTip(
+            "重原子が散乱能の 70% 以上を占める相では、軽原子(Z ≤ 10)の U_iso は個別に決まらず"
+            "下限に張り付きます。共通の 1 つにして動かします"
+        )
+        for w in (
+            self.coords,
+            self.adp,
+            self.occ,
+            self.disp,
+            self.asym,
+            self.po,
+            self.rough,
+            self.ka2,
+            self.light,
+        ):
             form.addRow(w)
         self.cycles = QSpinBox()
         self.cycles.setRange(1, 200)
@@ -540,9 +562,11 @@ class RecipeDialog(QDialog):
             adp=self.adp.isChecked(),
             occupancy=self.occ.isChecked(),
             sample_displacement=self.disp.isChecked(),
-            asymmetry=self.asym.isChecked(),
+            asymmetry=True if self.asym.isChecked() else None,
             preferred_orientation=self.po.isChecked(),
             roughness=self.rough.isChecked(),
+            try_no_kalpha2=self.ka2.isChecked(),
+            light_atom_uiso=self.light.isChecked(),
         )
         for s in r.steps:
             s.max_cycles = (

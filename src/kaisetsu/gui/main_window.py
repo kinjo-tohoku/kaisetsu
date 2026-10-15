@@ -342,6 +342,13 @@ class MainWindow(QMainWindow):
             "戻します。精密化の結果は失われますが、Ctrl+Z で戻す前の値に戻せます"
         )
         self._add_action(m_ref, tr("結果の要約を表示(&U)"), self.show_summary)
+        self.act_residual = self._add_action(
+            m_ref, tr("残差の点検(未同定ピーク・こぶ)…"), self.open_residual_dialog
+        )
+        self.act_residual.setToolTip(
+            "差のプロットに残った、相の反射で説明できないピークと広いこぶの候補を示します。"
+            "選んだものを除外領域や背景のハンプにできます(自動では除外しません)"
+        )
         self.act_width_penalty = self._add_action(
             m_ref, tr("ピーク幅が負にならないよう拘束する(罰則)"), self._toggle_width_penalty
         )
@@ -1239,8 +1246,13 @@ class MainWindow(QMainWindow):
         self._refresh_plot()
         self._start_worker(RefineWorker(self.project, dlg.recipe()))
 
-    def run_recipe(self, recipe: Recipe) -> None:
-        self._start_worker(RefineWorker(self.project, recipe))
+    def run_recipe(
+        self,
+        recipe: Recipe,
+        companion: Callable[[Callable[[str], None]], str] | None = None,
+    ) -> None:
+        """レシピを別スレッドで走らせる。companion はレシピの後に走らせる付随処理"""
+        self._start_worker(RefineWorker(self.project, recipe, companion=companion))
 
     def _start_worker(self, worker: RefineWorker) -> None:
         if self._thread is not None and self._thread.isRunning():
@@ -1319,6 +1331,18 @@ class MainWindow(QMainWindow):
                 )
             for note in self.project.diagnostics():
                 self.log("注意: " + note)
+
+    def open_residual_dialog(self) -> None:
+        """残差の点検(未同定ピーク・こぶの候補)。"""
+        if not (self.project.phases and self.project.histograms):
+            QMessageBox.information(
+                self, tr("残差の点検"), "先に粉末データと相を読み込み、計算か精密化をしてください"
+            )
+            return
+        from kaisetsu.gui.residual_dialog import ResidualDialog
+
+        dlg = ResidualDialog(self.project, self, main=self)
+        dlg.exec()
 
     def show_summary(self) -> None:
         if not (self.project.phases and (self.project.histograms or self.project.pdf_datasets)):

@@ -1736,6 +1736,16 @@ class Project:
 
         for v in width_violations(self):
             notes.append(v.message())
+        if self.histograms and self.phases and fit is not None:
+            from kaisetsu.refine.residual import find_residual_features
+
+            for i, h in enumerate(self.histograms):
+                if h.result is None:
+                    continue
+                try:
+                    notes.extend(find_residual_features(self, i).notes())
+                except (ValueError, IndexError):  # 診断なので失敗しても止めない
+                    pass
         if self.histograms and self.phases:
             rf = self.rfactors()["total"]
             if rf.chi2 > 10.0 and not self.pdf_datasets:
