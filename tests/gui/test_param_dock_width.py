@@ -29,10 +29,12 @@ def test_param_dock_can_be_narrow(qtbot) -> None:
     win.resizeDocks([win.param_dock], [260], Qt.Orientation.Horizontal)
     QApplication.processEvents()
     assert win.param_dock.width() <= 270
-    # 広げるのも自由(窓 780 px から中央の最小幅を引いても 500 px は入る)
+    # 広げるのも自由(上限は無い)。どこまで広がるかは中央部分の最小幅で決まり、CI の Windows では
+    # 窓 780 px で 380 px 程度なので、絶対値ではなく「狭い状態より広くなる」ことを見る
+    assert win.param_dock.maximumWidth() >= 1000
     win.resizeDocks([win.param_dock], [500], Qt.Orientation.Horizontal)
     QApplication.processEvents()
-    assert win.param_dock.width() >= 490
+    assert win.param_dock.width() > 300
 
 
 def test_layout_is_remembered(qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
