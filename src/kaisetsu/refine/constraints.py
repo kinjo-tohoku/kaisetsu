@@ -79,12 +79,19 @@ def _rref_pivots(basis: FloatArray, tol: float = 1e-8) -> tuple[list[int], Float
 
 
 def constraint_from_projector(
-    proj: FloatArray, values: FloatArray, tol: float = 1e-8
+    proj: FloatArray, values: FloatArray, tol: float = 1e-8, *, project_values: bool = True
 ) -> SymmetryConstraint:
-    """射影行列 P (n×n) と現在値から対称拘束を組み立てる。"""
+    """射影行列 P (n×n) と現在値から対称拘束を組み立てる。
+
+    拘束は「許される値の集合 = sym + P の像」というアフィン部分空間で、従属成分の定数項は
+    sym から求める。project_values が真なら sym = P @ values(ADP や歪みのように原点を通る
+    線形な部分空間)。偽なら values をそのまま不変点 sym として使う。原子座標のように
+    並進を含む対称操作の不変点(例: y = x/2 + 1/2)は P @ values では再現できないので、
+    呼び出し側で求めた不変点を渡す(レビュー 2026-10-17 #1)。
+    """
     n = proj.shape[0]
     vals = np.asarray(values, dtype=np.float64).reshape(n)
-    sym = proj @ vals
+    sym = proj @ vals if project_values else vals.copy()
     # P の像の基底(列空間)
     u, s, _ = np.linalg.svd(proj)
     rank = int(np.sum(s > tol))
@@ -133,7 +140,8 @@ def position_constraint(
         img -= np.round(img - x)
         xs += img
     xs /= len(ops)
-    c = constraint_from_projector(proj, xs, 1e-8)
+    # xs は並進を含む不変点なので射影し直さない(y = x/2 + 1/2 の 1/2 が落ちる)
+    c = constraint_from_projector(proj, xs, 1e-8, project_values=False)
     return SymmetryConstraint(c.free, c.dependent, c.fixed, xs)
 
 
