@@ -75,16 +75,18 @@ def test_calc_and_refine_current(tmp_path: Path, capsys: pytest.CaptureFixture[s
     out_file = tmp_path / "out.kaisetsu.json"
     refl = tmp_path / "refl.csv"
     cif = tmp_path / "out.cif"
+    peaks = tmp_path / "peaks.csv"
     code = main(
         [
             "refine", str(pf), "--recipe", "current", "--cycles", "5", "--out", str(out_file),
-            "--reflections", str(refl), "--cif", str(cif), "-q",
+            "--reflections", str(refl), "--cif", str(cif), "--unexplained", str(peaks), "-q",
         ]
     )  # fmt: skip
-    assert code == 0 and out_file.exists() and refl.exists() and cif.exists()
+    assert code == 0 and out_file.exists() and refl.exists() and cif.exists() and peaks.exists()
     text = capsys.readouterr().out
-    assert f"保存: {out_file}" in text
+    assert f"保存: {out_file}" in text and "説明できないピークの一覧" in text
     assert refl.read_text(encoding="utf-8").startswith("phase,h,k,l,mult,d,two_theta")
+    assert peaks.read_text(encoding="utf-8").startswith("hist,kind,position,unit,d,height")
     saved = load_project(out_file)
     assert saved.params["h0:PbSO4:scale"].value > 0
     # 既定の保存先は <名前>_refined.kaisetsu.json(入力は上書きしない)

@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,13 +25,29 @@ from PySide6.QtWidgets import (
 )
 
 from kaisetsu.gui.i18n import tr
+from kaisetsu.gui.paths import last_dir, remember_dir
+from kaisetsu.io.export import write_unexplained_peaks_csv
 from kaisetsu.refine.project import Project
-from kaisetsu.refine.residual import ResidualFeatures, find_residual_features
+from kaisetsu.refine.residual import (
+    ResidualFeatures,
+    find_residual_features,
+    format_unexplained_peaks,
+)
 
 if TYPE_CHECKING:
     from kaisetsu.gui.main_window import MainWindow
 
-COL_APPLY, COL_KIND, COL_HIST, COL_POS, COL_WIDTH, COL_HEIGHT, COL_NEAR, COL_NOTE = range(8)
+(
+    COL_APPLY,
+    COL_KIND,
+    COL_HIST,
+    COL_POS,
+    COL_D,
+    COL_WIDTH,
+    COL_HEIGHT,
+    COL_NEAR,
+    COL_NOTE,
+) = range(9)
 
 
 class ResidualDialog(QDialog):
@@ -51,12 +69,24 @@ class ResidualDialog(QDialog):
             "不純物や試料台のピークはチェックして「除外領域に追加」、非晶質のこぶは"
             "「背景のハンプに追加」で背景に足せます。「強度の不一致」は反射の位置に観測ピークがあるのに"
             "強度が合わないもので、除外ではなく占有率・選択配向・第二相を疑ってください。"
+            "第二相を他のソフトで探すときは「ピーク一覧をコピー」か「CSV に書き出す」で、"
+            "d 値と相対強度の一覧を持ち出せます。"
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["適用", "種類", "データ", "位置", "幅 / 範囲", "高さ(最大比)", "近い反射", "判定"]
+            [
+                "適用",
+                "種類",
+                "データ",
+                "位置",
+                "d (Å)",
+                "幅 / 範囲",
+                "高さ(最大比)",
+                "近い反射",
+                "判定",
+            ]
         )
         self.table.horizontalHeader().setSectionResizeMode(COL_NOTE, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -75,6 +105,19 @@ class ResidualDialog(QDialog):
         self.redo_btn.clicked.connect(self.detect)
         row.addWidget(self.redo_btn)
         row.addStretch(1)
+        self.copy_btn = QPushButton(tr("ピーク一覧をコピー"))
+        self.copy_btn.setToolTip(
+            "未同定ピークと強度の不一致の一覧(位置、d 値、高さ、最大比)をタブ区切りで"
+            "クリップボードに入れます。表計算ソフトや検索・同定プログラムに貼れます"
+        )
+        self.copy_btn.clicked.connect(self.copy_peaks)
+        row.addWidget(self.copy_btn)
+        self.export_btn = QPushButton(tr("ピーク一覧を CSV に書き出す…"))
+        self.export_btn.setToolTip(
+            "同じ一覧を CSV ファイルに書きます(コマンドラインは --unexplained)"
+        )
+        self.export_btn.clicked.connect(self.export_csv)
+        row.addWidget(self.export_btn)
         close = QPushButton(tr("閉じる"))
         close.clicked.connect(self.accept)
         row.addWidget(close)
@@ -110,6 +153,7 @@ class ResidualDialog(QDialog):
                     f.hist,
                     j,
                     f"{p.position:.3f}{u}",
+                    f"{p.d:.4f}" if p.d == p.d else "—",
                     f"{p.lo:.2f}〜{p.hi:.2f}{u}",
                     f"{p.height:.0f} ({100 * p.height / f.net_max:.0f}%)",
                     f"{p.nearest_reflection:.3f}{u}" if p.nearest_reflection is not None else "—",
@@ -126,6 +170,7 @@ class ResidualDialog(QDialog):
                     f.hist,
                     j,
                     f"{hm.center:.2f}{u}",
+                    "—",
                     f"幅 {hm.fwhm:.2f}{u}",
                     f"{hm.height:.0f} ({100 * hm.height / f.net_max:.0f}%)",
                     "—",
@@ -140,6 +185,8 @@ class ResidualDialog(QDialog):
         )
         self.exclude_btn.setEnabled(n_unidx > 0)
         self.hump_btn.setEnabled(n_hump > 0)
+        self.copy_btn.setEnabled(n_unidx + n_misfit > 0)
+        self.export_btn.setEnabled(n_unidx + n_misfit > 0)
 
     def _add_row(
         self,
@@ -147,6 +194,7 @@ class ResidualDialog(QDialog):
         hist: int,
         index: int,
         pos: str,
+        d: str,
         width: str,
         height: str,
         near: str,
@@ -167,6 +215,7 @@ class ResidualDialog(QDialog):
             (COL_KIND, kind),
             (COL_HIST, f"h{hist}"),
             (COL_POS, pos),
+            (COL_D, d),
             (COL_WIDTH, width),
             (COL_HEIGHT, height),
             (COL_NEAR, near),
@@ -232,6 +281,40 @@ class ResidualDialog(QDialog):
         self._refresh_main()
         self.detect()
         return len(chosen)
+
+    def peak_list_text(self) -> str:
+        """表と同じ未同定ピーク・強度の不一致の一覧(タブ区切り、先頭行は列名)。"""
+        return format_unexplained_peaks(self.features)
+
+    def copy_peaks(self) -> int:
+        """一覧をクリップボードに入れる。返り値は本数。"""
+        text = self.peak_list_text()
+        n = max(len(text.splitlines()) - 1, 0)
+        QApplication.clipboard().setText(text)
+        self.status.setText(
+            f"ピーク {n} 本の一覧(位置、d 値、高さ、最大比)をクリップボードに入れました。"
+            "表計算ソフトや検索・同定プログラムに貼れます"
+        )
+        return n
+
+    def export_csv(self, path: str | None = None) -> str | None:
+        """一覧を CSV に書く。path が None なら保存先を聞く。返り値は書いたパス。"""
+        if not path:
+            start = last_dir(self.main.settings) if self.main is not None else ""
+            path, _ = QFileDialog.getSaveFileName(
+                self, "説明できないピークの一覧を書き出す", start, "CSV (*.csv)"
+            )
+            if not path:
+                return None
+            if self.main is not None:
+                remember_dir(path, self.main.settings)
+        out = write_unexplained_peaks_csv(self.project, path, features=self.features)
+        n = max(len(out.read_text(encoding="utf-8").splitlines()) - 1, 0)
+        self.project.log.append(f"説明できないピークの一覧({n} 本)を書き出しました: {out}")
+        self.status.setText(f"ピーク {n} 本の一覧を書き出しました: {out}")
+        if self.main is not None:
+            self.main.log(self.project.log[-1])
+        return str(out)
 
     def _refresh_main(self) -> None:
         if self.main is not None:

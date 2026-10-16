@@ -9,8 +9,14 @@ from pathlib import Path
 import numpy as np
 
 from kaisetsu.api import CWInstrument, Project, Radiation, SampleGeometry, Structure
+from kaisetsu.io.export import write_unexplained_peaks_csv
 from kaisetsu.pattern.histogram import PowderData
-from kaisetsu.refine.residual import find_residual_features
+from kaisetsu.refine.residual import (
+    find_residual_features,
+    format_unexplained_peaks,
+    observed_d_spacing,
+    unexplained_peak_rows,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 LAB6_CIF = ROOT / "data" / "public" / "lab6" / "LaB6_COD1000055.cif"
@@ -92,3 +98,50 @@ def test_misfit_reflection_is_not_an_exclusion_candidate() -> None:
     assert any(abs(p.position - pos) < 0.1 for p in feats.misfit)
     assert not any(abs(p.position - pos) < 0.3 for p in feats.unindexed)
     assert any("観測が計算より強い" in n for n in feats.notes())
+
+
+def test_unindexed_peak_has_d_spacing_and_can_be_exported(tmp_path: Path) -> None:
+    """未同定ピークに d 値が付き、一覧(タブ区切り・CSV)に出る。"""
+
+    def extra(x: np.ndarray, _sim: Project) -> np.ndarray:
+        return _gauss(x, 47.3, 0.15, 600.0)
+
+    proj = _project(extra)
+    feats = find_residual_features(proj, 0)
+    assert feats.unindexed, "47.3° のピークが未同定として見つかるはず"
+    p = feats.unindexed[0]
+    assert abs(p.position - 47.3) < 0.05
+    lam = 1.54056
+    d_expect = lam / (2.0 * math.sin(math.radians(p.position / 2.0)))
+    assert abs(p.d - d_expect) < 1e-6 * d_expect  # ゼロ点 0、試料位置ずれ 0
+
+    rows = unexplained_peak_rows([feats])
+    assert rows and rows[0]["kind"] == "unindexed" and rows[0]["unit"] == "°"
+    assert abs(float(rows[0]["d"]) - p.d) < 1e-12
+    text = format_unexplained_peaks([feats])
+    head, first = text.splitlines()[:2]
+    assert "d (Å)" in head and "\t" in head
+    assert first.split("\t")[1] == "未同定" and f"{p.d:.5f}" in first
+
+    out = write_unexplained_peaks_csv(proj, tmp_path / "peaks.csv")
+    lines = out.read_text(encoding="utf-8").splitlines()
+    expect = "hist,kind,position,unit,d,height,rel_height_pct,sigma,nearest_reflection,lo,hi"
+    assert lines[0] == expect
+    assert any(ln.startswith("h0,unindexed,") and f",{p.d:.5f}," in ln for ln in lines[1:])
+    only = write_unexplained_peaks_csv(proj, tmp_path / "u.csv", include_misfit=False)
+    assert all("misfit" not in ln for ln in only.read_text(encoding="utf-8").splitlines())
+
+
+def test_observed_d_spacing_removes_zero_and_displacement() -> None:
+    """ゼロ点と試料変位の分を外した d になる(補正を足して戻すと元の位置)。"""
+    proj = _project()
+    h = proj.histograms[0]
+    assert isinstance(h.instrument, CWInstrument)
+    h.instrument.zero = 0.08
+    h.sample.displacement_mm = 0.3  # 平板の変位(ゼロ点と逆向きに 0.1° 強ずらす)
+    pos = np.array([30.0, 47.3, 75.0])
+    d = observed_d_spacing(h, pos)
+    tt = 2.0 * np.degrees(np.arcsin(h.instrument.radiation.wavelength / (2.0 * d)))
+    back = tt + h.instrument.zero + h.sample.position_shift(tt)
+    assert np.allclose(back, pos, atol=1e-6)
+    assert np.all(np.abs(tt - pos) > 0.02)  # 補正は効いている(ゼロ点と変位は打ち消し合う向き)

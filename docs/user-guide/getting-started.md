@@ -318,6 +318,7 @@ GUI で保存したプロジェクト(`*.kaisetsu.json`)は、端末からも精
 ```
 kaisetsu-cli refine   sample.kaisetsu.json                 標準手順で精密化して sample_refined.kaisetsu.json に保存
 kaisetsu-cli refine   sample.kaisetsu.json --csv out.csv --reflections refl.csv --cif out.cif
+kaisetsu-cli calc     sample.kaisetsu.json --unexplained peaks.csv   説明できないピークの一覧(d 値付き)
 kaisetsu-cli refine   sample.kaisetsu.json --recipe current --cycles 20   いまチェックの入っている量だけ
 kaisetsu-cli calc     sample.kaisetsu.json                 精密化せずに R 因子と診断だけ
 kaisetsu-cli lattice  map_*.xy --cif CeO2.cif --inst bl.json --csv cells.csv   Le Bail 格子定数(多数のデータ)
@@ -408,6 +409,13 @@ g0:相:scale|delta1|delta2|sratio|spdiameter   相の PDF パラメータ
   「背景のハンプに追加」を押す。反射の位置にあるのに強度が合わないもの(「強度の不一致」)は
   除外せず、占有率・選択配向・第二相を疑う。自動では除外しない(構造の問題まで異物扱いに
   なるため)。精密化のあとの「注意:」にも候補が出る。
+- **第二相を探したい(説明できないピークを他のソフトに渡す)**: 「残差の点検」の表には各ピークの
+  d 値(精密化したゼロ点・試料位置の補正を外した値)が出ます。「ピーク一覧をコピー」でタブ区切りの
+  一覧(位置、d 値、高さ、最大比、近い反射)がクリップボードに入り、表計算ソフトや検索・同定
+  プログラムに貼れます。「ピーク一覧を CSV に書き出す…」で同じ一覧をファイルにできます
+  (コマンドラインは `--unexplained peaks.csv`)。一覧には「強度の不一致」も種類付きで入ります
+  (第二相のピークが相の反射に重なっていることがあるため)。kaisetsu は第二相を自動では
+  探しません。見つけた相の CIF を「相を追加」で足してください。
 - **Le Bail / Pawley で強度が合わない**: Le Bail は各反射の積分強度(面積)を観測に合わせるので、
   強度そのものは必ず合います。合って見えないときは別の原因です。(1) ピークの高さだけ違う →
   幅・形の問題。U, V, W, X, Y(と非対称 S/L, H/L)を動かす。(2) 計算ピークの位置がずれている →

@@ -5,6 +5,7 @@ GUI の「計算パターンを CSV に」「反射リストを CSV に」とコ
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from kaisetsu.refine.project import Project
+    from kaisetsu.refine.residual import ResidualFeatures
 
 
 def write_pattern_csv(project: Project, hist: int, path: str | Path) -> Path:
@@ -61,4 +63,39 @@ def write_reflections_csv(project: Project, hist: int, path: str | Path) -> Path
                     f"{rep.two_theta[k]:.4f},{rep.f2_calc[k]:.4f},{rep.f2_obs[k]:.4f},"
                     f"{rep.i_calc[k]:.5g},{rep.i_obs[k]:.5g},{rep.fwhm[k]:.4f}\n"
                 )
+    return p
+
+
+def write_unexplained_peaks_csv(
+    project: Project,
+    path: str | Path,
+    hist: int | None = None,
+    *,
+    include_misfit: bool = True,
+    features: Sequence[ResidualFeatures] | None = None,
+) -> Path:
+    """残差の点検で見つかった、相の反射で説明できないピークの一覧を CSV に書く。
+
+    他のソフト(検索・同定プログラム)で第二相を探すための、観測位置・d 値・高さ・相対強度の
+    一覧。列は `kaisetsu.refine.residual.UNEXPLAINED_COLUMNS`(hist, kind, position, unit, d,
+    height, rel_height_pct, sigma, nearest_reflection, lo, hi)。kind は unindexed(相の反射で
+    説明できない)か misfit(反射はあるが観測が計算より強い。include_misfit が偽なら省く)。
+
+    Args:
+        hist: 対象のヒストグラム(None なら全部)
+        features: 既に調べた結果(GUI の表と同じものを書くとき)。None なら調べ直す
+    """
+    from kaisetsu.refine.residual import find_residual_features, format_unexplained_peaks
+
+    if features is None:
+        hists = range(len(project.histograms)) if hist is None else [hist]
+        features = [find_residual_features(project, i) for i in hists]
+    elif hist is not None:
+        features = [f for f in features if f.hist == hist]
+    p = Path(path)
+    p.write_text(
+        format_unexplained_peaks(features, sep=",", include_misfit=include_misfit, japanese=False),
+        encoding="utf-8",
+        newline="\n",
+    )
     return p

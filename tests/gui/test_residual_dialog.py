@@ -77,6 +77,29 @@ def test_residual_dialog_applies_exclusion_and_hump(qtbot) -> None:
     assert any("ハンプを追加" in line for line in proj.log)
 
 
+def test_residual_dialog_copies_and_exports_peak_list(qtbot, tmp_path: Path) -> None:
+    """d 列があり、「ピーク一覧をコピー」と CSV 書き出しが表と同じ一覧を出す。"""
+    from PySide6.QtWidgets import QApplication
+
+    proj = _project()
+    dlg = ResidualDialog(proj)
+    qtbot.addWidget(dlg)
+    assert dlg.copy_btn.isEnabled() and dlg.export_btn.isEnabled()
+    feats = dlg.features[0]
+    p = next(q for q in feats.peaks if q.unindexed)
+    r = next(i for i, (k, h, idx) in enumerate(dlg._rows) if k == "未同定ピーク")
+    assert dlg.table.item(r, 4).text() == f"{p.d:.4f}"
+    n = dlg.copy_peaks()
+    text = QApplication.clipboard().text()
+    assert n >= 1 and text.splitlines()[0].startswith("データ\t種類\t位置")
+    assert f"{p.d:.5f}" in text
+    out = dlg.export_csv(str(tmp_path / "peaks.csv"))
+    assert out is not None and Path(out).exists()
+    lines = Path(out).read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("hist,kind,position,unit,d,") and len(lines) == n + 1
+    assert any("書き出しました" in line for line in proj.log)
+
+
 def test_main_window_has_residual_action_and_recipe_options(qtbot) -> None:
     win = MainWindow()
     qtbot.addWidget(win)

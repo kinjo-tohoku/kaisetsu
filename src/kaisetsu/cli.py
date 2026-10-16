@@ -3,7 +3,8 @@
 GUI で作ったプロジェクトファイル(*.kaisetsu.json)を端末から精密化したり、多数のデータを
 順に処理したりする。GUI(Qt)には依存しない。
 
-    kaisetsu refine   PROJECT [--out OUT] [--csv ...] [--reflections ...] [--cif ...]
+    kaisetsu refine   PROJECT [--out OUT] [--csv ...] [--reflections ...] [--unexplained ...]
+                      [--cif ...]
     kaisetsu calc     PROJECT [--csv ...]            精密化せずに計算と R 因子だけ
     kaisetsu lattice  DATA... --cif CIF [--inst TEMPLATE | --preset NAME] [--csv ...]
     kaisetsu sequence PROJECT DATA... [--csv ...]    連続データ(温度・時間系列)の逐次精密化
@@ -62,7 +63,11 @@ def _report(project: object, quiet: bool) -> None:
 
 def _save_outputs(project: object, args: argparse.Namespace) -> None:
     from kaisetsu.crystal.cif import write_structure
-    from kaisetsu.io.export import write_pattern_csv, write_reflections_csv
+    from kaisetsu.io.export import (
+        write_pattern_csv,
+        write_reflections_csv,
+        write_unexplained_peaks_csv,
+    )
     from kaisetsu.refine.project import Project
 
     assert isinstance(project, Project)
@@ -72,6 +77,10 @@ def _save_outputs(project: object, args: argparse.Namespace) -> None:
     if args.reflections:
         p = write_reflections_csv(project, args.hist, args.reflections)
         print(f"反射リスト: {p}")
+    if args.unexplained:
+        p = write_unexplained_peaks_csv(project, args.unexplained, args.hist)
+        n = max(len(p.read_text(encoding="utf-8").splitlines()) - 1, 0)
+        print(f"説明できないピークの一覧({n} 本): {p}")
     if args.cif:
         name = args.phase or next(iter(project.phases))
         ph = project.phases[name]
@@ -246,6 +255,11 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
 def _add_output_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--csv", help="計算パターン(観測・計算・背景・差・相ごと)を CSV に書く")
     p.add_argument("--reflections", help="反射リストを CSV に書く")
+    p.add_argument(
+        "--unexplained",
+        help="相の反射で説明できないピークの一覧(位置、d 値、高さ、相対強度)を CSV に書く"
+        "(他のソフトで第二相を探す用)",
+    )
     p.add_argument("--cif", help="精密化した構造を CIF に書く(--phase で相を選ぶ)")
     p.add_argument("--hist", type=int, default=0, help="CSV に書くヒストグラム番号(既定 0)")
     p.add_argument("--phase", help="対象の相の名前(既定: 全部 / CIF は最初の相)")

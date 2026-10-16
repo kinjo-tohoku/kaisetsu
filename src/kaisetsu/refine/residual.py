@@ -18,13 +18,22 @@ opXRD の公開データ 13 本の比較(docs/validation/opxrd_cases.md)で、�
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
+import numpy.typing as npt
+
+from kaisetsu.pattern.instrument import CWInstrument
+from kaisetsu.pattern.tof import TOFInstrument
 
 if TYPE_CHECKING:
-    from kaisetsu.refine.project import Project
+    from kaisetsu.refine.project import HistogramEntry, Project
+
+FloatArray = npt.NDArray[np.float64]
+#: 一覧の 1 マスの値
+Cell = float | int | str | None
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,8 @@ class ResidualPeak:
     """その点の計算の正味強度 / 残差"""
     unindexed: bool
     """真: 相の反射で説明できない(不純物・試料台の候補)。偽: 反射はあるが強度が合わない"""
+    d: float = float("nan")
+    """観測位置の d 値 [Å](ゼロ点・試料位置の補正を外したもの。他のソフトで第二相を探す用)"""
 
 
 @dataclass(frozen=True)
@@ -80,6 +91,10 @@ class ResidualFeatures:
     def misfit(self) -> list[ResidualPeak]:
         return [p for p in self.peaks if not p.unindexed]
 
+    def unexplained(self, *, include_misfit: bool = True) -> list[ResidualPeak]:
+        """書き出す対象のピーク(未同定、include_misfit なら強度の不一致も)。高い順。"""
+        return [p for p in self.peaks if p.unindexed or include_misfit]
+
     def notes(self, max_items: int = 3) -> list[str]:
         """初心者向けの注意文(問題が無ければ空)。"""
         out: list[str] = []
@@ -109,6 +124,123 @@ class ResidualFeatures:
                 "背景の項数を増やすのも手です"
             )
         return out
+
+
+def observed_d_spacing(h: HistogramEntry, positions: npt.ArrayLike) -> FloatArray:
+    """観測ピークの位置(2θ [°] か TOF [μs])を d 値 [Å] に直す。
+
+    精密化したゼロ点と試料位置のずれ(平板の変位・透過、キャピラリの x, y)の分を外してから
+    Bragg の式で d にする。試料位置の補正は 2θ に依存するので 3 回の反復で逆算する
+    (補正は 0.1° 以下なので 1 回でほぼ収束)。TOF は `TOFInstrument.d_from_tof`。
+    他のソフトで第二相を探すときの d と相対強度の一覧に使う。
+    """
+    pos = np.asarray(positions, dtype=np.float64)
+    inst = h.instrument
+    if isinstance(inst, TOFInstrument):
+        return inst.d_from_tof(pos)
+    assert isinstance(inst, CWInstrument)
+    tt = pos - inst.zero
+    for _ in range(3):
+        tt = pos - inst.zero - h.sample.position_shift(tt)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        d = inst.radiation.wavelength / (2.0 * np.sin(np.radians(tt / 2.0)))
+    return np.asarray(np.where(np.isfinite(d) & (d > 0), d, np.nan))
+
+
+#: 説明できないピーク一覧の列(CSV と表計算ソフト向けの文字列で共通)
+UNEXPLAINED_COLUMNS = (
+    "hist",
+    "kind",
+    "position",
+    "unit",
+    "d",
+    "height",
+    "rel_height_pct",
+    "sigma",
+    "nearest_reflection",
+    "lo",
+    "hi",
+)
+UNEXPLAINED_LABELS_JA = (
+    "データ",
+    "種類",
+    "位置",
+    "単位",
+    "d (Å)",
+    "高さ",
+    "最大比 (%)",
+    "高さ/σ",
+    "近い反射",
+    "範囲(下)",
+    "範囲(上)",
+)
+
+
+def unexplained_peak_rows(
+    features: Iterable[ResidualFeatures], *, include_misfit: bool = True
+) -> list[dict[str, Cell]]:
+    """説明できないピーク(と強度の不一致)の一覧を、列名 → 値の辞書の並びで返す。
+
+    kind は "unindexed"(相の反射で説明できない)か "misfit"(反射はあるが観測が計算より強い)。
+    ヒストグラムの順、各ヒストグラムの中は高い順。
+    """
+    rows: list[dict[str, Cell]] = []
+    for f in features:
+        for p in f.unexplained(include_misfit=include_misfit):
+            rows.append(
+                {
+                    "hist": f.hist,
+                    "kind": "unindexed" if p.unindexed else "misfit",
+                    "position": p.position,
+                    "unit": f.unit.strip(),
+                    "d": p.d,
+                    "height": p.height,
+                    "rel_height_pct": 100.0 * p.height / f.net_max if f.net_max > 0 else 0.0,
+                    "sigma": p.sigma,
+                    "nearest_reflection": p.nearest_reflection,
+                    "lo": p.lo,
+                    "hi": p.hi,
+                }
+            )
+    return rows
+
+
+def _fmt_cell(key: str, value: Cell) -> str:
+    if value is None:
+        return ""
+    if key == "hist":
+        return f"h{value}"
+    if key in ("kind", "unit") or isinstance(value, str):
+        return str(value)
+    if key == "d":
+        return f"{float(value):.5f}" if math.isfinite(float(value)) else ""
+    if key in ("position", "nearest_reflection"):
+        return f"{float(value):.4f}"
+    if key in ("lo", "hi"):
+        return f"{float(value):.3f}"
+    if key == "sigma":
+        v = float(value)
+        return f"{v:.1f}" if math.isfinite(v) else "inf"
+    return f"{float(value):.1f}"
+
+
+def format_unexplained_peaks(
+    features: Iterable[ResidualFeatures],
+    *,
+    sep: str = "\t",
+    include_misfit: bool = True,
+    japanese: bool = True,
+) -> str:
+    """一覧を区切り文字で並べた文字列(先頭行は列名)。既定はタブ区切りで表計算ソフトに貼れる。"""
+    rows = unexplained_peak_rows(features, include_misfit=include_misfit)
+    labels = UNEXPLAINED_LABELS_JA if japanese else UNEXPLAINED_COLUMNS
+    lines = [sep.join(labels)]
+    for r in rows:
+        cells = [_fmt_cell(k, r[k]) for k in UNEXPLAINED_COLUMNS]
+        if japanese:
+            cells[1] = "未同定" if r["kind"] == "unindexed" else "強度の不一致"
+        lines.append(sep.join(cells))
+    return "\n".join(lines) + "\n"
 
 
 def _boxcar(a: np.ndarray, half: int) -> np.ndarray:
@@ -185,6 +317,7 @@ def find_residual_features(
     else:
         sig = np.sqrt(np.maximum(yo, 1.0))
     resid = yo - yc
+    d_obs = observed_d_spacing(h, x)
     refl = np.concatenate([pk.two_theta for pk in res.peaks]) if res.peaks else np.zeros(0)
     refl = refl[np.isfinite(refl)]
     feats = ResidualFeatures(hist, fw, net_max, unit)
@@ -250,6 +383,7 @@ def find_residual_features(
                 nearest,
                 calc_here / v if v > 0 else 0.0,
                 unindexed,
+                float(d_obs[i]),
             )
         )
     feats.peaks.sort(key=lambda p: -p.height)
@@ -257,4 +391,13 @@ def find_residual_features(
     return feats
 
 
-__all__ = ["ResidualFeatures", "ResidualHump", "ResidualPeak", "find_residual_features"]
+__all__ = [
+    "UNEXPLAINED_COLUMNS",
+    "ResidualFeatures",
+    "ResidualHump",
+    "ResidualPeak",
+    "find_residual_features",
+    "format_unexplained_peaks",
+    "observed_d_spacing",
+    "unexplained_peak_rows",
+]
