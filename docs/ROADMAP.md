@@ -8,9 +8,9 @@
 | フェーズ | 状態 | 備考 |
 |---|---|---|
 | Phase 0 基盤 | 完了 (2026-10-11) | uv / ruff / mypy / pytest、GSAS-II 参照値スクリプト、PbSO4 公開データ |
-| Phase 1 結晶学コア | 完了 (2026-10-11) | 反射リスト完全一致、\|F\|^2 一致。記録: `docs/validation/phase1_structure_factors.md` |
+| Phase 1 結晶学コア | 完了 (2026-10-11) | 反射リスト完全一致、\|F\|^2 一致。記録: `docs/validation/phase1_structure_factors.md`。2026-10-17: 外部レビューで、特殊位置の拘束の定数項(y = x/2 + 1/2 の 1/2)が落ちて精密化の最初に座標が飛ぶ不具合(Ia-3d 48g、I4/mcm 8h など。COD 1,100 件中 13 件)と、非中心対称 + 異常分散で Friedel 対を平均していなかった件(ZnS 111 で 1.3%。GSAS-II 5.7.4 の粉末も同じ近似)を修正(`docs/validation/review_2026-10-17.md`) |
 | Phase 2 パターン計算 | 完了 (2026-10-11) | 5 ケースで GSAS-II の ycalc と相対差 1e-4 以下。記録: `docs/validation/phase2_pattern.md` |
-| Phase 3 精密化エンジン | 完了 (2026-10-11) | PbSO4 X線・中性子・同時で GSAS-II と Rwp 差 0.2% 以内、構造パラメータ 3σ 以内。記録: `docs/validation/phase3_refinement.md`。ピーク計算は numba 並列の一括カーネル + 特異点除去した FCJ 積分(1 パターン 10〜20 ms)。共分散は列を正規化した J^T J の固有値分解による擬似逆行列(特異でも \|ρ\| ≤ 1。感度の無い変数と、組み合わせでしか決まらない変数の組を報告。`np.linalg.inv` が特異な行列で桁違いの値を返し、CaF2 で \|ρ\| = 8.9 の相関が表示されていた、2026-10-14)。残課題: ヤコビアンの並列化・解析微分、Pawley 法 |
+| Phase 3 精密化エンジン | 完了 (2026-10-11) | PbSO4 X線・中性子・同時で GSAS-II と Rwp 差 0.2% 以内、構造パラメータ 3σ 以内。記録: `docs/validation/phase3_refinement.md`。ピーク計算は numba 並列の一括カーネル + 特異点除去した FCJ 積分(1 パターン 10〜20 ms)。共分散は列を正規化した J^T J の固有値分解による擬似逆行列(特異でも \|ρ\| ≤ 1。感度の無い変数と、組み合わせでしか決まらない変数の組を報告。`np.linalg.inv` が特異な行列で桁違いの値を返し、CaF2 で \|ρ\| = 8.9 の相関が表示されていた、2026-10-14)。残課題: ヤコビアンの並列化・解析微分、Pawley 法。2026-10-17: 従属パラメータを持つ背景・スケールは解析列に拘束の連鎖が入らないので数値微分に落とす。評価回数の上限で止まった精密化は GUI の「完了」と逐次精密化の行に「未収束」を添える。CIF の占有率 0 を保つ(外部レビュー #3〜#5) |
 | Phase 4 GUI | v2 (2026-10-11) | PySide6: プロジェクトツリー・パターン図・パラメータ表・ログ、装置プリセット、精密化スレッド(中止可)、標準レシピ、ウィザード、保存・CSV/CIF 出力。v2 で追加: PDF 表示と読み込み/変換/標準手順、MEM ダイアログ(断面、VESTA 出力、MPF)、相の設定(Le Bail/Pawley、選択配向軸、異方性 U、Brindley)、構造 3D 表示(QPainter)、χ² 推移、図の PNG/SVG 保存、背景の種類(Chebyshev/固定点)とハンプ、Kβ。PyInstaller の spec と build スクリプト(`packaging/`)。`docs/user-guide/getting-started.md`。逐次精密化のダイアログ、英語 UI(`--lang en`、主要メニューのみ辞書翻訳)、.npz 分離保存。残課題: 身内での試用、説明文の英語化、PyInstaller 配布物の実機確認 |
 | Phase 5 PDF | 完了 (2026-10-11) | 5b 実空間フィット(PDFfit2 の定式化: δ1/δ2、Q_damp/Q_broad、球状粒子、Q_max 終端効果、異方性 U)は diffpy.pdffit2 1.6.0 と Ni の X 線・中性子で全パラメータ 0.2σ 以内、Rw 一致。5a I(Q)→G(r) は PDFgetX3 型のアドホック多項式補正(容器差引・偏光・吸収・Lorch 窓)。Rietveld と同じ `Project` / `ParameterSet` に `g{i}:` のデータセットとして入り、粉末との同時精密化も可。記録: `docs/validation/phase5_pdf.md`。残課題: Compton 散乱の明示的な補正(表が必要)、GSAS-II の PDF 出力との比較 |
 | Phase 6 MEM | 完了 (2026-10-11) | `kaisetsu.mem`: FFT で F を計算する MEM(L-BFGS、変数 v = 2√m、λ は割線法で C = 1 に合わせる)、Sakata-Sato の ZSPA(検算用)、負の散乱長の 2 チャンネル(正負エントロピーで 1 変数に還元)、対称操作で反射を展開、CCP4/XPLOR/VESTA grd 書き出し、断面・線分。Rietveld 分配の F_obs と σ から MEM を作る `mem_from_project`、MPF(`run_mpf`: MEM の |F| を固定した表でパターンフィッティング→再分配→再 MEM)。Pawley 法(`start_pawley`: 残差評価ごとに強度を非負線形最小二乗で解く、完全重なりは現在比で分配、σ と相関)。検証: NaCl・ルチルの合成 F で原子位置の極大と電子数を回収、PbSO4 実データで Pb に最大密度。記録: `docs/validation/phase6_mem.md`。重なり反射の G 拘束(`overlap_groups`、GUI の選択肢)も実装。残課題: Dysnomia との数値比較 |
@@ -284,7 +284,9 @@ Phase 0〜6 は完了(進捗表参照)。この先の優先順位:
    Le Bail の分配更新の修正。範囲外の反射の暴走、最小二乗と同じ重みの分配、「精密化」で収束まで回す)、
    `v0.1.11`(2026-10-16: 説明できないピークの一覧を d 値付きで書き出す。残差の点検のコピー / CSV、
    コマンドラインの `--unexplained`)、`v0.1.12`(2026-10-16: ウィザードの Rietveld / Le Bail 切り替え、
-   Le Bail のメニュー名、図のカーソルで反射の hkl・d・相対強度)。アプリ内の
+   Le Bail のメニュー名、図のカーソルで反射の hkl・d・相対強度)、`v0.1.13`(2026-10-17: 外部コードレビューの
+   5 件を修正。特殊位置の定数項、Friedel 対の平均、跨ぎ拘束のヤコビアン、CIF の占有率 0、未収束の表示。
+   `docs/validation/review_2026-10-17.md`)。アプリ内の
    更新確認は v0.1.4 から。説明書(`docs/user-guide`)は配布物に同梱し、ヘルプ → 「利用者ガイド」(F1)で
    アプリの中から読める(2026-10-15)。コード署名は利用者が増えてから。
 5. (2026-10-15 に実装)opXRD 13 本の比較(`docs/validation/opxrd_cases.md`)から出た標準手順の改善:
