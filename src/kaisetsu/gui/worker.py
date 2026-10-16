@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
+from kaisetsu.refine.lsq import convergence_note
 from kaisetsu.refine.project import Project
 from kaisetsu.refine.recipe import Recipe
 
@@ -107,6 +108,10 @@ class RefineWorker(QObject):
             rf = self.project.rfactors()["total"]
             label = "Rw" if self.project.pdf_datasets and not self.project.histograms else "Rwp"
             message = f"完了: {label} = {100 * rf.rwp:.3f}%  χ² = {rf.chi2:.3f}"
+            note = convergence_note(self.project.last_fit)
+            if note:
+                # 最後の段階が評価回数の上限で止まったときは「完了」に添えて知らせる
+                message += "\n" + note
             if self.companion is not None:
                 message += "\n" + self._run_companion()
             self.finished.emit(True, message)

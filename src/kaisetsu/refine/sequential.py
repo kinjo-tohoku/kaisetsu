@@ -28,6 +28,7 @@ import numpy as np
 
 from kaisetsu.io.readers import read_powder_data
 from kaisetsu.refine.cell_scan import scan_all_cells
+from kaisetsu.refine.lsq import FitResult, convergence_note
 from kaisetsu.refine.project import Project
 from kaisetsu.refine.recipe import Recipe
 
@@ -110,7 +111,10 @@ def refine_sequence(
     vary_names = project.params.free_names()
     prev_rwp: float | None = None
 
+    real_fit: FitResult | None = None  # 本番の精密化の結果(esd 付け直しの 1 サイクルは除く)
+
     def _refine_once() -> float:
+        nonlocal real_fit
         if recipe is not None:
             recipe.run(project)
         else:
@@ -118,6 +122,7 @@ def refine_sequence(
                 project.fix_all()
                 project.vary(*[n for n in vary_names if n in project.params])
             project.refine(max_cycles=max_cycles)
+        real_fit = project.last_fit
         return project.rfactors()[h.name].rwp
 
     for path in paths:
@@ -143,6 +148,7 @@ def refine_sequence(
             if cell_scan and bad:
                 # 前の値から外れた(相転移・大きな熱膨張)。谷を見つけ直してやり直す
                 end = project.snapshot()
+                fit_first = real_fit
                 project.restore(start)
                 scans = scan_all_cells(project)
                 try:
@@ -158,10 +164,15 @@ def refine_sequence(
                     )
                 elif failure is None:
                     project.restore(end)
+                    real_fit = fit_first
                     with contextlib.suppress(Exception):
-                        project.refine(max_cycles=1)  # esd を付け直す
+                        project.refine(max_cycles=1)  # esd を付け直す(収束判定には使わない)
             if failure is not None:
                 raise failure
+            unconverged = convergence_note(real_fit, short=True)
+            if unconverged:
+                # 評価回数の上限で止まった行は備考で分かるようにする(レビュー 2026-10-17 #5)
+                note = (note + "; " if note else "") + unconverged
             rf = project.rfactors()[h.name]
             prev_rwp = rf.rwp
             names = list(params) if params is not None else project.params.free_names()

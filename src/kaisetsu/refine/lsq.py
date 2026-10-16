@@ -308,3 +308,23 @@ def covariance_from_jacobian(
         if len(idx) >= 2:
             degen.append(idx)
     return cov, esd, corr, insens, degen
+
+
+def convergence_note(fit: FitResult | None, *, short: bool = False) -> str:
+    """未収束の精密化に添える注意(収束していれば空文字)。
+
+    scipy の least_squares は関数評価回数の上限(max_nfev)で止まると success=False を返すが
+    例外にはならない。GUI の「完了」と逐次精密化の行はこの文を添えて利用者に知らせる
+    (レビュー 2026-10-17 #5)。short は表の備考向けの短い形。
+    """
+    if fit is None or fit.success:
+        return ""
+    capped = "function evaluations" in fit.message
+    if short:
+        return "未収束(評価回数の上限で停止)" if capped else f"未収束({fit.message})"
+    if capped:
+        return (
+            "注意: 評価回数の上限で止まり、収束していません(値は途中のものです)。"
+            "「精密化を実行」をもう一度押すと続きから動きます"
+        )
+    return f"注意: 収束していません({fit.message})"
