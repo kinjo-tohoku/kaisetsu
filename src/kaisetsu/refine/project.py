@@ -74,6 +74,7 @@ from kaisetsu.refine.rfactors import (
     bragg_rfactor,
     partition_intensities,
     powder_rfactors,
+    reflections_inside,
     structure_rfactor,
 )
 from kaisetsu.reflections.hkl import canonical_hkl
@@ -85,6 +86,14 @@ BoolArray = npt.NDArray[np.bool_]
 log = logging.getLogger(__name__)
 
 _ADP_NAMES = ("u11", "u22", "u33", "u12", "u13", "u23")
+
+#: Le Bail の分配更新を最小二乗の前後に回す回数の上限と、止める条件(Σ|ΔF²| / ΣF²)
+LE_BAIL_UPDATE_MAX = 10
+LE_BAIL_UPDATE_TOL = 1e-3
+#: `Project.refine(le_bail_cycles=0)` で Le Bail 相があるときの外側反復の上限と、
+#: 止める条件(Rwp の改善がこれ未満)
+LE_BAIL_AUTO_CYCLES = 5
+LE_BAIL_AUTO_TOL = 1e-4
 _XYZ = ("x", "y", "z")
 
 
@@ -1440,7 +1449,11 @@ class Project:
     ) -> FitResult:
         """vary の立ったパラメータを最小二乗で精密化する。
 
-        le_bail_cycles > 0 なら、Le Bail 相の強度を更新しながらその回数だけ繰り返す。
+        Le Bail 相があれば、最小二乗の前に分配更新を収束まで回し(`le_bail_update`)、
+        最小二乗のあとにもう一度回す。le_bail_cycles > 0 ならその回数だけ繰り返し、
+        0 なら Rwp の改善が LE_BAIL_AUTO_TOL 未満になるまで(最大 LE_BAIL_AUTO_CYCLES 回)
+        繰り返す。終わったときの計算パターン(`HistogramEntry.result`)は更新後の強度で
+        計算し直してあるので、Rwp と図は返り値の最小二乗と同じ強度を見ている。
         analytic_jacobian が真なら、背景・スケール・構造パラメータの微分を半解析的に求める
         (`kaisetsu.refine.jacobian`)。Pawley 相があるときは数値微分に戻す。
         """
@@ -1461,9 +1474,16 @@ class Project:
                 "最小二乗が決まりません。データ範囲・除外領域を広げるか、動かす量を減らしてください"
             )
         updating = any(ph.le_bail and ph.f2_update for ph in self.phases.values())
-        n_outer = max(le_bail_cycles, 1) if updating else 1
+        auto = updating and le_bail_cycles <= 0
+        n_outer = (LE_BAIL_AUTO_CYCLES if auto else max(le_bail_cycles, 1)) if updating else 1
         result: FitResult | None = None
-        for _ in range(n_outer):
+        rwp_prev: float | None = None
+        for outer in range(n_outer):
+            if updating:
+                # 抽出強度を今のプロファイル・背景に合わせてから動かす(構造から作った初期値や
+                # 前の段階の強度のまま最小二乗を始めると、幅と背景がそれに引きずられる)。
+                # 最初の周期は幅が外れていても正しい面積合わせ、以後は最小二乗と同じ重み
+                self.le_bail_update(max_iter=LE_BAIL_UPDATE_MAX, weighted=outer > 0)
             if self.params.free():
                 use_analytic = analytic_jacobian and not any(
                     ph.pawley for ph in self.phases.values()
@@ -1482,10 +1502,17 @@ class Project:
                     ),
                     n_penalty=n_pen,
                 )
-            if updating:
-                self.le_bail_update()
+            if auto:
+                rwp = self.rfactors()["total"].rwp
+                if rwp_prev is not None and rwp_prev - rwp < LE_BAIL_AUTO_TOL:
+                    break
+                rwp_prev = rwp
         if result is None:
             raise ValueError("精密化するパラメータがありません(vary を立ててください)")
+        if updating:
+            self.le_bail_update(max_iter=LE_BAIL_UPDATE_MAX)
+            for i in range(len(self.histograms)):
+                self.calculate(i)
         self.last_fit = result
         rf = self.rfactors()
         self.log.append(f"精密化: {result.names} → {rf['total']}")
@@ -1505,14 +1532,25 @@ class Project:
         self._lock_extracted_scale(phase)
 
     def start_le_bail(
-        self, phase: str, hist: int | None = None, from_structure: bool = True
+        self,
+        phase: str,
+        hist: int | None = None,
+        from_structure: bool = True,
+        update: bool = True,
     ) -> None:
-        """相を Le Bail モードにし、抽出強度の初期値を作る。"""
+        """相を Le Bail モードにし、抽出強度の初期値を作る。
+
+        update が真なら、初期値(構造から、または一様)を分配更新で観測に合わせておく。
+        スケールは固定されるので、構造の強度のままだと計算パターンの大きさが観測と
+        何桁も違うことがある(切り替えた直後の図と、最初の最小二乗のため)。
+        """
         ph = self.phases[phase]
         ph.le_bail = True
         ph.pawley = False
         self._init_f2_table(phase, hist, from_structure)
         self._lock_extracted_scale(phase)
+        if update and self.histograms:
+            self.le_bail_update(max_iter=LE_BAIL_UPDATE_MAX, weighted=False)
 
     def stop_extraction(self, phase: str) -> None:
         """Le Bail / Pawley をやめて構造からの強度計算に戻す(スケールの固定も解く)。"""
@@ -1578,37 +1616,90 @@ class Project:
             pc.f2_table = ph.f2_tables[i]
             pc.f2_default = float(np.mean(f2))
 
-    def le_bail_update(self) -> None:
-        """Rietveld 分配で "観測" 強度を求め、Le Bail 相の |F|^2 を更新する。"""
-        for i, h in enumerate(self.histograms):
-            res = self.calculate(i)
-            for k, (pname, _pc) in enumerate(h.contributions.items()):
-                ph = self.phases[pname]
-                if not (ph.le_bail and ph.f2_update):
-                    continue
-                tbl = res.peaks[k]
-                i_obs = partition_intensities(
-                    h.data.y,
-                    res.y_calc,
-                    res.y_background,
-                    tbl.windows(),
-                    tbl.contributions,
-                    tbl.intensity_total,
-                )
-                table = ph.f2_tables.setdefault(i, {})
-                new: dict[tuple[int, int, int], float | None] = {}
-                for hk, f2c, ic, io in zip(
-                    tbl.hkl, tbl.f2, tbl.intensity_total, i_obs, strict=True
-                ):
-                    key = (int(hk[0]), int(hk[1]), int(hk[2]))
-                    new[key] = (
-                        max(float(f2c * io / ic), 0.0) if ic > 0 and np.isfinite(io) else None
+    def le_bail_update(
+        self, *, max_iter: int = 1, tol: float = LE_BAIL_UPDATE_TOL, weighted: bool = True
+    ) -> int:
+        """Rietveld 分配で "観測" 強度を求め、Le Bail 相の |F|^2 を更新する。
+
+        Le Bail (1988) の反復: 今の強度で計算した各反射の寄与の比で観測の正味強度を分け、
+        それを新しい強度にする。孤立した反射は 1 回で決まり、重なった反射はモデルの比から
+        幾何級数的に近づく。max_iter > 1 なら、全相・全ヒストグラムで Σ|ΔF²| / ΣF² が tol
+        未満になるまで繰り返す。返り値は回した回数。
+
+        分配にはフィット範囲(x_min, x_max、除外領域、重み 0 の点)の点だけを使う。weighted が
+        真なら点ごとの観測/計算比を最小二乗と同じ重み(w c²)で平均する(`partition_intensities`
+        の weights)。孤立した反射では重み付き最小二乗のスケールと同じになり、プロファイルや
+        背景の最小二乗と同じ解に落ち着く。Rietveld の分配(面積合わせ、weighted=False)はピーク
+        形が合わないデータで「強度が面積に合わせて下がる → 最小二乗が背景を上げて裾を埋める →
+        強度がさらに下がる」の循環で発散する(COD 1508532、放射光、幅 0.02°: 5 周で Rwp
+        6.6 → 12.6%)。一方、幅が大きく外れているとき(表を作った直後)は面積合わせの方が
+        強度の初期値として正しいので、`start_le_bail` と `refine` の最初の周期は weighted=False
+        で回す(PbSO4 20–60° で幅 W だけの初期値から全部動かすと、重み付きだけでは負の X, Y の
+        極小に落ちて Rwp 19%、面積合わせから始めると 8.7%)。
+        中心が範囲の外にある反射(x_max + マージンまでの反射、除外領域の中の反射)は裾しか
+        データに掛からず、分配で決めると意味の無い値に暴走するので、範囲内の反射の |F|² の
+        中央値にする(`kaisetsu.refine.rfactors.reflections_inside`)。
+        """
+        n_done = 0
+        for _ in range(max(max_iter, 1)):
+            change = 0.0
+            weight = 0.0
+            for i, h in enumerate(self.histograms):
+                res = self.calculate(i)
+                mask = h.mask()
+                for k, (pname, _pc) in enumerate(h.contributions.items()):
+                    ph = self.phases[pname]
+                    if not (ph.le_bail and ph.f2_update):
+                        continue
+                    tbl = res.peaks[k]
+                    inside = reflections_inside(h.data.x, tbl.two_theta, mask)
+                    i_obs = partition_intensities(
+                        h.data.y,
+                        res.y_calc,
+                        res.y_background,
+                        tbl.windows(),
+                        tbl.contributions,
+                        tbl.intensity_total,
+                        mask=mask,
+                        inside=inside,
+                        weights=h.data.weight if weighted else None,
                     )
-                # 0 になった反射は計算強度も 0 になり、分配で二度と強度をもらえない(格子定数の
-                # 初期値が 0.2% ずれていた CeO2 で (533) が消えた)。最大値の 1e-4 を下限にする
-                floor = 1e-4 * max((v for v in new.values() if v is not None), default=0.0)
-                for key, val in new.items():
-                    table[key] = floor if val is None or val < floor else val
+                    table = ph.f2_tables.setdefault(i, {})
+                    new: dict[tuple[int, int, int], float | None] = {}
+                    outside: list[tuple[int, int, int]] = []
+                    for hk, f2c, ic, io, ins in zip(
+                        tbl.hkl, tbl.f2, tbl.intensity_total, i_obs, inside, strict=True
+                    ):
+                        key = (int(hk[0]), int(hk[1]), int(hk[2]))
+                        if not ins:
+                            outside.append(key)
+                            continue
+                        new[key] = (
+                            max(float(f2c * io / ic), 0.0) if ic > 0 and np.isfinite(io) else None
+                        )
+                    # 0 になった反射は計算強度も 0 になり、分配で二度と強度をもらえない(格子定数の
+                    # 初期値が 0.2% ずれていた CeO2 で (533) が消えた)。最大値の 1e-4 を下限にする
+                    values = [v for v in new.values() if v is not None]
+                    floor = 1e-4 * max(values, default=0.0)
+                    for key, val in new.items():
+                        table[key] = floor if val is None or val < floor else val
+                    if outside:
+                        typical = float(np.median(values)) if values else None
+                        for key in outside:
+                            if typical is not None:
+                                table[key] = typical
+                            else:
+                                table.setdefault(key, 1.0)
+                    old = np.asarray(tbl.f2, dtype=np.float64)
+                    cur = np.asarray(
+                        [table[(int(hk[0]), int(hk[1]), int(hk[2]))] for hk in tbl.hkl]
+                    )
+                    change += float(np.sum(np.abs(cur - old)[inside]))
+                    weight += float(np.sum(cur[inside]))
+            n_done += 1
+            if weight <= 0 or change <= tol * weight:
+                break
+        return n_done
 
     # ------------------------------------------------------------------
     # 結果
@@ -1657,6 +1748,7 @@ class Project:
         pname = phase or names[0]
         k = names.index(pname)
         tbl = res.peaks[k]
+        mask = h.mask()
         i_obs = partition_intensities(
             h.data.y,
             res.y_calc,
@@ -1664,6 +1756,8 @@ class Project:
             tbl.windows(),
             tbl.contributions,
             tbl.intensity_total,
+            mask=mask,
+            inside=reflections_inside(h.data.x, tbl.two_theta, mask),
         )
         with np.errstate(divide="ignore", invalid="ignore"):
             f2_obs = np.where(tbl.intensity_total > 0, tbl.f2 * i_obs / tbl.intensity_total, 0.0)

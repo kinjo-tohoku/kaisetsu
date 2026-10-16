@@ -100,12 +100,41 @@ PARTITION_CORE_FRACTION = 1e-2
 
 
 def _partition_mask(
-    nc: FloatArray, c: FloatArray, floor: float, core_fraction: float
+    nc: FloatArray,
+    c: FloatArray,
+    floor: float,
+    core_fraction: float,
+    mask: npt.NDArray[np.bool_] | None = None,
 ) -> npt.NDArray[np.bool_]:
-    """分配に使う点(計算の正味強度が正で、反射自身の寄与が中心部に近い点)。"""
+    """分配に使う点(計算の正味強度が正で、反射自身の寄与が中心部に近く、フィット範囲の中)。"""
     ok = nc > floor
     if core_fraction > 0 and len(c):
         ok &= c > core_fraction * float(np.max(c))
+    if mask is not None:
+        ok &= mask
+    return np.asarray(ok)
+
+
+def reflections_inside(
+    x: FloatArray, centers: FloatArray, mask: npt.NDArray[np.bool_] | None = None
+) -> npt.NDArray[np.bool_]:
+    """反射の中心がデータの範囲(とフィット範囲のマスク)の中にあるか。
+
+    中心が範囲の外にある反射は裾だけがデータに掛かり、分配で得る "観測" 強度は裾の点の
+    観測/計算比になって意味を持たない。Le Bail では x_max + マージンまでの反射を計算に入れる
+    ので、そうした反射の強度を更新で決めてはいけない(PbSO4 CuKα で 2θ = 161° の反射が
+    データ端の背景の残りを拾って 1e3 倍に膨らみ、分配更新のたびに Rwp が 51 → 2700% と発散)。
+    """
+    cen = np.asarray(centers, dtype=np.float64)
+    if len(x) == 0 or len(cen) == 0:
+        return np.zeros(len(cen), dtype=bool)
+    ok = np.isfinite(cen) & (cen >= x[0]) & (cen <= x[-1])
+    if mask is not None:
+        idx = np.clip(np.searchsorted(x, np.where(ok, cen, x[0])), 0, len(x) - 1)
+        prev = np.clip(idx - 1, 0, len(x) - 1)
+        # 近い方の点がフィット範囲に入っていれば中
+        near = np.where(np.abs(x[idx] - cen) <= np.abs(x[prev] - cen), idx, prev)
+        ok &= np.asarray(mask)[near]
     return np.asarray(ok)
 
 
@@ -117,6 +146,9 @@ def partition_intensities(
     contributions: list[FloatArray],
     i_calc: FloatArray,
     core_fraction: float = PARTITION_CORE_FRACTION,
+    mask: npt.NDArray[np.bool_] | None = None,
+    inside: npt.NDArray[np.bool_] | None = None,
+    weights: FloatArray | None = None,
 ) -> FloatArray:
     """Rietveld 分配による "観測" 積分強度(Hill & Howard 1987 / Rietveld 1969)。
 
@@ -137,19 +169,41 @@ def partition_intensities(
         contributions: 反射ごとの寄与配列(窓内)
         i_calc: 反射ごとの計算積分強度(窓内寄与の面積)
         core_fraction: 分配に使う点の、反射自身の寄与の下限(最大値に対する割合)
+        mask: フィット範囲の点(None なら全点)。範囲外・除外領域の点は分配に使わない
+        inside: 反射ごとに中心がフィット範囲の中にあるか(`reflections_inside`)。外の反射は
+            裾しかデータに掛からないので分配せず、計算値をそのまま返す
+        weights: 観測点の最小二乗の重み(1/σ²)。与えると、点ごとの比 (y_obs − b)/(y_calc − b) を
+            c_k ではなく w c_k² で平均する。孤立した反射では重み付き最小二乗のスケール
+            Σ w c y / Σ w c² と同じになり、完全に重なった反射はモデルの比のまま。Le Bail の
+            更新用(下記)。None なら Rietveld の分配(R_Bragg、MEM の F_obs 用)
+
+    Le Bail の更新に Rietveld の分配(裾まで等しく面積を合わせる)を使うと、ピーク形が合わない
+    データで「強度が面積に合わせて下がる → 最小二乗が背景を上げて裾を埋める → 正味の観測が
+    減って強度がさらに下がる」の循環で発散する(COD 1508532、放射光、幅 0.02°: 「更新 →
+    背景の最小二乗」5 周で Rwp 6.6 → 19.6%)。重みを付けるとピークの山が比を決めるので
+    最小二乗と同じ解に落ち着く。
     """
     net_obs = y_obs - y_bkg
     net_calc = y_calc - y_bkg
     out = np.zeros(len(windows))
     floor = 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
     for k, ((i0, i1), c) in enumerate(zip(windows, contributions, strict=True)):
+        if inside is not None and not inside[k]:
+            out[k] = i_calc[k]
+            continue
         nc = net_calc[i0:i1]
-        ok = _partition_mask(nc, c, floor, core_fraction)
+        ok = _partition_mask(nc, c, floor, core_fraction, None if mask is None else mask[i0:i1])
         total = float(np.sum(c[ok]))
         if total <= 0:
             # 使える点がない(窓がデータの外、または計算強度 0)なら計算値のまま
             out[k] = i_calc[k] if len(c) and not ok.any() and np.sum(c) > 0 else 0.0
             continue
+        if weights is not None:
+            wk = weights[i0:i1][ok] * c[ok] ** 2
+            den = float(np.sum(wk))
+            if den > 0:
+                out[k] = i_calc[k] * float(np.sum(wk * net_obs[i0:i1][ok] / nc[ok])) / den
+                continue
         frac = float(np.sum(c[ok] * net_obs[i0:i1][ok] / nc[ok]))
         out[k] = i_calc[k] * frac / total
     return out
@@ -163,6 +217,8 @@ def partition_uncertainties(
     contributions: list[FloatArray],
     i_calc: FloatArray,
     core_fraction: float = PARTITION_CORE_FRACTION,
+    mask: npt.NDArray[np.bool_] | None = None,
+    inside: npt.NDArray[np.bool_] | None = None,
 ) -> FloatArray:
     """Rietveld 分配した "観測" 積分強度の標準偏差。
 
@@ -173,14 +229,18 @@ def partition_uncertainties(
 
     Args:
         sigma_y: 観測点の標準偏差(重み 0 の点は inf でよい)
-        core_fraction: `partition_intensities` と同じ(同じ点を使う)
+        core_fraction, mask, inside: `partition_intensities` と同じ(同じ点を使う)。中心が
+            範囲外の反射は観測されていないので σ = I_calc(相対 100%)を返す
     """
     net_calc = y_calc - y_bkg
     out = np.zeros(len(windows))
     floor = 1e-12 * max(float(np.max(np.abs(net_calc))), 1e-300)
     for k, ((i0, i1), c) in enumerate(zip(windows, contributions, strict=True)):
+        if inside is not None and not inside[k]:
+            out[k] = i_calc[k]
+            continue
         nc = net_calc[i0:i1]
-        ok = _partition_mask(nc, c, floor, core_fraction)
+        ok = _partition_mask(nc, c, floor, core_fraction, None if mask is None else mask[i0:i1])
         total = float(np.sum(c[ok]))
         if total <= 0:
             continue

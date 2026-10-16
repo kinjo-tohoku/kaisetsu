@@ -15,9 +15,9 @@ J. Appl. Cryst. 32, 36-50 (1999) の推奨順序に準拠):
 
 各段階では前の段階で動かしたパラメータも動かし続ける(累積)。
 
-Le Bail 相があるときは、最初に強度の更新を 5 回回してから始め、各段階の精密化でも
-強度の更新を 3 回ずつ回す(`Project.refine(le_bail_cycles=3)`)。段階ごとに 1 回しか
-更新しないと、幅が合わないうちに抽出強度が崩れて Rietveld より悪い Le Bail になる
+Le Bail 相があるときは、最初に強度の更新を収束まで回してから始め、各段階の精密化でも
+「更新を収束まで → 最小二乗」を 3 回ずつ回す(`Project.refine(le_bail_cycles=3)`)。段階ごとに
+1 回しか更新しないと、幅が合わないうちに抽出強度が崩れて Rietveld より悪い Le Bail になる
 (opXRD の実験室データ 2 本で Rwp 23.6% → 11.1%、23.6% → 11.9%)。
 """
 
@@ -82,6 +82,8 @@ class Recipe:
         iteration_progress: Callable[[int, float], None] | None = None,
     ) -> list[FitResult]:
         """レシピを順に実行する。reset=True なら最初に全パラメータを固定に戻す。"""
+        from kaisetsu.refine.project import LE_BAIL_UPDATE_MAX
+
         if reset:
             project.fix_all()
         lb_cycles = 3 if _has_le_bail(project) else 0
@@ -94,8 +96,7 @@ class Recipe:
                 self._cell_scan(project, step)
                 continue
             if lb_cycles and not lb_initialized:
-                for _ in range(5):
-                    project.le_bail_update()
+                project.le_bail_update(max_iter=LE_BAIL_UPDATE_MAX, weighted=False)
                 lb_initialized = True
             if step.kind in ("kalpha2_trial", "hump_trial"):
                 trial_fn = self._kalpha2_trial if step.kind == "kalpha2_trial" else self._hump_trial

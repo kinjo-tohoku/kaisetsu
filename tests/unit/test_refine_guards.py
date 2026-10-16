@@ -149,7 +149,10 @@ def test_standard_recipe_varies_tof_alpha(data_dir: Path) -> None:
 
 
 def test_recipe_iterates_le_bail_intensities(data_dir: Path) -> None:
-    """Le Bail 相があるレシピは、最初に 5 回、各段階で 3 回ずつ強度を更新する。"""
+    """Le Bail 相があるレシピは、最初に 1 回(収束まで)、各段階で 3 + 1 回強度を更新する。
+
+    `Project.refine(le_bail_cycles=3)` は 3 回の最小二乗それぞれの前と、最後にもう一度更新する。
+    """
     from kaisetsu.refine.recipe import Recipe
 
     st = Structure.from_cif(str(data_dir / "pbso4" / "PbSO4-Wyckoff.cif"))
@@ -162,14 +165,14 @@ def test_recipe_iterates_le_bail_intensities(data_dir: Path) -> None:
     calls = {"n": 0}
     orig = proj.le_bail_update
 
-    def counted() -> None:
+    def counted(**kwargs: object) -> int:
         calls["n"] += 1
-        orig()
+        return orig(**kwargs)  # type: ignore[arg-type]
 
     proj.le_bail_update = counted  # type: ignore[method-assign]
     r = Recipe("t")
     r.add("bkg", ["h0:bkg:*"], 2)
     r.add("cell", ["PbSO4:cell:*"], 2)
     r.run(proj)
-    # 5(最初)+ 3 × 2 段階
-    assert calls["n"] == 5 + 3 * 2
+    # 1(最初)+ (3 + 1) × 2 段階
+    assert calls["n"] == 1 + 4 * 2

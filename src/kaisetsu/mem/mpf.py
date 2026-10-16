@@ -25,7 +25,11 @@ import numpy.typing as npt
 from kaisetsu.mem.core import MEMInput, MEMResult, run_mem
 from kaisetsu.pdf.calculator import scattering_lengths
 from kaisetsu.refine.project import Project
-from kaisetsu.refine.rfactors import partition_intensities, partition_uncertainties
+from kaisetsu.refine.rfactors import (
+    partition_intensities,
+    partition_uncertainties,
+    reflections_inside,
+)
 from kaisetsu.reflections.structure_factor import structure_factors
 from kaisetsu.scattering.xray import XrayScatteringFactors
 
@@ -82,6 +86,9 @@ def observed_structure_factors(
     names = list(h.contributions)
     k = names.index(phase)
     tbl = res.peaks[k]
+    # フィット範囲の点だけで分配し、中心が範囲外の反射は計算値 ± 100% にする
+    mask = h.mask()
+    inside = reflections_inside(h.data.x, tbl.two_theta, mask)
     i_obs = partition_intensities(
         h.data.y,
         res.y_calc,
@@ -89,10 +96,12 @@ def observed_structure_factors(
         tbl.windows(),
         tbl.contributions,
         tbl.intensity_total,
+        mask=mask,
+        inside=inside,
     )
     sig_i = partition_uncertainties(
         h.data.sigma, res.y_calc, res.y_background, tbl.windows(), tbl.contributions,
-        tbl.intensity_total,
+        tbl.intensity_total, mask=mask, inside=inside,
     )  # fmt: skip
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(tbl.intensity_total > 0, i_obs / tbl.intensity_total, 0.0)
