@@ -78,7 +78,7 @@ from kaisetsu.refine.rfactors import (
     structure_rfactor,
 )
 from kaisetsu.reflections.hkl import canonical_hkl
-from kaisetsu.reflections.structure_factor import structure_factors
+from kaisetsu.reflections.structure_factor import powder_structure_factor_squared
 
 FloatArray = npt.NDArray[np.float64]
 BoolArray = npt.NDArray[np.bool_]
@@ -1594,17 +1594,12 @@ class Project:
                 h.effective_d_max() or math.inf,
             )
             if from_structure and ph.structure.sites:
-                f2 = (
-                    np.abs(
-                        structure_factors(
-                            ph.structure,
-                            refl.hkl,
-                            h.instrument.radiation,
-                            anomalous=h.anomalous,
-                            override=h.scattering_override,
-                        )
-                    )
-                    ** 2
+                f2 = powder_structure_factor_squared(
+                    ph.structure,
+                    refl.hkl,
+                    h.instrument.radiation,
+                    anomalous=h.anomalous,
+                    override=h.scattering_override,
                 )
                 f2 = np.maximum(f2, 1e-3 * max(float(f2.max()), 1e-30))
             else:

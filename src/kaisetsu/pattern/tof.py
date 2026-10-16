@@ -58,7 +58,7 @@ from kaisetsu.profile.pseudo_voigt import SQRT8LN2, tch_fwhm_array
 from kaisetsu.profile.tof_batch import tof_profile_batch
 from kaisetsu.profile.tof_profile import tof_peak_fwhm
 from kaisetsu.reflections.hkl import generate_reflections
-from kaisetsu.reflections.structure_factor import structure_factors
+from kaisetsu.reflections.structure_factor import powder_structure_factor_squared
 from kaisetsu.scattering.radiation import Radiation
 
 FloatArray = npt.NDArray[np.float64]
@@ -397,10 +397,9 @@ def calculate_pattern_tof(
                 [ph.f2_table.get((int(h), int(k), int(l)), ph.f2_default) for h, k, l in refl.hkl]
             )
         else:
-            f = structure_factors(
+            f2 = powder_structure_factor_squared(
                 st, refl.hkl, rad, anomalous=anomalous, override=scattering_override
             )
-            f2 = np.abs(f) ** 2
         d = refl.d
         pos = instrument.position(d)
         lorentz = d**4 * sin_theta

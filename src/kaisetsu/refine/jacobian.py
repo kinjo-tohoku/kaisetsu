@@ -32,7 +32,7 @@ import numpy.typing as npt
 from kaisetsu.pattern.calculator import PeakTable, PhaseContribution
 from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.profile.texture import coefficient_names
-from kaisetsu.reflections.structure_factor import structure_factors
+from kaisetsu.reflections.structure_factor import powder_structure_factor_squared
 
 if TYPE_CHECKING:
     from kaisetsu.refine.parameters import Parameter
@@ -82,14 +82,13 @@ def _f2_for(project: Project, hist: HistogramEntry, phase: str) -> FloatArray:
     assert res is not None
     k = list(hist.contributions).index(phase)
     tbl = res.peaks[k]
-    f = structure_factors(
+    return powder_structure_factor_squared(
         ph.structure,
         tbl.hkl,
         hist.instrument.radiation,
         anomalous=hist.anomalous,
         override=hist.scattering_override,
     )
-    return np.asarray(np.abs(f) ** 2)
 
 
 def _extinction_for(
@@ -155,8 +154,25 @@ def project_jacobian(
     base = numerical_residual if numerical_residual is not None else fn()
     assert len(base) >= n
     jac = np.zeros((len(base), len(free)))
+    # 主パラメータ → それに従属するパラメータ名(拘束の連鎖)
+    dependents: dict[str, list[str]] = {}
+    for q in params:
+        if q.tie is not None:
+            for master in q.tie.masters:
+                dependents.setdefault(master, []).append(q.name)
     for col, p in enumerate(free):
         kind, hi, phase = classify(project, p)
+        deps = dependents.get(p.name, [])
+        if deps and (
+            hi is not None
+            or kind != "intensity"
+            or any(not d.startswith(f"{phase}:") for d in deps)
+        ):
+            # 背景・スケールの解析列は自分のヒストグラムの行しか埋めず、他のヒストグラムや
+            # 他の相に従属パラメータがあっても連鎖が入らない(レビュー 2026-10-17 #3)。
+            # 同じ相の構造パラメータ同士の拘束だけは _perturbed → _f2_for で相ごと再計算される
+            # ので解析のまま。それ以外は残差全体の数値微分に落とす。
+            kind = "other"
         if kind == "bkg" and hi is not None:
             h = hists[hi]
             k = int(p.name.rsplit(":", 1)[-1])

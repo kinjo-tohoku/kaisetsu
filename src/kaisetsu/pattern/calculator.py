@@ -39,7 +39,7 @@ from kaisetsu.profile.pseudo_voigt import tch_fwhm_eta
 from kaisetsu.profile.stephens import stephens_fwhm
 from kaisetsu.profile.texture import symmetrized_harmonics, texture_factor
 from kaisetsu.reflections.hkl import ReflectionList, generate_reflections
-from kaisetsu.reflections.structure_factor import structure_factors
+from kaisetsu.reflections.structure_factor import powder_structure_factor_squared
 from kaisetsu.scattering.xray import TableName
 
 FloatArray = npt.NDArray[np.float64]
@@ -347,7 +347,8 @@ def calculate_pattern(
                 [ph.f2_table.get((int(h), int(k), int(l)), ph.f2_default) for h, k, l in refl.hkl]
             )
         else:
-            f = structure_factors(
+            # Friedel 対の平均(非中心対称 + 異常分散で代表 1 本の |F|² と差が出る)
+            f2 = powder_structure_factor_squared(
                 st,
                 refl.hkl,
                 rad,
@@ -355,7 +356,6 @@ def calculate_pattern(
                 anomalous=anomalous,
                 override=scattering_override,
             )
-            f2 = np.abs(f) ** 2
         volume = st.lattice.volume
         n_refl = len(refl)
         w_start = np.zeros(n_refl, dtype=np.int64)

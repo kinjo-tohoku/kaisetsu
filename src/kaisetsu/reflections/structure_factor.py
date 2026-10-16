@@ -79,7 +79,7 @@ def species_scattering_factors(
     return out
 
 
-def structure_factors(
+def structure_factor_parts(
     structure: Structure,
     hkl: npt.ArrayLike,
     radiation: Radiation,
@@ -90,10 +90,15 @@ def structure_factors(
     f0_override: Mapping[str, npt.ArrayLike] | None = None,
     override: Mapping[str, npt.ArrayLike] | None = None,
     chunk: int = 2048,
-) -> ComplexArray:
-    """反射 hkl (N, 3) の構造因子 F (N,) を返す。
+) -> tuple[ComplexArray, ComplexArray]:
+    """構造因子を散乱因子の実部と虚部の寄与 (A, B) に分けて返す。F = A + iB。
 
-    X 線では電子単位、中性子では fm 単位。
+        A(h) = Σ_j occ_j Re(f_j) T_j exp(2πi h·x_j)
+        B(h) = Σ_j occ_j Im(f_j) T_j exp(2πi h·x_j)
+
+    X 線では Re f = f0 + f'、Im f = f''(中性子では散乱長の実部・虚部)。occ、T は実数なので
+    F(-h) = conj(A) + i conj(B) となり、Friedel 対の |F|² の平均は |A|² + |B|² になる
+    (`powder_structure_factor_squared`)。
     """
     h = np.atleast_2d(np.asarray(hkl, dtype=np.int64))
     ex = expanded if expanded is not None else structure.expand()
@@ -110,7 +115,8 @@ def structure_factors(
     )
 
     n = len(h)
-    out = np.empty(n, dtype=np.complex128)
+    a = np.empty(n, dtype=np.complex128)
+    b = np.empty(n, dtype=np.complex128)
     aniso = ex.is_anisotropic
     for start in range(0, n, chunk):
         sl = slice(start, min(start + chunk, n))
@@ -123,5 +129,77 @@ def structure_factors(
         else:
             t = t_iso
         phase = np.exp(2j * math.pi * (hh @ ex.positions.T))  # (n, Na)
-        out[sl] = np.sum(ex.occupancy[None, :] * f_atom * t * phase, axis=1)
-    return out
+        w = ex.occupancy[None, :] * t * phase
+        a[sl] = np.sum(f_atom.real * w, axis=1)
+        b[sl] = np.sum(f_atom.imag * w, axis=1)
+    return a, b
+
+
+def structure_factors(
+    structure: Structure,
+    hkl: npt.ArrayLike,
+    radiation: Radiation,
+    *,
+    expanded: ExpandedAtoms | None = None,
+    xray_table: TableName = "it1992",
+    anomalous: Mapping[str, complex] | None = None,
+    f0_override: Mapping[str, npt.ArrayLike] | None = None,
+    override: Mapping[str, npt.ArrayLike] | None = None,
+    chunk: int = 2048,
+) -> ComplexArray:
+    """反射 hkl (N, 3) の構造因子 F (N,) を返す。
+
+    X 線では電子単位、中性子では fm 単位。
+    """
+    a, b = structure_factor_parts(
+        structure,
+        hkl,
+        radiation,
+        expanded=expanded,
+        xray_table=xray_table,
+        anomalous=anomalous,
+        f0_override=f0_override,
+        override=override,
+        chunk=chunk,
+    )
+    return np.asarray(a + 1j * b, dtype=np.complex128)
+
+
+def powder_structure_factor_squared(
+    structure: Structure,
+    hkl: npt.ArrayLike,
+    radiation: Radiation,
+    *,
+    expanded: ExpandedAtoms | None = None,
+    xray_table: TableName = "it1992",
+    anomalous: Mapping[str, complex] | None = None,
+    f0_override: Mapping[str, npt.ArrayLike] | None = None,
+    override: Mapping[str, npt.ArrayLike] | None = None,
+    chunk: int = 2048,
+) -> FloatArray:
+    """粉末の反射強度に使う |F|²: Friedel 対 (hkl) と (-h-k-l) の |F|² の平均。
+
+    粉末では hkl と -h-k-l が同じ 2θ に重なり、ラウエ群の多重度は両方を数える。
+    非中心対称構造では異常分散(f'')のため |F(h)|² ≠ |F(-h)|²(Friedel 則の破れ)なので、
+    代表 1 本の |F|² に多重度を掛けると代表の選び方で強度が変わる。平均は
+
+        (|F(h)|² + |F(-h)|²) / 2 = |A|² + |B|²
+
+    (A、B は `structure_factor_parts`)。中心対称構造では A、B の位相が揃うので |F|² と同じ。
+    出典: Giacovazzo『Fundamentals of Crystallography』3.5(異常分散と Friedel 則)、
+    IUCr Online Dictionary "Friedel's law"。GSAS-II 5.7.4 の粉末の分岐は代表 1 本の |F|² を
+    使う(GSASIIstrMath.py の StructureFactor2。平均形はコメントアウトされている)ので、
+    非中心対称の X 線では GSAS-II と 1% 程度ずれることがある(レビュー 2026-10-17 #2)。
+    """
+    a, b = structure_factor_parts(
+        structure,
+        hkl,
+        radiation,
+        expanded=expanded,
+        xray_table=xray_table,
+        anomalous=anomalous,
+        f0_override=f0_override,
+        override=override,
+        chunk=chunk,
+    )
+    return np.asarray(np.abs(a) ** 2 + np.abs(b) ** 2, dtype=np.float64)
