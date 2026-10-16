@@ -55,7 +55,14 @@ def read_structure(path: str | Path, block: str | None = None) -> Structure:
             aniso = np.array(
                 [s.aniso.u11, s.aniso.u22, s.aniso.u33, s.aniso.u12, s.aniso.u13, s.aniso.u23]
             )
-        occ = float(s.occ) if s.occ > 0 else 1.0
+        # gemmi は占有率の列が無いときと ? や . のとき 1.0 を返し、明示された 0 は 0.0、
+        # 負の値はそのまま返す。0 は「無いサイト」として正当な値なので保つ(レビュー 2026-10-17 #4)
+        occ = float(s.occ) if math.isfinite(s.occ) else 1.0
+        if occ < 0.0:
+            raise ValueError(
+                f"CIF {path.name}: サイト {s.label} の占有率が負です({occ:g})。"
+                "0 以上 1 以下に直してください"
+            )
         sites.append(
             AtomSite(
                 label=s.label,
