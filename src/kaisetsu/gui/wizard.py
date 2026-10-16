@@ -1,4 +1,4 @@
-"""はじめての精密化ウィザード: データ → 相 → 装置 → 実行。"""
+"""はじめての精密化ウィザード: データ → 相 → 装置 → 実行(Rietveld か Le Bail)。"""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QVBoxLayout,
     QWizard,
@@ -124,6 +126,22 @@ class RunPage(QWizardPage):
             "「完了」を押すと、推奨の順序で精密化を実行します(途中経過はログに出ます)。"
         )
         layout = QVBoxLayout(self)
+        mode = QGroupBox("解析の種類")
+        vm = QVBoxLayout(mode)
+        self.rb_rietveld = QRadioButton(
+            "Rietveld: 構造モデル(CIF の原子座標)から強度を計算する。原子座標や U も動かせる"
+        )
+        self.rb_lebail = QRadioButton(
+            "Le Bail: 構造を使わず各反射の強度を観測に合わせる(格子定数とピーク形だけ決める)"
+        )
+        self.rb_rietveld.setChecked(True)
+        self.rb_lebail.setToolTip(
+            "構造が分からない、合っているか怪しい、CIF に原子座標が無い、まず格子定数とプロファイルだけ"
+            "決めたい、というときに。CIF からは空間群と格子定数の初期値だけを使います"
+        )
+        vm.addWidget(self.rb_rietveld)
+        vm.addWidget(self.rb_lebail)
+        layout.addWidget(mode)
         self.cell_scan = QCheckBox("格子定数の初期値を ±1% 振って、ピークが重なる谷から始める")
         self.cell_scan.setChecked(True)
         self.cell_scan.setToolTip(
@@ -180,12 +198,36 @@ class RunPage(QWizardPage):
         row.addWidget(self.n_background)
         row.addStretch(1)
         layout.addLayout(row)
-        layout.addWidget(QLabel(
+        self.steps = QLabel(self._steps_text(False))
+        self.steps.setWordWrap(True)
+        layout.addWidget(self.steps)
+        layout.addStretch(1)
+        self.rb_lebail.toggled.connect(self._on_mode_changed)
+
+    @staticmethod
+    def _steps_text(le_bail: bool) -> str:
+        if le_bail:
+            return (
+                "手順: スケールと背景 → 格子定数とピーク位置 → ピーク幅 → (Kα2 なしを試す)。"
+                "各段階で反射の強度を観測に合わせ直します(構造は使いません)\n"
+                "Rwp が大きく変わらなくなれば収束です。格子定数とピーク幅はパラメータ表と"
+                "「結果の要約」で確認できます。"
+            )
+        return (
             "手順: スケールと背景 → 格子定数とピーク位置 → ピーク幅 → (Kα2 なしを試す) → "
             "原子座標 → 変位パラメータ\n"
             "Rwp が大きく変わらなくなれば収束です。結果はパラメータ表と「結果の要約」で確認できます。"
-        ))  # fmt: skip
-        layout.addStretch(1)
+        )
+
+    def is_le_bail(self) -> bool:
+        """「解析の種類」が Le Bail か。"""
+        return self.rb_lebail.isChecked()
+
+    def _on_mode_changed(self, le_bail: bool) -> None:
+        """Le Bail では構造パラメータの段階と Le Bail 並走に意味が無いので選べなくする。"""
+        for w in (self.coords, self.adp, self.light, self.lebail):
+            w.setEnabled(not le_bail)
+        self.steps.setText(self._steps_text(le_bail))
 
 
 class StartWizard(QWizard):
@@ -222,26 +264,35 @@ class StartWizard(QWizard):
         # Le Bail 並走は精密化前の装置から始める(本体の精密化が inst を書き換えるので複製)
         inst_copy, smp_copy = copy.deepcopy(inst), copy.deepcopy(smp)
         main = self.main
+        le_bail = self.page_run.is_le_bail()
         main.load_data_file(
             self.page_data.edit.text(), inst, smp, n_background=self.page_run.n_background.value()
         )
-        main.add_phase_file(
-            self.page_phase.edit.text(), name=_phase_name(self.page_phase.edit.text())
-        )
+        name = _phase_name(self.page_phase.edit.text())
+        main.add_phase_file(self.page_phase.edit.text(), name=name)
+        if le_bail and name in main.project.phases:
+            # 相を Le Bail にして抽出強度の初期値を観測に合わせる(相の設定ダイアログと同じ)。
+            # 標準の手順は Le Bail 相の構造パラメータを対象外にし、各段階で強度を更新する
+            ph = main.project.phases[name]
+            main.project.start_le_bail(name, from_structure=bool(ph.structure.sites))
+            msg = f"ウィザード: 相 {name} を Le Bail にしました(構造は使わず、強度は観測から抽出)"
+            main.project.log.append(msg)
+            main.log(msg)
+            main._refresh_all()
         recipe = standard_recipe(
             "*",
             "h*",
-            coordinates=self.page_run.coords.isChecked(),
-            adp=self.page_run.adp.isChecked(),
+            coordinates=not le_bail and self.page_run.coords.isChecked(),
+            adp=not le_bail and self.page_run.adp.isChecked(),
             sample_displacement=self.page_run.disp.isChecked(),
             roughness=self.page_run.rough.isChecked(),
             try_no_kalpha2=self.page_run.ka2.isChecked(),
-            light_atom_uiso=self.page_run.light.isChecked(),
+            light_atom_uiso=not le_bail and self.page_run.light.isChecked(),
             humps=self.page_run.humps.isChecked(),
             cell_scan=self.page_run.cell_scan.isChecked(),
         )
         companion = None
-        if self.page_run.lebail.isChecked():
+        if not le_bail and self.page_run.lebail.isChecked():
             companion = le_bail_companion(
                 main,
                 self.page_data.edit.text(),

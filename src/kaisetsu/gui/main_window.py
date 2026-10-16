@@ -316,14 +316,21 @@ class MainWindow(QMainWindow):
             m_data, tr("データ範囲と除外領域(&E)…"), self.edit_range, "Ctrl+E"
         )
         self.act_phase = self._add_action(
-            m_data, tr("相の設定(強度の扱い・選択配向軸・異方性)…"), self.edit_phase
+            m_data,
+            tr("相の設定(Rietveld / Le Bail / Pawley、選択配向軸、異方性)…"),
+            self.edit_phase,
+        )
+        self.act_phase.setToolTip(
+            "相ごとに強度の扱い(構造モデルから計算する Rietveld、構造を使わない Le Bail / Pawley)、"
+            "選択配向の軸、異方性変位パラメータを設定します"
         )
         self.act_lattice = self._add_action(
-            m_data, tr("Le Bail で格子定数だけ(放射光マイクロ XRD 向け)…"), self.open_lattice_dialog
+            m_data, tr("Le Bail で自動解析(格子定数とプロファイルだけ)…"), self.open_lattice_dialog
         )
         self.act_lattice.setToolTip(
-            "データと CIF を入れるだけで、強度を使わない Le Bail 法で格子定数と esd を出します。"
-            "複数ファイルの一括処理と CSV 保存もできます"
+            "データと CIF を入れるだけで、構造を使わない Le Bail 法で格子定数と esd、ピーク幅を出します。"
+            "原子座標が無い CIF でも使えます。複数ファイルの一括処理と CSV 保存もできます"
+            "(放射光マイクロ XRD のマッピングにも)"
         )
         m_data.addSeparator()
         self.act_load_pdf = self._add_action(
@@ -552,8 +559,9 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.log(f"計算に失敗しました: {exc}")
                 return
-            ticks = {name: res.peaks[k].two_theta for k, name in enumerate(h.contributions)}
-            self.plot.set_result(res, ticks, h.mask())
+            tables = {name: res.peaks[k] for k, name in enumerate(h.contributions)}
+            ticks = {name: t.two_theta for name, t in tables.items()}
+            self.plot.set_result(res, ticks, h.mask(), peak_tables=tables)
             rf = self.project.rfactors()
             self.status_label.setText(f"h{i} {h.name}: {rf[h.name]}")
 
@@ -1455,7 +1463,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def open_lattice_dialog(self) -> None:
-        """Le Bail で格子定数だけを出すダイアログ(放射光マイクロ XRD 向け)。"""
+        """Le Bail で自動解析するダイアログ(格子定数とプロファイルだけ。複数データ可)。"""
         from kaisetsu.gui.lattice_dialog import LatticeDialog
 
         dlg = LatticeDialog(self.project, self, main=self)

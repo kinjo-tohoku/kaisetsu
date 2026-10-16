@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from kaisetsu.pattern.calculator import PatternResult
+from kaisetsu.pattern.calculator import PatternResult, PeakTable
 from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pdf.calculator import PDFResult
 from kaisetsu.pdf.data import PDFData
@@ -83,6 +84,18 @@ def export_plot_image(plot: pg.PlotWidget, path: str | Path, width: int = 1600) 
     exporter.parameters()["width"] = width
     exporter.export(str(p))
     return p
+
+
+@dataclass(frozen=True)
+class ReflectionHit:
+    """カーソルに近い反射(図のラベル用)。position は 2θ [deg] か TOF [μs]。"""
+
+    position: float
+    phase: str
+    hkl: tuple[int, int, int]
+    d: float
+    rel_intensity: float  # 相の最強反射を 100 とした積分強度 [%]
+    fwhm: float
 
 
 class _PatternViewBox(pg.ViewBox):
@@ -185,6 +198,9 @@ class PatternPlot(QWidget):
         self._diff = self.plot.plot([], [], pen=pg.mkPen("b", width=1), name="差")
         self._ticks: list[pg.PlotDataItem] = []
         self._wavelength: float | None = None
+        #: カーソルに近い反射を探すための表(位置で昇順)
+        self._refl_pos = np.zeros(0)
+        self._refl_rows: list[ReflectionHit] = []
         self._label = pg.TextItem(anchor=(0, 1), color="k")
         self.plot.addItem(self._label, ignoreBounds=True)
         self._proxy = pg.SignalProxy(
@@ -228,17 +244,25 @@ class PatternPlot(QWidget):
         for t in self._ticks:
             self.plot.removeItem(t)
         self._ticks.clear()
+        self._refl_pos = np.zeros(0)
+        self._refl_rows = []
 
     def set_result(
         self,
         result: PatternResult,
         tick_positions: dict[str, np.ndarray],
         mask: np.ndarray | None = None,
+        peak_tables: dict[str, PeakTable] | None = None,
     ) -> None:
-        """計算結果を描く。tick_positions は相名 → 2θ 配列。"""
+        """計算結果を描く。tick_positions は相名 → 2θ 配列。
+
+        peak_tables(相名 → PeakTable)を渡すと、カーソルに近い反射の hkl・d・相対強度を
+        左上のラベルに出す(選択配向や第二相の確認用)。
+        """
         for t in self._ticks:
             self.plot.removeItem(t)
         self._ticks.clear()
+        self._set_reflections(peak_tables or {})
         self._ycalc = result.y_calc
         self._calc.setData(result.x, result.y_calc)
         self._bkg.setData(result.x, result.y_background)
@@ -260,6 +284,57 @@ class PatternPlot(QWidget):
             self._ticks.append(item)
 
     # ------------------------------------------------------------------
+    # カーソルに近い反射
+    # ------------------------------------------------------------------
+    def _set_reflections(self, tables: dict[str, PeakTable]) -> None:
+        rows: list[ReflectionHit] = []
+        for name, t in tables.items():
+            pos = np.asarray(t.two_theta, dtype=np.float64)
+            inten = t.intensity_total if len(t.intensity_total) == len(pos) else t.intensity
+            inten = np.asarray(inten, dtype=np.float64)
+            top = float(np.nanmax(inten)) if inten.size and np.nanmax(inten) > 0 else 1.0
+            for j in range(len(pos)):
+                if not np.isfinite(pos[j]):
+                    continue
+                h, k, l = (int(v) for v in t.hkl[j])
+                rows.append(
+                    ReflectionHit(
+                        position=float(pos[j]),
+                        phase=name,
+                        hkl=(h, k, l),
+                        d=float(t.d[j]),
+                        rel_intensity=100.0 * float(inten[j]) / top,
+                        fwhm=float(t.fwhm[j]) if j < len(t.fwhm) else 0.0,
+                    )
+                )
+        rows.sort(key=lambda r: r.position)
+        self._refl_rows = rows
+        self._refl_pos = np.array([r.position for r in rows], dtype=np.float64)
+
+    def reflections_near(self, x: float, tol: float, limit: int = 4) -> list[ReflectionHit]:
+        """x から tol 以内(反射の FWHM の 0.6 倍以内でも可)の反射を近い順に最大 limit 本。"""
+        if not self._refl_rows:
+            return []
+        span = max(tol, 0.6 * max((r.fwhm for r in self._refl_rows), default=0.0))
+        lo = int(np.searchsorted(self._refl_pos, x - span))
+        hi = int(np.searchsorted(self._refl_pos, x + span, side="right"))
+        hits = [r for r in self._refl_rows[lo:hi] if abs(r.position - x) <= max(tol, 0.6 * r.fwhm)]
+        hits.sort(key=lambda r: abs(r.position - x))
+        return hits[:limit]
+
+    def reflection_text(self, x: float, tol: float) -> str:
+        """ラベルに出す反射の文(無ければ空)。相が 2 つ以上あれば相名も付ける。"""
+        hits = self.reflections_near(x, tol)
+        if not hits:
+            return ""
+        many = len({r.phase for r in self._refl_rows}) > 1
+        parts = []
+        for r in hits:
+            h, k, l = r.hkl
+            head = f"{r.phase} " if many else ""
+            parts.append(f"{head}({h} {k} {l}) d={r.d:.4f} Å I={r.rel_intensity:.0f}%")
+        return "反射: " + " | ".join(parts)
+
     def _on_mouse(self, evt: tuple) -> None:  # type: ignore[type-arg]
         pos = evt[0]
         vb = self.plot.getPlotItem().vb
@@ -279,6 +354,11 @@ class PatternPlot(QWidget):
             text += f"  観測 = {self._y[i]:.0f}"
             if self._ycalc is not None and i < len(self._ycalc):
                 text += f"  計算 = {self._ycalc[i]:.0f}"
+        # 4 ピクセル以内(か反射の半値幅の 0.6 倍以内)の反射
+        tol = 4.0 * float(vb.viewPixelSize()[0])
+        refl = self.reflection_text(x, tol)
+        if refl:
+            text += "\n" + refl
         self._label.setText(text)
         rng = vb.viewRange()
         self._label.setPos(rng[0][0], rng[1][1])

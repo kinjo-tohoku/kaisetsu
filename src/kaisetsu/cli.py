@@ -308,7 +308,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_options(p)
     p.set_defaults(func=cmd_calc)
 
-    p = sub.add_parser("lattice", help="Le Bail で格子定数だけを速く出す(複数データ可)")
+    p = sub.add_parser(
+        "lattice", help="Le Bail で自動解析(格子定数とプロファイルだけ。複数データ可)"
+    )
     p.add_argument("data", nargs="+", help="回折データ(複数可)")
     p.add_argument("--cif", action="append", required=True, help="相の CIF(複数回指定可)")
     p.add_argument("--inst", help="装置テンプレート(.json)か GSAS-II の .instprm / GSAS の .prm")

@@ -82,7 +82,7 @@ class InstrumentDialog(QDialog):
         self.btn_template_save = QPushButton("テンプレートに保存…")
         self.btn_template_save.setToolTip(
             "いまの装置と試料形状をファイルに保存します。標準試料で校正した値を、"
-            "別のプロジェクトや「Le Bail で格子定数だけ」で使い回せます"
+            "別のプロジェクトや「Le Bail で自動解析」で使い回せます"
         )
         self.btn_template_save.clicked.connect(self.save_template)
         top.addWidget(self.btn_template_save)
