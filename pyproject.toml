@@ -1,6 +1,6 @@
 [project]
 name = "kaisetsu"
-version = "0.1.9"
+version = "0.1.10"
 description = "初心者向け・日本語対応の粉末回折解析プログラム(Rietveld / PDF / MEM)"
 readme = "README.md"
 requires-python = ">=3.12"
