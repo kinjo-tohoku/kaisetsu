@@ -490,6 +490,13 @@ def run_mem(
     for outer in range(max_outer):
         used = 0
         budget = max_inner if near_target else max(max_inner // 5, 100)
+        # 目標の近くでは、L-BFGS が反復上限で止まっても C が落ち着くまで(上限 hard_cap)続ける。
+        # 途中で打ち切った C は λ について単調でなく、割線法・二分法が迷走して C = 0.5 や 1.08 に
+        # 張り付いたまま探索上限に達する(予算を 400 に減らした実験と macOS の CI、2026-10-17)
+        hard_cap = 8 * max_inner if near_target else budget
+        chunk = max(budget // 2, 100)
+        c_prev: float | None = None
+        abnormal = 0
         while True:
             res: Any = minimize(
                 objective,
@@ -499,17 +506,31 @@ def run_mem(
                 method="L-BFGS-B",
                 bounds=bounds,
                 options={
-                    "maxiter": max(budget - used, 50),
+                    "maxiter": max(min(chunk, hard_cap - used), 50),
                     "ftol": 1e-13,
                     "gtol": 1e-8,
                     "maxcor": 15,
                 },
             )
             x = np.asarray(res.x, dtype=np.float64)
-            used += int(res.nit)
-            # status 1 = 反復上限。収束(0)か予算到達まで温かい初期値で続ける
-            if int(res.status) != 1 or used >= budget:
+            used += max(int(res.nit), 1)
+            status = int(res.status)
+            if status == 0 or used >= hard_cap:
+                break  # 収束か上限
+            if status == 2:
+                # 線形探索の失敗(丸めの違いで起きる)。記憶を捨てて同じ点から数回やり直す
+                abnormal += 1
+                if abnormal > 3:
+                    break
+                continue
+            # status 1 = 反復上限。温かい初期値で続ける
+            c_now = model.chi2(model.f_calc_eq(x if two else to_m(x)))
+            if near_target:
+                if c_prev is not None and abs(c_now - c_prev) <= 0.25 * chi2_tol * target_chi2:
+                    break  # C が落ち着いた
+            elif used >= budget:
                 break
+            c_prev = c_now
         n_iter += used
         m_eff = x if two else to_m(x)
         chi2 = model.chi2(model.f_calc_eq(m_eff))
