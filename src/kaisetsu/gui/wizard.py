@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -34,6 +35,9 @@ from kaisetsu.refine.recipe import standard_recipe
 
 if TYPE_CHECKING:
     from kaisetsu.gui.main_window import MainWindow
+
+#: 標準手順のピーク位置の補正(position)→ Le Bail 並走 `refine_lattice` の position
+LATTICE_POSITION = {"auto": "auto", "zero": "zero", "displacement": "distance", "both": "both"}
 
 
 class _FilePage(QWizardPage):
@@ -158,8 +162,27 @@ class RunPage(QWizardPage):
         self.coords.setChecked(True)
         self.adp = QCheckBox("変位パラメータ(U)も動かす")
         self.adp.setChecked(True)
-        self.disp = QCheckBox(
-            "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
+        # ピーク位置の補正(standard_recipe の position)。既定は自動で、幅が合ったあとに
+        # ゼロ点のみ / 試料変位のみ / 両方を試して χ² で選ぶ
+        self.disp = QComboBox()
+        for label, mode in (
+            (
+                "ピーク位置の補正: 自動(ゼロ点のみ / 試料変位のみ / 両方を試して良い方を採る)",
+                "auto",
+            ),
+            ("ピーク位置の補正: ゼロ点だけ", "zero"),
+            (
+                "ピーク位置の補正: 試料変位だけ(平板: 高さずれ、キャピラリ: x, y ずれ)",
+                "displacement",
+            ),
+            ("ピーク位置の補正: ゼロ点と試料変位の両方", "both"),
+        ):
+            self.disp.addItem(label, mode)
+        self.disp.setToolTip(
+            "平板(Bragg-Brentano)の主な系統誤差は試料高さのずれで、ゼロ点だけを動かすと"
+            "格子定数がそのずれを吸います(高さ 0.15 mm で −200 ppm)。自動では幅が合ったあとに"
+            "3 通りを試し、χ² の差が小さければ変数の少ない方を採ります。校正済みのゼロ点がある"
+            "ときは「試料変位だけ」にすると、その値を固定したまま使えます"
         )
         self.rough = QCheckBox("表面粗さも動かす(重い元素など吸収の強い試料。Bragg-Brentano)")
         self.ka2 = QCheckBox("Kα2 なしも試して良い方を採る(単色化されたデータかどうか)")
@@ -302,7 +325,7 @@ class StartWizard(QWizard):
             "h*",
             coordinates=not le_bail and self.page_run.coords.isChecked(),
             adp=not le_bail and self.page_run.adp.isChecked(),
-            sample_displacement=self.page_run.disp.isChecked(),
+            position=self.page_run.disp.currentData(),
             roughness=self.page_run.rough.isChecked(),
             try_no_kalpha2=self.page_run.ka2.isChecked(),
             light_atom_uiso=not le_bail and self.page_run.light.isChecked(),
@@ -318,7 +341,7 @@ class StartWizard(QWizard):
                 inst_copy,
                 smp_copy,
                 n_background=self.page_run.n_background.value(),
-                position="distance" if self.page_run.disp.isChecked() else "zero",
+                position=LATTICE_POSITION[self.page_run.disp.currentData()],
             )
         super().accept()
         main.run_recipe(recipe, companion=companion)

@@ -6,7 +6,9 @@ J. Appl. Cryst. 32, 36-50 (1999) の推奨順序に準拠):
     0. 格子定数の初期値を ±1% 振って、計算ピークが観測ピークに重なる谷から始める
        (`kaisetsu.refine.cell_scan`。初期値が谷の外だと最小二乗は格子定数を動かせない)
     1. スケール因子とバックグラウンド
-    2. 格子定数とゼロ点(または試料変位)
+    2. 格子定数とピーク位置の補正(既定では「ゼロ点のみ / 試料変位のみ / 両方」を試して
+       χ² で選ぶ。平板の主な系統誤差は試料高さずれ(Δ2θ ∝ cos θ)で、ゼロ点(定数)だけでは
+       格子定数がそのずれを吸う: 高さ 0.15 mm のずれで a が −210 ppm、χ² 1.27 では気付けない)
     3. ピーク幅 W → U, V → ローレンツ成分 X, Y → 非対称
        (TOF では sig1 と立ち上がり α・減衰 β → sig0, sig2, X, Y)
     4. 原子座標
@@ -25,19 +27,30 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import numpy.typing as npt
 
 from kaisetsu.errors import PatternSizeError
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind
 from kaisetsu.refine.cell_scan import scan_all_cells
+from kaisetsu.refine.lsq import position_correlations
 from kaisetsu.refine.residual import find_residual_features
 
 if TYPE_CHECKING:
     from kaisetsu.refine.lsq import FitResult
     from kaisetsu.refine.parameters import Parameter
     from kaisetsu.refine.project import HistogramEntry, Project
+
+FloatArray = npt.NDArray[np.float64]
+
+#: ピーク位置の補正の選び方: "auto"(ゼロ点のみ / 試料変位のみ / 両方を試して χ² で選ぶ)、
+#: "zero"(ゼロ点だけ)、"displacement"(試料変位だけ。平板は高さずれ、キャピラリは x, y ずれ、
+#: TOF はゼロ点)、"both"(ゼロ点と試料変位)
+PositionChoice = Literal["auto", "zero", "displacement", "both"]
+#: ピーク位置の補正のパラメータ名の末尾(ヒストグラム接頭辞に続く部分)
+POSITION_TAILS = ("inst:zero", "sample:displacement", "sample:disp_x", "sample:disp_y")
 
 
 @dataclass
@@ -57,8 +70,22 @@ class Step:
     after: Callable[[Project, Step], tuple[list[str], bool]] | None = None
     #: "refine"(普通の段階)、"kalpha2_trial"(Kα2 なしで合うか試して良い方を採る)、
     #: "hump_trial"(残差の広いこぶを背景のハンプにして合うか試す)、
+    #: "position_trial"(ピーク位置の補正をゼロ点のみ / 試料変位のみ / 両方で試して採る)、
     #: "cell_scan"(格子定数の初期値を振って谷を見つける。精密化はしない)
     kind: str = "refine"
+
+
+@dataclass
+class _PositionTrial:
+    """ピーク位置の補正の候補 1 つの試行結果(`Recipe._position_trial`)。"""
+
+    label: str
+    names: list[str]
+    fit: FitResult
+    chi2: float
+    rwp: float
+    values: dict[str, float]
+    tables: dict[str, dict[int, dict[tuple[int, int, int], float]]]
 
 
 @dataclass
@@ -68,6 +95,9 @@ class Recipe:
     #: 真なら、段階の後でガウス幅 Γ_G²(TOF では σ²)が負(境界)になっていたら
     #: U → V → W の順(TOF では sig0, sig2 → sig1)に固定してやり直す(3 回まで)
     guard_widths: bool = True
+    #: `run` の開始時のピーク位置の補正(ゼロ点・試料変位)の値。位置の試行で動かさない候補は
+    #: この値(校正済みのゼロ点など)に戻す
+    _position_start: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
     def add(self, name: str, patterns: Iterable[str], max_cycles: int = 15, **kw: object) -> Recipe:
         self.steps.append(Step(name, tuple(patterns), max_cycles, **kw))  # type: ignore[arg-type]
@@ -86,6 +116,11 @@ class Recipe:
 
         if reset:
             project.fix_all()
+        self._position_start = {
+            p.name: p.value
+            for p in project.params
+            if any(p.name.endswith(f":{tail}") for tail in POSITION_TAILS)
+        }
         lb_cycles = 3 if _has_le_bail(project) else 0
         lb_initialized = False
         results: list[FitResult] = []
@@ -98,8 +133,12 @@ class Recipe:
             if lb_cycles and not lb_initialized:
                 project.le_bail_update(max_iter=LE_BAIL_UPDATE_MAX, weighted=False)
                 lb_initialized = True
-            if step.kind in ("kalpha2_trial", "hump_trial"):
-                trial_fn = self._kalpha2_trial if step.kind == "kalpha2_trial" else self._hump_trial
+            if step.kind in ("kalpha2_trial", "hump_trial", "position_trial"):
+                trial_fn = {
+                    "kalpha2_trial": self._kalpha2_trial,
+                    "hump_trial": self._hump_trial,
+                    "position_trial": self._position_trial,
+                }[step.kind]
                 trial = trial_fn(project, step, iteration_progress)
                 if trial is not None:
                     results.append(trial)
@@ -398,9 +437,237 @@ class Recipe:
         )
         return None
 
+    def _position_trial(
+        self,
+        project: Project,
+        step: Step,
+        iteration_progress: Callable[[int, float], None] | None,
+    ) -> FitResult | None:
+        """ピーク位置の補正を「ゼロ点のみ / 試料変位のみ / 両方」で試し、χ² で選んで採る。
+
+        平板(Bragg-Brentano)の主な系統誤差は試料高さのずれ(Δ2θ ∝ cos θ)で、ゼロ点(定数)
+        だけを動かすと格子定数がそのずれを吸う(CeO2 の合成データで高さ 0.15 mm のずれ → a が
+        −213 ppm、esd の 575 倍。χ² は 1.27 で気付けない)。逆にゼロ点のずれを変位で吸わせても
+        同じ程度ずれる(ゼロ点 0.05° → −140 ppm)ので、どちらか一方を決め打ちせず、今の自由
+        パラメータ(格子定数・幅・背景・スケール)のまま同じ値から 3 通り精密化して選ぶ:
+
+        - 変数の数が同じ候補(平板のゼロ点と高さずれ)は χ² の小さい方
+        - 変数が多い候補(両方、キャピラリの x, y ずれ)は、χ² の相対改善が F 検定の閾値
+          POSITION_F_CRIT × (増えた変数の数) / 自由度 以上のときだけ採る(Hamilton の R 因子比
+          検定と同じ。差が小さければ単純な方)
+
+        ピーク幅が合う前(格子定数の段階)は幅のずれが χ² を支配して候補の差が埋もれるので、
+        Kα2 の試行と同じく幅の段階の後に置く。候補で動かさない補正はレシピ開始時の値
+        (校正済みのゼロ点など)に戻す。両方を採ったときは、ゼロ点と変位の相関が |ρ| ≥ 0.95 なら
+        2θ 範囲が狭くて区別できていないので、ログと `Project.diagnostics()` で知らせる。候補は
+        ヒストグラムの種類で絞る(`_shift_matches_geometry`: 平板は高さずれ、Debye-Scherrer は
+        x, y ずれ、TOF はゼロ点)。試す候補が 1 つしか無ければ(TOF だけ、など)何もしない。
+
+        出典: W. C. Hamilton, Acta Cryst. 18, 502-510 (1965)(R 因子比の有意性検定)
+        """
+        prefix = f"レシピ '{self.name}' 段階 '{step.name}'"
+        cell: list[str] = []
+        pos: list[Parameter] = []
+        for pat in step.patterns:
+            for p in project.params.select(pat):
+                if ":cell:" in pat:
+                    if p.name not in cell:
+                        cell.append(p.name)
+                elif p not in pos:
+                    pos.append(p)
+        all_pos = [p.name for p in pos]
+        zero = [p.name for p in pos if p.name.endswith(":inst:zero")]
+        disp = [p.name for p in pos if _shift_matches_geometry(project, p)]
+        both = zero + [n for n in disp if n not in zero]
+        candidates: list[tuple[str, list[str]]] = []
+        seen: list[frozenset[str]] = []
+        for label, names in (("ゼロ点のみ", zero), ("試料変位のみ", disp), ("両方", both)):
+            key = frozenset(names)
+            if names and key not in seen:
+                seen.append(key)
+                candidates.append((label, names))
+        if len(candidates) <= 1:
+            # 試す候補が無い(TOF だけ、位置のパラメータが無い)。前の段階で動かした補正のまま進む
+            project.log.append(f"{prefix}: 試す候補が無い(ゼロ点だけ)ので飛ばします")
+            return None
+        lb_cycles = 3 if _has_le_bail(project) else 0
+        if cell:
+            project.vary(*cell)
+        start = project.snapshot()
+        tables0 = _copy_f2_tables(project)
+        initial = {n: self._position_start.get(n, start[n]) for n in all_pos}
+        tried: list[_PositionTrial] = []
+        last_exc: Exception | None = None
+        for label, names in candidates:
+            _restore_trial_state(project, start, tables0)
+            # 動かさない補正は開始時の値(校正済みのゼロ点、0 の変位)に戻し、動かす補正は今の
+            # ピーク位置を最もよく再現する値から始める(前の段階でゼロ点が吸ったずれを変位に
+            # 引き継ぐ。0 から始めると幅の合った鋭いピークでは別の谷に落ちることがある)
+            project.restore({n: initial[n] for n in all_pos if n not in names})
+            project.restore(_equivalent_position_start(project, names, initial, start))
+            for n in all_pos:
+                project.fix(n)
+            project.vary(*names)
+            try:
+                res = project.refine(
+                    max_cycles=step.max_cycles,
+                    progress=iteration_progress,
+                    le_bail_cycles=lb_cycles,
+                )
+                for _again in range(POSITION_TRIAL_CONTINUE):
+                    # 候補の比較は収束した χ² で行う。上限で止まったら続きから回す(回数は有限)
+                    if not res.hit_evaluation_limit:
+                        break
+                    res = project.refine(
+                        max_cycles=step.max_cycles,
+                        progress=iteration_progress,
+                        le_bail_cycles=lb_cycles,
+                    )
+            except (PatternSizeError, ValueError, np.linalg.LinAlgError) as exc:
+                project.log.append(f"{prefix}: {label}の試行でエラー({exc})")
+                last_exc = exc
+                continue
+            rf = project.rfactors()["total"]
+            tried.append(
+                _PositionTrial(
+                    label=label,
+                    names=list(names),
+                    fit=res,
+                    chi2=rf.chi2,
+                    rwp=rf.rwp,
+                    values=project.snapshot(),
+                    tables=_copy_f2_tables(project),
+                )
+            )
+        if not tried:
+            _restore_trial_state(project, start, tables0)
+            assert last_exc is not None
+            raise last_exc
+        best = tried[0]
+        for c in tried[1:]:
+            extra = len(c.names) - len(best.names)
+            if extra <= 0:
+                if c.chi2 < best.chi2:
+                    best = c
+                continue
+            dof = max(c.fit.n_data - c.fit.n_params, 1)
+            gain = (best.chi2 - c.chi2) / max(c.chi2, 1e-300)
+            if gain >= POSITION_F_CRIT * extra / dof:
+                best = c
+        _restore_trial_state(project, best.values, best.tables)
+        for n in all_pos:
+            project.fix(n)
+        project.vary(*best.names)
+        project.params.set_esd(best.fit.esd)
+        project.last_fit = best.fit
+        shown = "、".join(
+            f"{t.label} χ² = {t.chi2:.4f}(Rwp {100 * t.rwp:.2f}%"
+            + ("、未収束" if not t.fit.success else "")
+            + ")"
+            for t in tried
+        )
+        project.log.append(
+            f"{prefix}: ピーク位置の補正は {best.label}({', '.join(best.names)})を採用。"
+            f"候補: {shown}。差が小さいときは変数の少ない方を採ります"
+        )
+        for z, d, rho in position_correlations(best.fit):
+            project.log.append(
+                f"{prefix}: {z} と {d} の相関が {rho:+.3f} と強く、2θ 範囲が狭いか反射が少ないので"
+                "両方は区別できていません。格子定数の絶対値が要るなら、どちらかを標準試料で"
+                "校正した値に固定してください"
+            )
+        return best.fit
+
+
+def _copy_f2_tables(
+    project: Project,
+) -> dict[str, dict[int, dict[tuple[int, int, int], float]]]:
+    """Le Bail / Pawley の抽出強度の表を相ごとに複製する(試行の前に戻すため)。"""
+    return {
+        name: {i: dict(t) for i, t in ph.f2_tables.items()} for name, ph in project.phases.items()
+    }
+
+
+def _equivalent_position_start(
+    project: Project,
+    names: list[str],
+    initial: dict[str, float],
+    start: dict[str, float],
+) -> dict[str, float]:
+    """位置の補正の候補 names の初期値: 動かさない補正を初期値に戻したとき、今のピーク位置
+    (start の値での Δ2θ = ゼロ点 + 試料変位のシフト)をフィット範囲で最もよく再現する値。
+
+    Δ2θ はゼロ点(定数)、平板の高さずれ(cos θ)、キャピラリの x, y ずれ(cos 2θ, sin 2θ)に
+    線形なので、候補の各パラメータを 1 にしたシフトを基底にして最小二乗で解く。前の段階で
+    ゼロ点が吸ったずれを変位に引き継ぐため(0 から始めると、幅の合った鋭いピークでは最小二乗が
+    別の谷に落ちることがある)。TOF のヒストグラムは対象外(ゼロ点しか無い)。
+    """
+    out: dict[str, float] = {}
+    for i, h in enumerate(project.histograms):
+        if h.is_tof or not isinstance(h.instrument, CWInstrument):
+            continue
+        pre = f"h{i}:"
+        cand = [n for n in names if n.startswith(pre)]
+        here = [f"{pre}{t}" for t in POSITION_TAILS if f"{pre}{t}" in project.params]
+        if not cand or not here:
+            continue
+        x = h.data.x[h.mask()]
+        if x.size == 0:
+            continue
+
+        def total(
+            values: dict[str, float], x: FloatArray = x, h: HistogramEntry = h, pre: str = pre
+        ) -> FloatArray:
+            smp = replace(
+                h.sample,
+                displacement_mm=values.get(f"{pre}sample:displacement", 0.0),
+                displace_x_mm=values.get(f"{pre}sample:disp_x", 0.0),
+                displace_y_mm=values.get(f"{pre}sample:disp_y", 0.0),
+            )
+            return np.asarray(
+                values.get(f"{pre}inst:zero", 0.0) + smp.position_shift(x), dtype=np.float64
+            )
+
+        now = {n: start.get(n, project.params[n].value) for n in here}
+        base_vals = {n: (0.0 if n in cand else initial.get(n, now[n])) for n in here}
+        offset = total(base_vals)
+        target = total(now) - offset
+        columns = []
+        for n in cand:
+            v = dict(base_vals)
+            v[n] = 1.0
+            columns.append(total(v) - offset)
+        design = np.column_stack(columns)
+        coef, *_ = np.linalg.lstsq(design, target, rcond=None)
+        for n, val in zip(cand, coef, strict=True):
+            if np.isfinite(val):
+                out[n] = float(val)
+    return out
+
+
+def _restore_trial_state(
+    project: Project,
+    values: dict[str, float],
+    tables: dict[str, dict[int, dict[tuple[int, int, int], float]]],
+) -> None:
+    """試行の前(または採用した候補)の値と抽出強度に戻し、計算結果を捨てる。"""
+    project.restore(values)
+    for name, tbl in tables.items():
+        if name in project.phases:
+            project.phases[name].f2_tables = {i: dict(t) for i, t in tbl.items()}
+    for h in project.histograms:
+        h.result = None
+
 
 #: 軽原子とみなす原子番号の上限(H〜Ne)。X 線では重原子が共存すると U_iso が個別に決まらない
 LIGHT_ATOM_Z_MAX = 10
+#: ピーク位置の補正で変数の多い候補(両方、キャピラリの x, y ずれ)を採る F 検定の臨界値。
+#: χ² の相対改善が POSITION_F_CRIT × 増えた変数の数 / 自由度 以上なら採る
+#: (F(1, ∞) の 0.1% 点は 10.8。自由度 5000 なら相対 0.2%)
+POSITION_F_CRIT = 10.0
+#: 位置の補正の候補が評価回数の上限で止まったとき、続きから回し直す回数の上限
+#: (収束していない χ² で比べると、単純な候補が不利になって「両方」を採りすぎる)
+POSITION_TRIAL_CONTINUE = 2
 #: 軽原子の散乱能(占有率 × 多重度 × Z、中性子では |b|)の割合がこれ未満なら U_iso を共通にする
 LIGHT_ATOM_FRACTION = 0.3
 #: Kα2 なしを採用する Rwp の改善の下限(0.3 ポイント)
@@ -637,6 +904,13 @@ def _shift_matches_geometry(project: Project, p: Parameter) -> bool:
     return bb if tail == "displacement" else not bb
 
 
+def _zero_or_matching_shift(project: Project, p: Parameter) -> bool:
+    """ゼロ点は常に通し、試料変位はヒストグラムの種類に合うものだけ通す(位置の補正「両方」)。"""
+    if p.name.endswith(":inst:zero"):
+        return True
+    return _shift_matches_geometry(project, p)
+
+
 def standard_recipe(
     phase: str = "*",
     hist: str = "h*",
@@ -644,7 +918,8 @@ def standard_recipe(
     coordinates: bool = True,
     adp: bool = True,
     occupancy: bool = False,
-    sample_displacement: bool = False,
+    position: PositionChoice = "auto",
+    sample_displacement: bool | None = None,
     asymmetry: bool | None = None,
     preferred_orientation: bool = False,
     roughness: bool = False,
@@ -659,8 +934,11 @@ def standard_recipe(
         phase: 相の名前(glob 可)
         hist: ヒストグラムの接頭辞(例 'h0', 'h*')
         coordinates, adp, occupancy: 構造パラメータを動かすか
-        sample_displacement: ゼロ点の代わりに試料変位を動かす(Bragg-Brentano では高さずれ、
-            Debye-Scherrer では x, y ずれ)。平板試料では推奨
+        position: 格子定数と一緒に動かすピーク位置の補正。"auto"(既定)は「ゼロ点のみ /
+            試料変位のみ / 両方」を同じ初期値から試して χ² で選ぶ(`Recipe._position_trial`)。
+            "zero" はゼロ点だけ、"displacement" は試料変位だけ(Bragg-Brentano では高さずれ、
+            Debye-Scherrer では x, y ずれ、TOF ではゼロ点)、"both" は両方
+        sample_displacement: 旧引数。True なら position="displacement" と同じ
         asymmetry: 軸発散 SH/L(FCJ 非対称)を動かす。None(既定)なら放射光(λ < 1.2 Å)の
             ヒストグラムだけ動かす(FWHM 0.02° 級のピークでは形が合わないと最強ピークの残差が
             Rwp を決める)
@@ -680,26 +958,30 @@ def standard_recipe(
             計算ピークが観測ピークに重なる谷の初期値から始める。初期値が谷の外だと最小二乗は
             格子定数を動かせない(放射光級の鋭いピークでは 0.6% のずれで止まる)
     """
+    if sample_displacement:
+        position = "displacement"
+    if position not in ("auto", "zero", "displacement", "both"):
+        raise ValueError(
+            f"position は auto / zero / displacement / both のどれかです: {position!r}"
+        )
     r = Recipe("標準")
     if cell_scan:
         r.add("格子定数の初期値を振る", [], 1, kind="cell_scan")
     r.add("スケールと背景", [f"{hist}:bkg:*", f"{hist}:hump*:*", f"{hist}:{phase}:scale"], 10)
-    if sample_displacement:
-        # Bragg-Brentano では高さずれ、Debye-Scherrer では x, y ずれ(filter で振り分ける)
+    pos_patterns = [f"{hist}:{tail}" for tail in POSITION_TAILS]
+    if position in ("zero", "auto"):
+        # "auto" はここでは仮にゼロ点を動かし、幅が合ったあとの「ピーク位置の補正を選ぶ」で
+        # ゼロ点のみ / 試料変位のみ / 両方を試して選び直す
+        r.add("格子定数とピーク位置", [f"{phase}:cell:*", f"{hist}:inst:zero"], 10)
+    else:
+        # Bragg-Brentano では高さずれ、Debye-Scherrer では x, y ずれ、TOF ではゼロ点
+        # (filter で振り分ける)。"both" はそれに加えてゼロ点も動かす
         r.add(
             "格子定数とピーク位置",
-            [
-                f"{phase}:cell:*",
-                f"{hist}:sample:displacement",
-                f"{hist}:sample:disp_x",
-                f"{hist}:sample:disp_y",
-                f"{hist}:inst:zero",
-            ],
+            [f"{phase}:cell:*", *pos_patterns],
             10,
-            filter=_shift_matches_geometry,
+            filter=_zero_or_matching_shift if position == "both" else _shift_matches_geometry,
         )
-    else:
-        r.add("格子定数とピーク位置", [f"{phase}:cell:*", f"{hist}:inst:zero"], 10)
     # TOF では sig1(σ² の d² の係数)が W に相当する。立ち上がり α と減衰 β も一緒に動かす:
     # α は装置ごとに桁で違い(POWGEN 0.13、iMATERIA は 5 以上)、α, β が合わないまま sig1 だけ
     # 動かすと幅の辻褄を σ² < 0 で合わせようとして流れる(iMATERIA の CeO2 で σ² = −4000 μs²)。
@@ -728,6 +1010,12 @@ def standard_recipe(
         ],
         15,
     )
+    if position == "auto":
+        # 幅が合ったところで、ゼロ点のみ / 試料変位のみ / 両方を試して χ² で選ぶ(候補は
+        # _position_trial がヒストグラムの種類で絞る)
+        r.add(
+            "ピーク位置の補正を選ぶ", [f"{phase}:cell:*", *pos_patterns], 10, kind="position_trial"
+        )
     if humps:
         r.add("残差のこぶを背景に試す", [], 10, kind="hump_trial")
     if try_no_kalpha2:

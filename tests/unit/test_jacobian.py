@@ -97,6 +97,60 @@ def test_analytic_matches_numerical() -> None:
     assert np.allclose(proj.residuals(), base)
 
 
+def test_numerical_column_does_not_pollute_following_analytic_columns() -> None:
+    """数値微分の列(格子定数・ゼロ点)の後の解析列が、摂動後の result で作られていないこと。
+
+    レビュー 2026-10-17 精密化 #8: 数値微分の列が h.result を摂動後のまま残し、その後の構造・
+    スケール・選択配向の解析列が 2.6e-3 ずれていた(esd と相関が 0.3% ずれる)。数値微分の列を
+    外して作った解析列と一致し(汚染が無ければ同じ式・同じ result)、スケールと構造の列は中心差分と
+    1e-5 以内で一致すること(md_r の解析列は配向因子の前進差分なので 1e-3 級の差は仕様)。
+    """
+    proj = _project()
+    # 自由パラメータの順は 相(格子 → サイト)→ ヒストグラム(装置 → スケール → md_r)なので、
+    # 格子定数の列が構造の列の前に、ゼロ点の列がスケールと md_r の列の前に来る
+    proj.vary(
+        "rutile:cell:a", "rutile:O:x", "rutile:*:uiso", "h0:inst:zero", "h0:rutile:scale",
+        "h0:rutile:md_r",
+    )  # fmt: skip
+    ps = proj.params
+    names = ps.free_names()
+    assert names.index("rutile:cell:a") < names.index("rutile:O:x")
+    assert names.index("h0:inst:zero") < names.index("h0:rutile:scale")
+    base = proj.residuals()
+    j_an = project_jacobian(proj, base)
+    x0 = ps.vector()
+    analytic = [n for n in names if classify(proj, ps[n])[0] != "other"]
+    proj.fix("rutile:cell:a", "h0:inst:zero")
+    assert ps.free_names() == analytic
+    j_clean = project_jacobian(proj, proj.residuals())
+    for k, name in enumerate(analytic):
+        col = names.index(name)
+        scale = max(float(np.max(np.abs(j_clean[:, k]))), 1e-300)
+        err = float(np.max(np.abs(j_an[:, col] - j_clean[:, k]))) / scale
+        assert err < 1e-9, (name, err)
+    proj.vary("rutile:cell:a", "h0:inst:zero")
+    ps.set_vector(x0)
+    for col, name in enumerate(names):
+        if classify(proj, ps[name])[0] not in ("scale", "intensity"):
+            continue
+        h = ps[name].step
+        xp, xm = x0.copy(), x0.copy()
+        xp[col] += h
+        xm[col] -= h
+        ps.set_vector(xp)
+        rp = proj.residuals()
+        ps.set_vector(xm)
+        rm = proj.residuals()
+        ps.set_vector(x0)
+        central = (rp - rm) / (2.0 * h)
+        err = float(np.linalg.norm(j_an[:, col] - central)) / max(
+            float(np.linalg.norm(central)), 1e-300
+        )
+        assert err < 1e-5, (name, err)
+    proj.residuals()
+    assert np.allclose(proj.residuals(), base)
+
+
 def test_refine_results_agree_and_faster() -> None:
     results = {}
     times = {}

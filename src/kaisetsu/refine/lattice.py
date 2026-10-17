@@ -16,6 +16,9 @@
     - "zero": ゼロ点(2θ の定数ずれ)
     - "distance": 試料–検出器距離(ビーム方向の試料位置)のずれ。Debye-Scherrer では
       sample:disp_y(Δ2θ ∝ sin 2θ)、Bragg-Brentano では試料高さずれ、TOF ではゼロ点
+    - "both": ゼロ点と distance の両方
+    - "auto": 幅が合ったあとに zero / distance / both を試して χ² で選ぶ
+      (`kaisetsu.refine.recipe.Recipe._position_trial`。標準手順の既定と同じ)
 ピーク幅(widths):
     - "sample": 試料由来の広がり(ローレンツ成分 X, Y。歪みと結晶子サイズに相当)だけ動かす。
       装置の U, V, W はテンプレートのまま。X, Y はテンプレートの値より小さくならない
@@ -44,9 +47,9 @@ from kaisetsu.pattern.histogram import PowderData
 from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.refine.project import Project
-from kaisetsu.refine.recipe import Recipe
+from kaisetsu.refine.recipe import POSITION_TAILS, Recipe
 
-PositionMode = Literal["none", "zero", "distance"]
+PositionMode = Literal["none", "zero", "distance", "both", "auto"]
 WidthMode = Literal["none", "sample", "instrument"]
 
 CELL_NAMES = ("a", "b", "c", "alpha", "beta", "gamma")
@@ -213,15 +216,21 @@ def le_bail_recipe(
         # 初期値が谷の外だと最小二乗は格子定数を動かせない(kaisetsu.refine.cell_scan)
         r.add("格子定数の初期値を振る", [], 1, kind="cell_scan")
     r.add("背景", [f"{hist}:bkg:*"], 8)
+    zero = f"{hist}:inst:zero"
+    if is_tof:
+        distance = zero
+    elif geometry is GeometryKind.DEBYE_SCHERRER:
+        distance = f"{hist}:sample:disp_y"
+    else:
+        distance = f"{hist}:sample:displacement"
     pos: list[str] = []
-    if position == "zero" or (position == "distance" and is_tof):
-        pos = [f"{hist}:inst:zero"]
+    if position in ("zero", "auto"):
+        # "auto" はここでは仮にゼロ点を動かし、幅が合ったあとの試行で選び直す
+        pos = [zero]
     elif position == "distance":
-        pos = [
-            f"{hist}:sample:disp_y"
-            if geometry is GeometryKind.DEBYE_SCHERRER
-            else f"{hist}:sample:displacement"
-        ]
+        pos = [distance]
+    elif position == "both":
+        pos = [zero] if distance == zero else [zero, distance]
     r.add("格子定数とピーク位置", ["*:cell:*", *pos], 10)
     if widths == "sample":
         r.add("ピーク幅(試料の広がり X, Y)", [f"{hist}:inst:x", f"{hist}:inst:y"], 10)
@@ -240,6 +249,8 @@ def le_bail_recipe(
                 [f"{hist}:inst:u", f"{hist}:inst:v", f"{hist}:inst:x", f"{hist}:inst:y"],
                 10,
             )
+    if position == "auto" and distance != zero:
+        r.add("ピーク位置の補正を選ぶ", ["*:cell:*", zero, distance], 10, kind="position_trial")
     r.add("最終(全パラメータ)", [], 20)
     return r
 
@@ -280,8 +291,13 @@ def _cell_result(project: Project, phase: str, hist: int = 0) -> CellResult:
     esds = {nm: _esd_of(project, f"{phase}:cell:{nm}") for nm in CELL_NAMES}
     lat = Lattice.from_parameters([values[nm] for nm in CELL_NAMES])
     volume = lat.volume
-    # 体積の esd: 動かした格子定数ごとの ∂V/∂p × σ を二乗和(格子定数どうしの相関は無視)
-    var = 0.0
+    # 体積の esd: 動かした格子定数の勾配 g = ∂V/∂p と直近の精密化の共分散 C から gᵀ C g。
+    # 共分散が無い(直近の精密化に無い)成分は相関を無視して (∂V/∂p σ)² を足す
+    # (斜方晶では a, b, c の相関が +0.4〜0.8 あり、二乗和だと esd が 0.6〜0.7 倍に出る。
+    # レビュー 2026-10-17 #9)
+    fit = project.last_fit
+    grads: dict[str, float] = {}
+    var_indep = 0.0
     any_esd = False
     for k, nm in enumerate(CELL_NAMES):
         p = project.params[f"{phase}:cell:{nm}"]
@@ -303,7 +319,16 @@ def _cell_result(project: Project, phase: str, hist: int = 0) -> CellResult:
         v_plus = Lattice.from_parameters(shifted(1.0)).volume
         v_minus = Lattice.from_parameters(shifted(-1.0)).volume
         dv = (v_plus - v_minus) / (2.0 * step)
-        var += (dv * p.esd) ** 2
+        if fit is not None and p.name in fit.names:
+            grads[p.name] = dv
+        else:
+            var_indep += (dv * p.esd) ** 2
+    var = var_indep
+    if grads and fit is not None:
+        idx = [fit.names.index(n) for n in grads]
+        g = np.array(list(grads.values()), dtype=float)
+        cov = np.asarray(fit.covariance, dtype=float)[np.ix_(idx, idx)]
+        var += max(float(g @ cov @ g), 0.0)
     h = project.histograms[hist]
     k_phase = list(h.contributions).index(phase)
     n_refl = len(project.calculate(hist).peaks[k_phase].hkl)
@@ -413,8 +438,12 @@ def refine_lattice(
 
         recipe.run(proj, progress=_step_done)
         rf = proj.rfactors()["total"]
-        pos_step = next(s for s in recipe.steps if s.name == "格子定数とピーク位置")
-        pos_names = [s for s in pos_step.patterns if ":cell:" not in s]
+        # 動かした位置の補正("auto" では試行で選んだもの)
+        pos_names = [
+            p.name
+            for p in proj.params.free()
+            if any(p.name.endswith(f":{tail}") for tail in POSITION_TAILS)
+        ]
         result = LatticeResult(
             name=label,
             path=path,

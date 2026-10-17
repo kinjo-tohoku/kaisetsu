@@ -153,6 +153,18 @@ def project_jacobian(
         n += int(np.count_nonzero(m))
     base = numerical_residual if numerical_residual is not None else fn()
     assert len(base) >= n
+    # 基準(現在値)の計算結果。数値微分の列は fn() で全ヒストグラムの result を摂動後の値に
+    # 書き換えるので、列ごとにこれを戻す(戻さないと後の解析列が摂動後のプロファイル c_k と
+    # y_phases で作られ、esd と相関が 0.3% ずれる。レビュー 2026-10-17 #8)
+    base_results = [h.result for h in hists]
+    base_pdf_results = [g.result for g in pdfs]
+
+    def restore_results() -> None:
+        for h, r in zip(hists, base_results, strict=True):
+            h.result = r
+        for g, gr in zip(pdfs, base_pdf_results, strict=True):
+            g.result = gr
+
     jac = np.zeros((len(base), len(free)))
     # 主パラメータ → それに従属するパラメータ名(拘束の連鎖)
     dependents: dict[str, list[str]] = {}
@@ -248,8 +260,7 @@ def project_jacobian(
                         new_g = sw_g[gi] * (g.data.g[pdf_masks[gi]] - gres.g_calc[pdf_masks[gi]])
                         jac[o : o + len(sw_g[gi]), col] = (new_g - base_g) / step
                     _perturbed(project, p, -step)
-                    for gi in range(len(pdfs)):
-                        project.calculate_pdf(gi)
+                    restore_results()
                 if done:
                     continue
         # それ以外は数値微分(前進差分、上限に近ければ後退)
@@ -259,7 +270,7 @@ def project_jacobian(
         _perturbed(project, p, step)
         r1 = fn()
         _perturbed(project, p, -step)
+        restore_results()
         jac[:, col] = (r1 - base) / step
-    # 数値微分で動かした結果を元に戻す(result を現在値で再計算)
-    fn()
+    # 数値微分で動かした結果は列ごとに基準の result に戻してあるので、最後の再計算は要らない
     return jac
