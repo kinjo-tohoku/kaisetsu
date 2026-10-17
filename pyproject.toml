@@ -61,6 +61,8 @@ dev = [
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# ruff 0.17 は Markdown の Python コードブロックも整形する。docs のレビュー原文(引用)は触らない
+extend-exclude = ["docs/**/*.md"]
 
 [tool.ruff.lint]
 select = [
