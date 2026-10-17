@@ -423,7 +423,9 @@ class Project:
         """ヒストグラムを追加する。
 
         background を省略すると、観測パターンからピークを避けて推定した Chebyshev 背景
-        (n_background 項)を初期値にする。
+        (n_background 項)を初期値にする。名前は name、無ければデータの名前(ファイル名の stem)。
+        既にある名前や予約名("total"、PDF の "g0" など)と重なれば `unique_histogram_name` で
+        一意にする(R 因子の辞書 `rfactors()` が名前をキーにするため。レビュー 2026-10-17 #6)。
         """
         lo = float(data.x[0]) if x_min is None else float(x_min)
         hi = float(data.x[-1]) if x_max is None else float(x_max)
@@ -435,7 +437,7 @@ class Project:
                 raise KeyError(f"相 {n!r} はプロジェクトにありません")
         contributions = {n: PhaseContribution(self.phases[n].structure) for n in names}
         h = HistogramEntry(
-            name=name or data.name or f"h{len(self.histograms)}",
+            name=self.unique_histogram_name(name or data.name or f"h{len(self.histograms)}", data),
             data=data,
             # 呼び出し側のオブジェクトを使い回しても別のプロジェクトに影響しないようコピーする
             instrument=copy.deepcopy(instrument),
@@ -451,6 +453,37 @@ class Project:
         self.histograms.append(h)
         self.build_parameters()
         return h
+
+    def unique_histogram_name(self, base: str, data: PowderData | None = None) -> str:
+        """既存のヒストグラム名・予約名と重ならない名前を作る。
+
+        同じ stem のファイル(PBSO4.XRA と PBSO4.CWN、同じファイルを 2 回)は同じ名前になり、
+        `rfactors()` の辞書で片方が上書きされていた。GSAS の複数 BANK(metadata["bank"])は
+        "{stem} bank{k}"、それ以外は "{stem} (2)" のように番号を足す。"total"(全体の R 因子)と
+        "g0" 形式(PDF データセット)は予約名として避ける。
+        """
+        taken = {h.name for h in self.histograms}
+        taken.add("total")
+
+        def reserved(n: str) -> bool:
+            return n in taken or (n.startswith("g") and n[1:].isdigit())
+
+        if not reserved(base):
+            return base
+        bank = None if data is None else data.metadata.get("bank")
+        if isinstance(bank, int) and not isinstance(bank, bool):
+            # 同じファイルの別 BANK なら "bank{k}"(同じ BANK を 2 回読んだのなら番号にする)
+            same_bank = any(
+                h.name.startswith(base) and h.data.metadata.get("bank") == bank
+                for h in self.histograms
+            )
+            cand = f"{base} bank{bank}"
+            if not same_bank and not reserved(cand):
+                return cand
+        k = 2
+        while reserved(f"{base} ({k})"):
+            k += 1
+        return f"{base} ({k})"
 
     def phase_contribution(self, hist: int, phase: str) -> PhaseContribution:
         return self.histograms[hist].contributions[phase]
