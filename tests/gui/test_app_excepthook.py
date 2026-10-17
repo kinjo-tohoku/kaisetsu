@@ -53,7 +53,8 @@ def test_log_dir_override(monkeypatch, tmp_path: Path) -> None:
     assert app_mod.log_dir() == tmp_path / "x"
     monkeypatch.delenv(app_mod.LOG_DIR_ENV)
     d = app_mod.log_dir()
-    assert d.name == "log" and "kaisetsu" in d.parts
+    # Windows / Linux は .../kaisetsu/log、macOS は ~/Library/Logs/kaisetsu
+    assert "kaisetsu" in d.parts and d.name in ("log", "kaisetsu")
     # 書けない場所なら None(落ちない)
     bad = tmp_path / "file"
     bad.write_text("x", encoding="utf-8")
