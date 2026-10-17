@@ -55,6 +55,7 @@ class InstrumentDialog(QDialog):
             Radiation.characteristic("Cu"), w=0.004, s_l=0.02, h_l=0.02, polarization=0.5
         )
         smp = sample or SampleGeometry()
+        self._inst = inst
         self._smp = smp
 
         layout = QVBoxLayout(self)
@@ -289,6 +290,16 @@ class InstrumentDialog(QDialog):
         remember_dir(path)
         QMessageBox.information(self, "装置テンプレート", f"保存しました:\n{path}")
 
+    @staticmethod
+    def _keep(spin: QDoubleSpinBox, original: float) -> float:
+        """スピンボックスの値が元の値と表示桁の範囲で同じなら、元の値(丸める前)を返す。
+
+        精密化した値(例: U = 0.00123456)は表示桁(5 桁)に丸まって入るので、開いて OK を
+        押しただけで値が変わり esd も消えていた(レビュー 2026-10-17 GUI #17)。
+        """
+        v = float(spin.value())
+        return original if abs(v - original) < 0.5 * 10.0 ** (-spin.decimals()) else v
+
     def apply_sample(self, smp: SampleGeometry) -> None:
         """SampleGeometry の値をウィジェットに反映する。"""
         self._smp = smp
@@ -302,6 +313,7 @@ class InstrumentDialog(QDialog):
 
     def apply_instrument(self, inst: CWInstrument) -> None:
         """CWInstrument の値をウィジェットに反映する(プリセットは触らない)。"""
+        self._inst = inst
         rad = inst.radiation
         self.kind.setCurrentIndex(1 if rad.is_neutron else 0)
         self.lam1.setValue(rad.wavelength)
@@ -401,32 +413,52 @@ class InstrumentDialog(QDialog):
         self.geometry.setCurrentIndex(1 if p["geometry"] is GeometryKind.DEBYE_SCHERRER else 0)
 
     def result_instrument(self) -> tuple[CWInstrument, SampleGeometry]:
+        """ダイアログの値から装置と試料を作る。変えていない欄は元の値(丸める前)を保つ。"""
+        o = self._inst
+        orad = o.radiation
+        keep = self._keep
+        lam1 = keep(self.lam1, orad.wavelength)
         if self.kind.currentIndex() == 1:
-            rad = Radiation.neutron(self.lam1.value())
+            rad = Radiation.neutron(lam1)
         else:
-            rad = Radiation.xray(
-                self.lam1.value(),
-                self.lam2.value() if self.use_ka2.isChecked() else None,
-                self.ratio2.value(),
-                self.lam3.value() if self.use_kb.isChecked() else None,
-                self.ratio3.value(),
+            lam2 = (
+                keep(self.lam2, orad.wavelength2 if orad.wavelength2 is not None else -1.0)
+                if self.use_ka2.isChecked()
+                else None
             )
+            lam3 = (
+                keep(self.lam3, orad.wavelength3 if orad.wavelength3 is not None else -1.0)
+                if self.use_kb.isChecked()
+                else None
+            )
+            rad = Radiation.xray(
+                lam1,
+                lam2,
+                keep(self.ratio2, orad.ratio2) if lam2 is not None else 0.0,
+                lam3,
+                keep(self.ratio3, orad.ratio3) if lam3 is not None else 0.0,
+            )
+        if rad == orad:
+            rad = orad
+        sh_l = keep(self.sh_l, o.sh_l)
+        s_l, h_l = (o.s_l, o.h_l) if sh_l == o.sh_l else (0.5 * sh_l, 0.5 * sh_l)
         inst = CWInstrument(
-            radiation=rad, zero=self.zero.value(), u=self.u.value(), v=self.v.value(), w=self.w.value(),
-            p=self.p.value(), x=self.x.value(), y=self.y.value(), z=self.z.value(),
-            s_l=0.5 * self.sh_l.value(), h_l=0.5 * self.sh_l.value(), polarization=self.pol.value(),
+            radiation=rad, zero=keep(self.zero, o.zero), u=keep(self.u, o.u), v=keep(self.v, o.v),
+            w=keep(self.w, o.w), p=keep(self.p, o.p), x=keep(self.x, o.x), y=keep(self.y, o.y),
+            z=keep(self.z, o.z), s_l=s_l, h_l=h_l, polarization=keep(self.pol, o.polarization),
         )  # fmt: skip
+        s = self._smp
         smp = replace(
-            self._smp,
+            s,
             kind=GeometryKind.DEBYE_SCHERRER
             if self.geometry.currentIndex() == 1
             else GeometryKind.BRAGG_BRENTANO,
-            radius_mm=self.radius.value(),
-            displacement_mm=self.displacement.value(),
-            transparency_mm=self.transparency.value(),
-            roughness_a=self.rough_a.value(),
-            roughness_b=self.rough_b.value(),
-            mu_r=self.mu_r.value(),
+            radius_mm=keep(self.radius, s.radius_mm),
+            displacement_mm=keep(self.displacement, s.displacement_mm),
+            transparency_mm=keep(self.transparency, s.transparency_mm),
+            roughness_a=keep(self.rough_a, s.roughness_a),
+            roughness_b=keep(self.rough_b, s.roughness_b),
+            mu_r=keep(self.mu_r, s.mu_r),
         )
         return inst, smp
 

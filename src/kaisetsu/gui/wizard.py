@@ -14,19 +14,22 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
     QWizard,
     QWizardPage,
 )
 
 from kaisetsu.crystal.cif import read_structure
-from kaisetsu.gui.dialog_utils import available_height
+from kaisetsu.gui.dialog_utils import DATA_FILTER, available_height
 from kaisetsu.gui.dialogs import InstrumentDialog
+from kaisetsu.gui.i18n import tr
 from kaisetsu.gui.paths import last_dir, remember_dir
-from kaisetsu.io.readers import read_powder_data
+from kaisetsu.io.readers import read_powder_data, too_few_points_message
 from kaisetsu.refine.recipe import standard_recipe
 
 if TYPE_CHECKING:
@@ -74,9 +77,9 @@ class DataPage(_FilePage):
     def __init__(self, parent: QWizard | None = None) -> None:
         super().__init__(
             "1. 回折データ",
-            "測定した粉末回折パターンのファイルを選びます(xy / xye / GSAS 形式など)。",
-            "回折データ (*.xy *.xye *.chi *.dat *.txt *.gsa *.gsas *.fxye *.raw *.xra *.cwn *.cif);;"
-            "すべて (*)",
+            "測定した粉末回折パターンのファイルを選びます(xy / xye / Rigaku .ras / PANalytical .xrdml / "
+            "Bruker .raw / GSAS 形式など)。",
+            DATA_FILTER,
             parent,
         )
 
@@ -85,6 +88,9 @@ class DataPage(_FilePage):
             d = read_powder_data(path)
         except Exception as exc:
             return f"読み込めません: {exc}"
+        few = too_few_points_message(d, Path(path).name)
+        if few:
+            return f"読み込めません: {few}"
         return f"{len(d)} 点、2θ = {d.x[0]:.3f}〜{d.x[-1]:.3f}°、最大強度 {d.y.max():.0f}"
 
 
@@ -265,11 +271,23 @@ class StartWizard(QWizard):
         inst_copy, smp_copy = copy.deepcopy(inst), copy.deepcopy(smp)
         main = self.main
         le_bail = self.page_run.is_le_bail()
-        main.load_data_file(
+        if main.project.histograms or main.project.phases or main.project.pdf_datasets:
+            # 2 回目の完了(データを間違えたのでやり直す、など)。以前は既存のプロジェクトに
+            # 足されて 2 つのデータを同時に精密化していた(レビュー 2026-10-17 GUI #6)
+            mode = ask_start_mode(self)
+            if mode is None:
+                return  # キャンセル: ウィザードは開いたまま
+            if mode == "new" and not main.new_project():
+                return  # 今のプロジェクトを閉じるのをやめた
+        if not main.load_data_file(
             self.page_data.edit.text(), inst, smp, n_background=self.page_run.n_background.value()
-        )
+        ):
+            return
         name = _phase_name(self.page_phase.edit.text())
-        main.add_phase_file(self.page_phase.edit.text(), name=name)
+        if not main.add_phase_file(self.page_phase.edit.text(), name=name) and (
+            name not in main.project.phases
+        ):
+            return
         if le_bail and name in main.project.phases:
             # 相を Le Bail にして抽出強度の初期値を観測に合わせる(相の設定ダイアログと同じ)。
             # 標準の手順は Le Bail 相の構造パラメータを対象外にし、各段階で強度を更新する
@@ -304,6 +322,37 @@ class StartWizard(QWizard):
             )
         super().accept()
         main.run_recipe(recipe, companion=companion)
+
+
+def ask_start_mode(parent: QWidget | None) -> str | None:
+    """プロジェクトが空でないときに、新しく始めるか今のプロジェクトに足すかを聞く。
+
+    Returns:
+        "new"(新しいプロジェクトとして始める。既定)、"append"(今のプロジェクトに追加する)、
+        キャンセルなら None
+    """
+    box = QMessageBox(parent)
+    box.setWindowTitle(tr("はじめての精密化"))
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(
+        "すでにデータか相が読み込まれています。\n"
+        "新しいプロジェクトとして始めますか、それとも今のプロジェクトに追加しますか?"
+    )
+    box.setInformativeText(
+        "「追加する」は 2 つ目のデータや相を足して同時に精密化するときだけ選んでください。"
+        "データを選び直すだけなら「新しいプロジェクト」です"
+    )
+    b_new = box.addButton(tr("新しいプロジェクトとして始める"), QMessageBox.ButtonRole.AcceptRole)
+    b_add = box.addButton(tr("今のプロジェクトに追加する"), QMessageBox.ButtonRole.ActionRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(b_new)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is b_new:
+        return "new"
+    if clicked is b_add:
+        return "append"
+    return None
 
 
 def le_bail_companion(

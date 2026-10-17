@@ -21,7 +21,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
+from collections.abc import Callable
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
@@ -48,6 +51,12 @@ from kaisetsu.refine.project import HistogramEntry, Project
 from kaisetsu.scattering.radiation import Radiation, RadiationType
 
 SCHEMA_VERSION = 2
+
+#: 特殊位置の並進付き拘束(x, x+1/2, 0 など)の座標が、この版より前では評価のたびにずれていた
+#: (外部レビュー 2026-10-17 #1)。それより前に保存したプロジェクトは CIF から読み直してもらう
+COORDINATE_FIX_VERSION = "0.1.13"
+
+log = logging.getLogger(__name__)
 
 
 def _f(v: float) -> float | None:
@@ -505,24 +514,97 @@ def _internalize(d: dict[str, Any], npz: Path | None) -> None:
                     data[key] = loaded[v["$npz"]].tolist()
 
 
+def _write_atomic(path: Path, write: Callable[[Path], None]) -> None:
+    """同じフォルダの一時ファイルに書いてから置き換える。
+
+    直接上書きすると、書き込みの途中で失敗した(ディスクがいっぱい、OneDrive のロック)ときに
+    元のプロジェクトファイルが切り詰められたまま壊れる(レビュー 2026-10-17 GUI #2)。
+    一時ファイルの名前は拡張子を保つ(np.savez_compressed は .npz で終わらない名前に .npz を足す)。
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp{path.suffix}")
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def save_project(proj: Project, path: str | Path, *, external_arrays: bool = False) -> Path:
+    """プロジェクトを JSON に保存する(書き込みは一時ファイル経由で、失敗しても元を壊さない)。"""
     p = Path(path)
     d = project_to_dict(proj)
     if external_arrays:
         arrays = _externalize(d)
-        np.savez_compressed(_npz_path(p), **arrays)
-    p.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        _write_atomic(_npz_path(p), lambda t: np.savez_compressed(t, **arrays))
+    text = json.dumps(d, ensure_ascii=False, indent=1)
+
+    def _write_json(t: Path) -> None:
+        t.write_text(text, encoding="utf-8")
+
+    _write_atomic(p, _write_json)
     return p
 
 
-def load_project(path: str | Path) -> Project:
+def compatibility_notes(d: dict[str, Any], proj: Project) -> list[str]:
+    """古い版で保存したプロジェクトについて、利用者に知らせるべきこと(無ければ空)。
+
+    v0.1.13 より前の版は、特殊位置の並進付き拘束(例: I4/mcm 8h の (x, x+1/2, 0))を評価する
+    たびに座標をずらしていたので、そういうサイトを持つ相は保存された座標が壊れている可能性がある。
+    読み込んだ座標はそれ自体が特殊位置として受け入れられるので、ここで警告しないと気付けない。
+    """
+    from kaisetsu.update import is_newer
+
+    saved = str(d.get("version", "") or "")
+    if not saved or not is_newer(COORDINATE_FIX_VERSION, saved):
+        return []
+    sites: list[str] = []
+    for p in proj.params:
+        if p.tie is None or abs(p.tie.offset) < 1e-9:
+            continue
+        parts = p.name.split(":")
+        if len(parts) == 3 and parts[2] in ("x", "y", "z"):
+            site = f"{parts[0]}:{parts[1]}"
+            if site not in sites:
+                sites.append(site)
+    if not sites:
+        return []
+    return [
+        f"このプロジェクトは kaisetsu {saved} で保存されています。その版では、特殊位置の並進付き"
+        f"拘束を持つサイト({', '.join(sites)})の座標が精密化のたびにずれていました"
+        f"(v{COORDINATE_FIX_VERSION} で修正)。該当する相は CIF から読み直してください"
+        "(パラメータ表の座標が CIF と違っていれば壊れています)"
+    ]
+
+
+def load_project_with_notes(path: str | Path) -> tuple[Project, list[str]]:
+    """プロジェクトを読み込み、古い版についての注意(あれば)も返す。"""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"プロジェクトファイルが見つかりません: {p}")
     with p.open(encoding="utf-8") as f:
         d = json.load(f)
     _internalize(d, _npz_path(p))
-    return project_from_dict(d)
+    proj = project_from_dict(d)
+    notes = compatibility_notes(d, proj)
+    for note in notes:
+        log.warning("%s: %s", p.name, note)
+        proj.log.append("注意: " + note)
+    return proj, notes
+
+
+def load_project(path: str | Path) -> Project:
+    """プロジェクトを読み込む。古い版についての注意はログ(logging と Project.log)に残す。"""
+    return load_project_with_notes(path)[0]
+
+
+def clone_project(proj: Project) -> Project:
+    """保存形式を経由した独立なコピー(元のモデルやデータと何も共有しない)。
+
+    `copy.deepcopy` はパラメータの setter(クロージャ)を関数ごと共有するので、コピー側の値を
+    書くと元のモデルが書き換わる。保存 → 読み込みと同じ経路なら完全に独立になる。
+    `last_fit` は引き継がない。
+    """
+    return project_from_dict(project_to_dict(proj))
 
 
 # ----------------------------------------------------------------------

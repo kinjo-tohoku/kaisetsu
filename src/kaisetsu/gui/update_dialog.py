@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import os
 import tempfile
@@ -36,6 +37,7 @@ from kaisetsu.update import (
     ReleaseInfo,
     check_for_update,
     download_file,
+    fetch_latest,
     install_kind,
     launch_installer,
 )
@@ -46,8 +48,22 @@ SETTING_LAST_CHECK = "update/last_check"
 AUTO_CHECK_INTERVAL = _dt.timedelta(hours=20)
 """起動時の自動確認の間隔(1 日 1 回のつもり。日付が変わって最初の起動で確認する)"""
 NO_CHECK_ENV = "KAISETSU_NO_UPDATE_CHECK"
+#: GitHub への問い合わせの待ち時間 [秒]。終了時はこの間だけプロセスが残りうる
+CHECK_TIMEOUT = 5.0
 
 Fetcher = Callable[[], ReleaseInfo]
+
+#: 終了時に切り離した確認スレッド(走ったまま QThread を壊すと Qt が異常終了するので、
+#: `wait_for_detached()` で終わるのを待ってから壊す)
+_DETACHED: list[tuple[QThread, QObject]] = []
+
+
+def wait_for_detached(msec: int = 15000) -> None:
+    """切り離した確認スレッドが終わるのを待つ(app.main の最後で呼ぶ)。"""
+    for thread, _worker in _DETACHED:
+        if thread.isRunning():
+            thread.wait(msec)
+    _DETACHED.clear()
 
 
 def check_on_start(settings: QSettings) -> bool:
@@ -87,10 +103,15 @@ class _CheckWorker(QObject):
 
     def run(self) -> None:
         try:
-            info = check_for_update(fetch=self.fetch)
+            fetch = self.fetch if self.fetch is not None else _default_fetch
+            info = check_for_update(fetch=fetch)
             self.finished.emit(info, "")
         except Exception as exc:
             self.finished.emit(None, f"{type(exc).__name__}: {exc}")
+
+
+def _default_fetch() -> ReleaseInfo:
+    return fetch_latest(timeout=CHECK_TIMEOUT)
 
 
 class _DownloadWorker(QObject):
@@ -246,7 +267,9 @@ class UpdateDialog(QDialog):
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_downloaded)
-        self._worker.finished.connect(self._thread.quit)
+        # quit はワーカーのスレッドから直接呼ぶ(キュー経由だとメインのイベントループが回る
+        # までスレッドが終わらず、closeEvent の wait() が待ち時間いっぱいまで止まる)
+        self._worker.finished.connect(self._thread.quit, Qt.ConnectionType.DirectConnection)
         self.install_btn.setText(tr("中止"))
         self.skip_btn.setEnabled(False)
         self.later_btn.setEnabled(False)
@@ -362,7 +385,9 @@ class UpdateChecker(QObject):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._done)
-        self._worker.finished.connect(self._thread.quit)
+        # quit はワーカーのスレッドから直接呼ぶ(キュー経由だと、メインのイベントループが
+        # 止まっている wait_for_detached() の中でスレッドが終われず、待ち時間を使い切る)
+        self._worker.finished.connect(self._thread.quit, Qt.ConnectionType.DirectConnection)
         if manual and self.log is not None:
             self.log("新しい版があるか GitHub に問い合わせています…")
         self._thread.start()
@@ -371,6 +396,25 @@ class UpdateChecker(QObject):
     def wait(self, msec: int = 5000) -> None:
         if self._thread is not None and self._thread.isRunning():
             self._thread.wait(msec)
+
+    def detach(self) -> None:
+        """終了時: 走っている確認を切り離して結果を捨てる(待たない)。
+
+        親付きの QThread を走ったまま壊すと Qt が異常終了する(終了コード 127、配布物では
+        「動作を停止しました」。レビュー 2026-10-17 GUI #13)。親を外してモジュールの一覧に移し、
+        結果の受け取りを切る。終わるのは `wait_for_detached()`(app.main の最後)で待つ。
+        """
+        thread, worker = self._thread, self._worker
+        self._busy = False
+        if thread is None or not thread.isRunning():
+            return
+        if worker is not None:
+            with contextlib.suppress(RuntimeError, TypeError):
+                worker.finished.disconnect(self._done)
+            _DETACHED.append((thread, worker))
+        thread.setParent(None)
+        self._thread = None
+        self._worker = None
 
     def _done(self, info: object, error: str) -> None:
         self._busy = False
@@ -420,4 +464,5 @@ __all__ = [
     "check_on_start",
     "download_dir",
     "should_auto_check",
+    "wait_for_detached",
 ]
