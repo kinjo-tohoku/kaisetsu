@@ -12,7 +12,9 @@ MPF(Takata, Nishibori & Sakata, Z. Kristallogr. 216, 71 (2001)):
     1. Rietveld 精密化 → F_obs(位相はモデル)
     2. MEM → 密度 ρ_MEM → F_MEM(h)
     3. |F_MEM|² を固定した構造因子表としてパターンフィッティング(スケール・背景・格子・プロファイル)
-       → 重なった反射を F_MEM の比で再分配した新しい F_obs(位相は F_MEM)
+       → 重なった反射を F_MEM の比で再分配した新しい F_obs(位相は F_MEM)。
+       X 線では表に |F_calc(f0 + f′ + if″)|² / |F_calc(f0)|² を掛けて異常分散を戻す
+       (F_MEM は f0 だけの電子密度の構造因子、観測強度には f′, f″ が入っている)
     4. 2 に戻る。Rwp と密度の変化が小さくなるまで繰り返す。
 """
 
@@ -199,8 +201,9 @@ def anomalous_correction(
         structure, hkl, radiation, anomalous=anomalous, override=override
     )
     f2_f0 = np.abs(fc0) ** 2
-    top = float(f2_anom.max()) if len(f2_anom) else 0.0
-    safe = f2_anom > 1e-9 * max(top, 1e-300)
+    top = max(float(f2_anom.max()) if len(f2_anom) else 0.0, 1e-300)
+    # どちらかがほぼ 0 の反射(観測できない、または比が不安定)は補正しない。逆数も使うので両方見る
+    safe = (f2_anom > 1e-9 * top) & (f2_f0 > 1e-9 * top)
     corr = np.where(safe, f2_f0 / np.where(safe, f2_anom, 1.0), 1.0)
     return fc0, np.asarray(corr, dtype=np.float64)
 
@@ -330,6 +333,8 @@ def run_mpf(
     モデルに戻すには ``project.phases[phase].le_bail = False``。
     """
     ph = project.phases[phase]
+    h = project.histograms[hist]
+    rad = h.instrument.radiation
     log: list[str] = []
 
     def say(msg: str) -> None:
@@ -357,10 +362,19 @@ def run_mpf(
             (int(a), int(b), int(c)): complex(f)
             for (a, b, c), f in zip(mem.hkl, mem.f_calc, strict=True)
         }
-        # |F_MEM|² を固定した構造因子表でパターンフィッティング
+        # |F_MEM|² を固定した構造因子表でパターンフィッティング。X 線では F_MEM が f0 だけの
+        # 電子密度の構造因子なので、観測強度に合わせて異常分散の比を戻す(|F_MEM|² / corr)。
+        # 次の周の observed_structure_factors が同じ比を掛けるので
+        # |F_obs|² = |F_MEM|² I_obs / I_calc になる
+        table = {k: abs(v) ** 2 for k, v in f_mem.items()}
+        if rad.is_xray:
+            _fc0, corr = anomalous_correction(
+                ph.structure, mem.hkl, rad, anomalous=h.anomalous, override=h.scattering_override
+            )
+            table = {k: f2 / c for (k, f2), c in zip(table.items(), corr, strict=True)}
         ph.le_bail = True
         ph.f2_update = False
-        ph.f2_tables[hist] = {k: abs(v) ** 2 for k, v in f_mem.items()}
+        ph.f2_tables[hist] = table
         project.fix_all()
         pats = [s.format(i=hist, p=phase) for s in fit_patterns]
         for pat in pats:

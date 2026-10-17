@@ -15,9 +15,12 @@ import pytest
 
 from kaisetsu.api import CWInstrument, PowderData, Project, Radiation, SampleGeometry
 from kaisetsu.crystal.cif import read_structure
-from kaisetsu.mem import mem_from_project, observed_structure_factors
+from kaisetsu.mem import mem_from_project, observed_structure_factors, run_mpf
 from kaisetsu.mem.mpf import anomalous_correction
-from kaisetsu.reflections.structure_factor import structure_factors
+from kaisetsu.reflections.structure_factor import (
+    powder_structure_factor_squared,
+    structure_factors,
+)
 
 
 def _synthetic_pbso4(data_dir: Path, radiation: Radiation) -> Project:
@@ -94,9 +97,24 @@ def test_neutron_fobs_unchanged(data_dir: Path) -> None:
 
 @pytest.mark.slow
 def test_xray_mem_pb_electrons(data_dir: Path) -> None:
-    """合成 PbSO4 の MEM で Pb の球内電子数が f0 だけの参照値(76.4 e)に一致する(修正前 73.3 e)。"""
+    """合成 PbSO4 の MEM で Pb の球内電子数が f0 だけの参照値(76.4 e)に一致する(修正前 73.3 e)。
+
+    MPF のパターンフィッティングでは |F_MEM|²(f0 だけ)に異常分散を戻すので、構造因子表は
+    モデルの |F(f0 + f′ + if″)|² と一致する(戻さないと中央値で 1.13 倍、Rwp 7.0%。戻すと
+    Rwp 4.8%。残りは MEM が σ の範囲で |F| を動かした分)。
+    """
     proj = _synthetic_pbso4(data_dir, Radiation.xray(1.5405, 1.5443, 0.5))
-    pb = proj.phases["PbSO4"].structure.site("Pb").position.copy()
+    st = proj.phases["PbSO4"].structure
+    pb = st.site("Pb").position.copy()
     mem = mem_from_project(proj, 0, "PbSO4", grid=(48, 32, 40), max_outer=15)
     assert mem.chi2 == pytest.approx(1.0, abs=0.05)
     assert mem.integrate_sphere(pb, 1.3) == pytest.approx(76.4, abs=1.0)
+    res = run_mpf(proj, 0, "PbSO4", grid=(48, 32, 40), n_cycles=1, max_outer=15)
+    assert res.densities[0].integrate_sphere(pb, 1.3) == pytest.approx(76.4, abs=1.0)
+    rad = proj.histograms[0].instrument.radiation
+    f2_anom = powder_structure_factor_squared(st, mem.hkl, rad)
+    table = proj.phases["PbSO4"].f2_tables[0]
+    f2_tbl = np.array([table[(int(a), int(b), int(c))] for a, b, c in mem.hkl])
+    sel = _well_observed(proj, mem.hkl, mem.f_calc)
+    assert np.median(f2_tbl[sel] / f2_anom[sel]) == pytest.approx(1.0, abs=0.02)
+    assert res.rwp_history[-1] < 0.06
