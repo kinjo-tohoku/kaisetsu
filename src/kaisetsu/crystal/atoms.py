@@ -76,8 +76,34 @@ class AtomSite:
         self.species = normalize_species(self.species)
         if self.u_aniso is not None:
             self.u_aniso = np.asarray(self.u_aniso, dtype=np.float64).reshape(6)
+        # CIF の '1/3' や '?' は gemmi が NaN で返す。NaN のまま通すと多重度が群の位数になり
+        # |F|² が NaN になって精密化の途中で分かりにくく失敗する(レビュー 2026-10-17 物理 #4)
+        if not np.all(np.isfinite(self.position)):
+            raise ValueError(
+                f"{self.label}: 分率座標が数値になっていません {self._fmt(self.position)}。"
+                "'1/3' や '?' ではなく 0.333333 のように小数で書いてください"
+            )
+        if not math.isfinite(self.occupancy):
+            raise ValueError(
+                f"{self.label}: 占有率が数値になっていません({self.occupancy})。"
+                "0 以上 1 以下の小数で書いてください"
+            )
         if not 0.0 <= self.occupancy <= 1.0 + 1e-9:
             raise ValueError(f"{self.label}: 占有率は 0〜1 で指定してください: {self.occupancy}")
+        if not math.isfinite(self.u_iso):
+            raise ValueError(
+                f"{self.label}: U_iso が数値になっていません({self.u_iso})。"
+                "0.01 のように小数で書いてください"
+            )
+        if self.u_aniso is not None and not np.all(np.isfinite(self.u_aniso)):
+            raise ValueError(
+                f"{self.label}: 異方性変位パラメータが数値になっていません "
+                f"{self._fmt(self.u_aniso)}。小数で書いてください"
+            )
+
+    @staticmethod
+    def _fmt(values: FloatArray) -> str:
+        return "(" + ", ".join("?" if not math.isfinite(v) else f"{v:g}" for v in values) + ")"
 
     @property
     def element(self) -> str:
