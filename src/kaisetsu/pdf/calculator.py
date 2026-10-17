@@ -9,8 +9,12 @@
                                        等方なら U_i + U_j)
 
 有限の Q_max による打ち切り(終端効果)は、細かい r グリッド上で求めた G(r) を Q 空間で
-[Q_min, Q_max] に帯域制限することで表す(srreal と同じ)。その後に装置分解能
+[Q_min, Q_max] に帯域制限することで表す(srreal と同じ)。データの変換で Lorch 窓
+M(Q) = sin(πQ/Q_max)/(πQ/Q_max) を掛けてあれば、同じ窓を帯域制限で掛ける。その後に装置分解能
 exp(-(Q_damp r)²/2)、球状粒子の形状関数 f(r, d)、スケール因子を掛ける。
+
+原子対のガウス関数は、各グリッド点の値ではなくビン [r_i - Δr/2, r_i + Δr/2] の積分(誤差関数の差)
+を Δr で割って積む。σ がグリッド間隔より小さいとき(U = 0 のサイト)も面積(配位数)が保存される。
 
 散乱長 b: 中性子は Sears の b_c(実部)、X 線は f(Q = 0)(電子数。PDFfit2 と同じ)。
 <b> は単位胞内の全原子の占有率加重平均、N は単位胞内の原子数(占有率込み)、ρ_0 = N / V。
@@ -209,14 +213,21 @@ def _accumulate_gaussians(
     weights: FloatArray,
     out: FloatArray,
 ) -> None:
-    inv_sqrt2pi = 1.0 / math.sqrt(2.0 * math.pi)
+    """重み w、中心 c、幅 σ のガウス関数を等間隔グリッド(r0 + i Δr)に積む。
+
+    グリッド点 i には、ビン [r_i - Δr/2, r_i + Δr/2] の積分
+        w [Φ((r_i + Δr/2 - c)/σ) - Φ((r_i - Δr/2 - c)/σ)] / Δr   (Φ: 標準正規分布の累積分布)
+    を加える。点の値 w φ((r_i - c)/σ)/σ を使うと σ < Δr(U = 0 のサイト)で面積が c の位置に
+    よって 0〜4 倍に変わるが、ビンの積分なら σ によらず Σ_i out_i Δr = w が保たれる。
+    """
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
     for p in range(len(centers)):
         c = centers[p]
         s = sigmas[p]
         w = weights[p]
         if w == 0.0:
             continue
-        half = 6.0 * s
+        half = 6.0 * s + dr
         i0 = math.floor((c - half - r0) / dr)
         i1 = math.ceil((c + half - r0) / dr)
         if i1 < 0 or i0 >= n:
@@ -225,10 +236,12 @@ def _accumulate_gaussians(
             i0 = 0
         if i1 > n - 1:
             i1 = n - 1
-        norm = w * inv_sqrt2pi / s
+        scale = w / dr
+        lower = 0.5 * (1.0 + math.erf((r0 + (i0 - 0.5) * dr - c) / s * inv_sqrt2))
         for i in range(i0, i1 + 1):
-            x = (r0 + i * dr - c) / s
-            out[i] += norm * math.exp(-0.5 * x * x)
+            upper = 0.5 * (1.0 + math.erf((r0 + (i + 0.5) * dr - c) / s * inv_sqrt2))
+            out[i] += scale * (upper - lower)
+            lower = upper
 
 
 def peak_widths(pairs: PairList, phase: PDFPhase, qbroad: float) -> FloatArray:
@@ -240,7 +253,8 @@ def peak_widths(pairs: PairList, phase: PDFPhase, qbroad: float) -> FloatArray:
     sigma = np.sqrt(np.maximum(s2, 0.0))
     if phase.rcut > 0.0 and phase.sratio != 1.0:
         sigma = np.where(r < phase.rcut, sigma * phase.sratio, sigma)
-    return np.asarray(np.maximum(sigma, 1e-3))
+    # 下限は 0 割り防止だけ(ビン積分で積むので面積は σ によらず保たれる)
+    return np.asarray(np.maximum(sigma, 1e-6))
 
 
 def spherical_shape_factor(r: FloatArray, diameter: float) -> FloatArray:
@@ -252,8 +266,21 @@ def spherical_shape_factor(r: FloatArray, diameter: float) -> FloatArray:
     return np.asarray(np.where(r < diameter, f, 0.0))
 
 
-def bandlimit(g: FloatArray, dr: float, qmin: float, qmax: float) -> FloatArray:
-    """等間隔グリッド上の奇関数 G(r)(r = 0 から)を Q 空間で [qmin, qmax] に帯域制限する。"""
+def lorch_window(q: FloatArray, qmax: float) -> FloatArray:
+    """Lorch 窓 M(Q) = sin(πQ/Q_max)/(πQ/Q_max)(E. Lorch, J. Phys. C 2, 229 (1969))。Q = 0 で 1。"""
+    x = math.pi * np.asarray(q, dtype=np.float64) / qmax
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.asarray(np.where(x > 0, np.sin(x) / x, 1.0))
+
+
+def bandlimit(
+    g: FloatArray, dr: float, qmin: float, qmax: float, lorch: bool = False
+) -> FloatArray:
+    """等間隔グリッド上の奇関数 G(r)(r = 0 から)を Q 空間で [qmin, qmax] に帯域制限する。
+
+    lorch が真なら帯域内に Lorch 窓 M(Q) も掛ける(データの変換で窓を掛けたときにモデルも同じ
+    窓で鈍らせる。掛けないと U が 2 倍ほど大きく精密化される)。
+    """
     if qmax <= 0.0 and qmin <= 0.0:
         return g
     m = len(g)
@@ -263,6 +290,8 @@ def bandlimit(g: FloatArray, dr: float, qmin: float, qmax: float) -> FloatArray:
     keep = np.ones_like(q, dtype=bool)
     if qmax > 0.0:
         keep &= q <= qmax
+        if lorch:
+            spec *= lorch_window(q, qmax)
     if qmin > 0.0:
         keep &= q >= qmin
     spec[~keep] = 0.0
@@ -285,6 +314,7 @@ def calculate_pdf(
     dr_fine: float = 0.01,
     pad: float = 6.0,
     pairs: Sequence[PairList] | None = None,
+    lorch: bool = False,
 ) -> PDFResult:
     """G(r) を計算する。
 
@@ -293,6 +323,7 @@ def calculate_pdf(
         phases: 相のリスト
         radiation: 'xray' または 'neutron'
         qmax, qmin: 終端効果を表す帯域 [Å^-1]。0 なら無効
+        lorch: データの変換で Lorch 窓を掛けていれば真(帯域制限で同じ窓を掛ける)
         qdamp: 装置分解能による減衰 exp(-(Q_damp r)²/2) [Å^-1]
         qbroad: 分解能によるピーク幅の広がり [Å^-1]
         scale: データセット全体のスケール因子(PDFfit2 の dscale)
@@ -326,7 +357,7 @@ def calculate_pdf(
         n_at = pl.n_atoms if pl.n_atoms > 0 else 1.0
         g = rdf / (n_at * r_safe) - 4.0 * math.pi * r_fine * pl.rho0
         g[0] = 0.0
-        g = bandlimit(g, dr, qmin, qmax)
+        g = bandlimit(g, dr, qmin, qmax, lorch)
         g *= spherical_shape_factor(r_fine, ph.spdiameter)
         if ph.stepcut > 0.0:
             g = np.where(r_fine > ph.stepcut, 0.0, g)

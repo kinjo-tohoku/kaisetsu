@@ -65,11 +65,12 @@ class MEMInput:
         lattice, spacegroup: 単位胞と空間群
         hkl: 独立反射 (n, 3)
         f_obs: 観測構造因子(位相付き、複素数)(n,)
-        sigma: |F_obs| の標準偏差 (n,)
+        sigma: |F_obs| の標準偏差 (n,)。inf なら拘束に使わず N_F にも数えない
+            (測定範囲外の反射など。値は f_obs に残す)
         f000: F(000) = 単位胞の全電子数(中性子では散乱長の和 [fm])
-        grid: 格子点数 (n1, n2, n3)。各軸で 2 max|h| + 1 以上
+        grid: 格子点数 (n1, n2, n3)。各軸で 2 max|h| + 1 以上(全等価反射で見る)
         sigma_f000: F000 の σ(既定は f000 × 1e-4)
-        two_channel: 2 チャンネル MEM(負の散乱長用)
+        two_channel: 2 チャンネル MEM(負の散乱長用)。None なら f000_negative > 0 のとき真
         f000_negative: 2 チャンネルのとき、負側の総量 |Σ b_neg|(正側は f000 + f000_negative)
         overlap_groups: G 拘束の群のリスト。各要素は (hkl の添字の配列, G_obs, σ_G, 多重度の配列)。
             群に入った反射は F 拘束から外れる(位相は f_obs のものを初期の参考にしない)
@@ -83,7 +84,7 @@ class MEMInput:
     f000: float
     grid: tuple[int, int, int] = (64, 64, 64)
     sigma_f000: float | None = None
-    two_channel: bool = False
+    two_channel: bool | None = None
     f000_negative: float = 0.0
     overlap_groups: list[tuple[IntArray, float, float, IntArray]] = field(default_factory=list)
 
@@ -93,9 +94,17 @@ class MEMInput:
         self.sigma = np.asarray(self.sigma, dtype=np.float64).ravel()
         if not (len(self.hkl) == len(self.f_obs) == len(self.sigma)):
             raise ValueError("hkl, f_obs, sigma の長さが一致しません")
-        if np.any(self.sigma <= 0):
+        if np.any(self.sigma <= 0) or np.any(np.isnan(self.sigma)):
             raise ValueError("σ は正でなければなりません")
-        hmax = np.abs(self.hkl).max(axis=0) if len(self.hkl) else np.zeros(3, dtype=int)
+        if self.two_channel is None:
+            self.two_channel = self.f000_negative > 0
+        # 格子は全等価反射(h R)を折り返さずに置ける大きさが必要。独立反射の |h| だけでは、
+        # 三方晶・六方晶などで等価反射の成分(−h−k など)が大きくなる分を見落とす
+        if len(self.hkl):
+            heq = np.einsum("nj,mjk->nmk", self.hkl, self.spacegroup.rotations)
+            hmax = np.abs(heq).reshape(-1, 3).max(axis=0)
+        else:
+            hmax = np.zeros(3, dtype=int)
         for k in range(3):
             if self.grid[k] < 2 * int(hmax[k]) + 1:
                 raise ValueError(
@@ -121,6 +130,9 @@ class MEMResult:
     elapsed: float = 0.0
     message: str = ""
     density_negative: FloatArray | None = None
+    #: history の各 (λ, C) について、内側の最小化が収束した(L-BFGS の収束か、C が落ち着いた)か。
+    #: 偽なら反復予算で打ち切った途中の値(lbfgs のみ)
+    history_converged: list[bool] = field(default_factory=list)
 
     @property
     def grid(self) -> tuple[int, int, int]:
@@ -241,13 +253,19 @@ class _Model:
         s000 = inp.sigma_f000 if inp.sigma_f000 is not None else max(abs(inp.f000) * 1e-4, 1e-6)
         sig = np.concatenate([[s000], inp.sigma])
         idx, vals, owner = expand_reflections(inp.spacegroup, hkl, f, inp.grid)
+        if len(np.unique(idx)) != len(idx):
+            raise ValueError(
+                f"格子点数 {inp.grid} が粗すぎます(等価反射が同じ格子点に折り返されます)"
+            )
         counts = np.bincount(owner, minlength=len(hkl)).astype(np.float64)
         self.idx = idx
         self.f_obs_eq = vals
         self.owner = owner
-        self.n_refl = len(hkl)  # N_F(F000 込み)
-        # 独立反射ごとの重み 1/σ² を等価反射の数で割って配る
-        self.w_eq = (1.0 / sig[owner] ** 2) / counts[owner]
+        self.n_refl = len(hkl)  # 反射数(F000 込み)
+        # 独立反射ごとの重み 1/σ² を等価反射の数で割って配る(σ = inf は重み 0)
+        with np.errstate(divide="ignore"):
+            self.w_eq = (1.0 / sig[owner] ** 2) / counts[owner]
+        constrained = np.isfinite(sig)
         self.hkl_all = hkl
         self.owner_first = np.array(
             [int(np.nonzero(owner == r)[0][0]) for r in range(len(hkl))], dtype=np.int64
@@ -258,11 +276,13 @@ class _Model:
         for idx_r, g_obs, sig_g, mult in inp.overlap_groups:
             r_idx = np.asarray(idx_r, dtype=np.int64) + 1
             self.w_eq[np.isin(owner, r_idx)] = 0.0
+            constrained[r_idx] = False
             self.groups.append(
                 (r_idx, float(g_obs), float(sig_g), np.asarray(mult, dtype=np.float64))
             )
         self.n_groups = len(self.groups)
-        self.n_f = self.n_refl - sum(len(g[0]) for g in self.groups)
+        # N_F = F 拘束に実際に入る反射の数(σ = inf と G 拘束の群に入った反射は除く)
+        self.n_f = int(np.count_nonzero(constrained))
 
     def group_terms(self, fc_eq: ComplexArray) -> tuple[float, list[float]]:
         """Σ_g w_g r_g² と各群の残差 r_g = G_obs - Σ m_h |F_c|²。
@@ -368,8 +388,10 @@ def run_mem(
         target_chi2: 目標の C(通常 1)
         lam0: lbfgs の λ の初期値(None なら自動)
         max_outer: λ の探索回数の上限
-        max_inner: 1 回の λ での L-BFGS 反復回数の上限。目標から遠い λ では 1/5 で打ち切り、
-            近づいたら収束するまで続ける(足りないと C が λ に対して単調にならず探索が迷走する)
+        max_inner: 1 回の λ での L-BFGS 反復回数の目安。目標から遠い λ では 1/5 で打ち切り、
+            近づいたら(目標の 1/3〜3 倍)C が落ち着くまで続ける(上限はこの 8 倍)。
+            打ち切った C は λ に対して単調でないので、λ を挟む区間(lo / hi)と上限到達時に
+            返す解には収束した内側の結果だけを使い、打ち切りの点は次の λ の外挿にだけ使う
         chi2_tol: |C - target| / target の収束判定
         prior: 事前分布(格子と同じ形、正)。None なら一様
         zspa_lambda, zspa_max_iter: zspa 法の刻みと反復上限
@@ -394,6 +416,7 @@ def run_mem(
     tau_neg = np.full(n, max(inp.f000_negative, 1e-12) / n) if two else None
 
     history: list[tuple[float, float]] = []
+    history_converged: list[bool] = []
     voxel = inp.lattice.volume / n
 
     if method == "zspa":
@@ -478,82 +501,82 @@ def run_mem(
         fo2 = float(np.sum(model.w_eq * np.abs(model.f_obs_eq) ** 2))
         lam0 = 2.0 * f_pos / max(fo2, 1e-30)
     lam = lam0
-    lo: float | None = None  # C > target となった最大の λ
-    hi: float | None = None  # C < target となった最小の λ
-    pts: list[tuple[float, float]] = []  # (log λ, log C)
+
+    def chi2_of(xk: FloatArray) -> float:
+        return model.chi2(model.f_calc_eq(xk if two else to_m(xk)))
+
+    # 目標から遠い λ の予算と、近い λ で「C が落ち着いた」と見なす判定。
+    # 近い λ では settle_window 反復ごとに C を測り、変化が settle_tol 以下なら止める
+    # (max_inner 反復あたり chi2_tol × _SETTLE_RATE の変化率。上限は _HARD_CAP_FACTOR × max_inner)
+    far_budget = max(max_inner // 5, 100)
+    settle_window = max(max_inner // _SETTLE_WINDOW_DIV, 100)
+    settle_tol = _SETTLE_RATE * chi2_tol * target_chi2 * settle_window / max_inner
+    hard_cap = _HARD_CAP_FACTOR * max_inner
+    lo: float | None = None  # C > target となった最大の λ(収束した内側の結果だけ)
+    hi: float | None = None  # C < target となった最小の λ(同上)
+    pts: list[tuple[float, float]] = []  # (log λ, log C)。打ち切りの点も含む(外挿用)
+    pts_conv: list[tuple[float, float]] = []  # 収束した点だけ(挟んだ区間の中の割線法用)
     chi2 = float("nan")
     n_iter = 0
     msg = ""
     near_target = False
-    # 目標に最も近かった (|log(C/目標)|, λ, C, x)。探索が上限に達したときはこれを返す
-    best: tuple[float, float, float, FloatArray] | None = None
+    # 目標に最も近かった (|log(C/目標)|, λ, C, x)。探索が上限に達したときはこれを返す。
+    # 収束した解を優先し、1 つも無いときだけ打ち切りの解から選ぶ
+    best_conv: tuple[float, float, float, FloatArray] | None = None
+    best_any: tuple[float, float, float, FloatArray] | None = None
     for outer in range(max_outer):
-        used = 0
-        budget = max_inner if near_target else max(max_inner // 5, 100)
-        # 目標の近くでは、L-BFGS が反復上限で止まっても C が落ち着くまで(上限 hard_cap)続ける。
-        # 途中で打ち切った C は λ について単調でなく、割線法・二分法が迷走して C = 0.5 や 1.08 に
-        # 張り付いたまま探索上限に達する(予算を 400 に減らした実験と macOS の CI、2026-10-17)
-        hard_cap = 8 * max_inner if near_target else budget
-        chunk = max(budget // 2, 100)
-        c_prev: float | None = None
-        abnormal = 0
-        while True:
-            res: Any = minimize(
-                objective,
-                x,
-                args=(lam,),
-                jac=True,
-                method="L-BFGS-B",
-                bounds=bounds,
-                options={
-                    "maxiter": max(min(chunk, hard_cap - used), 50),
-                    "ftol": 1e-13,
-                    "gtol": 1e-8,
-                    "maxcor": 15,
-                },
-            )
-            x = np.asarray(res.x, dtype=np.float64)
-            used += max(int(res.nit), 1)
-            status = int(res.status)
-            if status == 0 or used >= hard_cap:
-                break  # 収束か上限
-            if status == 2:
-                # 線形探索の失敗(丸めの違いで起きる)。記憶を捨てて同じ点から数回やり直す
-                abnormal += 1
-                if abnormal > 3:
-                    break
-                continue
-            # status 1 = 反復上限。温かい初期値で続ける
-            c_now = model.chi2(model.f_calc_eq(x if two else to_m(x)))
-            if near_target:
-                if c_prev is not None and abs(c_now - c_prev) <= 0.25 * chi2_tol * target_chi2:
-                    break  # C が落ち着いた
-            elif used >= budget:
-                break
-            c_prev = c_now
+        # 途中で打ち切った C は λ について単調でなく、lo / hi に入れると割線法・二分法が
+        # 偶然「目標を少し超えた」打ち切りの点に縮んだまま探索上限に達する(予算を 400 に
+        # 減らした実験と macOS の CI、2026-10-17)。遠い λ では小さな予算で動かし(C は
+        # 外挿にだけ使う)、一度目標の近くに入ったら以後は C が落ち着くまで解く
+        if near_target:
+            x, used, status0, _settled = _minimize_at_lambda(
+                objective, x, lam, bounds, max_iter=hard_cap, window=settle_window,
+                settle_tol=settle_tol, settle_relative=False, chi2_of=chi2_of,
+            )  # fmt: skip
+            # C が落ち着くか上限(hard_cap)まで解いた結果は、使える最良の C として扱う
+            converged = True
+        else:
+            x, used, status0, _settled = _minimize_at_lambda(
+                objective, x, lam, bounds, max_iter=far_budget,
+                window=max(far_budget // 4, 25), settle_tol=0.01, settle_relative=True,
+                chi2_of=chi2_of,
+            )  # fmt: skip
+            converged = status0
         n_iter += used
-        m_eff = x if two else to_m(x)
-        chi2 = model.chi2(model.f_calc_eq(m_eff))
+        chi2 = chi2_of(x)
         history.append((lam, chi2))
+        history_converged.append(converged)
         dist = abs(math.log(max(chi2, 1e-300) / target_chi2))
-        if best is None or dist < best[0]:
-            best = (dist, lam, chi2, x.copy())
+        if best_any is None or dist < best_any[0]:
+            best_any = (dist, lam, chi2, x.copy())
+        if converged and (best_conv is None or dist < best_conv[0]):
+            best_conv = (dist, lam, chi2, x.copy())
         if progress is not None:
             progress(outer + 1, lam, chi2)
-        if abs(chi2 - target_chi2) <= chi2_tol * target_chi2 and near_target:
+        if converged and abs(chi2 - target_chi2) <= chi2_tol * target_chi2:
             msg = f"収束: C = {chi2:.4f}(λ = {lam:.3g}、外側反復 {outer + 1} 回)"
             break
-        near_target = abs(math.log(max(chi2, 1e-300) / target_chi2)) < math.log(3.0)
-        if chi2 > target_chi2:
-            lo = lam if lo is None else max(lo, lam)
-        else:
-            hi = lam if hi is None else min(hi, lam)
-        pts.append((math.log(lam), math.log(max(chi2, 1e-300))))
-        lam = _next_lambda(pts, lo, hi, target_chi2)
+        near_target = near_target or dist < math.log(3.0)
+        pt = (math.log(lam), math.log(max(chi2, 1e-300)))
+        pts.append(pt)
+        if converged:
+            pts_conv.append(pt)
+            # 区間が λ の 0.5% より狭くなってもまだ目標に入らないなら、反対側の端の C は
+            # 過渡値だった(C は λ の 0.5% で 1% しか変わらない)。その端を捨てて外挿に戻る
+            if chi2 > target_chi2:
+                lo = lam if lo is None else max(lo, lam)
+                if hi is not None and hi <= lo * (1.0 + _BRACKET_MIN_RATIO):
+                    hi = None
+            else:
+                hi = lam if hi is None else min(hi, lam)
+                if lo is not None and hi <= lo * (1.0 + _BRACKET_MIN_RATIO):
+                    lo = None
+        lam = _next_lambda(pts, pts_conv, lo, hi, target_chi2)
     else:
-        # 内側の最小化が打ち切りのときは C が λ について単調でなく、最後の λ が最良とは
-        # 限らない(GitHub Actions の Windows で同じ入力が C = 0.93 で終わった)。
-        # 目標に最も近かった λ の解を返す
+        # 打ち切りの C は λ について単調でなく、最後の λ が最良とは限らない(GitHub Actions
+        # の Windows で同じ入力が C = 0.93 で終わった)。収束した解のうち目標に最も近いものを返す
+        best = best_conv if best_conv is not None else best_any
         assert best is not None
         _, lam, chi2, x = best
         msg = (
@@ -585,32 +608,141 @@ def run_mem(
         elapsed=time.perf_counter() - t0,
         message=msg,
         density_negative=density_negative,
+        history_converged=history_converged,
     )
 
 
+def _minimize_at_lambda(
+    objective: Callable[[FloatArray, float], tuple[float, FloatArray]],
+    x0: FloatArray,
+    lam: float,
+    bounds: list[tuple[float, None]] | None,
+    *,
+    max_iter: int,
+    window: int,
+    settle_tol: float | None,
+    settle_relative: bool,
+    chi2_of: Callable[[FloatArray], float],
+) -> tuple[FloatArray, int, bool, bool]:
+    """1 つの λ で Q = -S + (λ/2) N_F C を L-BFGS で最小化する(x0 を温かい初期値にする)。
+
+    終了は 3 通り: L-BFGS が収束(status 0)、window 反復ごとに測る C の変化が settle_tol 以下
+    (settle_relative なら |Δ log C|)になった(C が落ち着いた)、反復数が max_iter に達した(打ち切り)。
+    C は L-BFGS の各反復後に呼ばれる callback で測り、落ち着いたら StopIteration で止める
+    (記憶を捨てて区切り直すより速く、止める位置も細かい)。
+
+    Returns:
+        (x, 使った反復数, L-BFGS が収束したか, C が落ち着いたか)
+    """
+    x = np.asarray(x0, dtype=np.float64)
+    used = 0
+    abnormal = 0
+    count = 0
+    c_prev: float | None = None
+    settled = False
+
+    def callback(xk: FloatArray) -> None:
+        nonlocal count, c_prev, settled
+        count += 1
+        if settle_tol is None or count % window:
+            return
+        c_now = chi2_of(xk)
+        if c_prev is not None:
+            if settle_relative:
+                diff = abs(math.log(max(c_now, 1e-300) / max(c_prev, 1e-300)))
+            else:
+                diff = abs(c_now - c_prev)
+            if diff <= settle_tol:
+                settled = True
+                raise StopIteration
+        c_prev = c_now
+
+    while True:
+        res: Any = minimize(
+            objective,
+            x,
+            args=(lam,),
+            jac=True,
+            method="L-BFGS-B",
+            bounds=bounds,
+            callback=callback,
+            options={
+                "maxiter": max(max_iter - used, 1),
+                "ftol": 1e-13,
+                "gtol": 1e-8,
+                "maxcor": 15,
+            },
+        )
+        x = np.asarray(res.x, dtype=np.float64)
+        used += max(int(res.nit), 1)
+        status = int(res.status)
+        if status == 0 or settled or used >= max_iter:
+            return x, used, status == 0, settled
+        if status == 2:
+            # 線形探索の失敗(丸めの違いで起きる)。記憶を捨てて同じ点から数回やり直す
+            abnormal += 1
+            if abnormal > 3:
+                return x, used, False, False
+            continue
+        return x, used, False, False
+
+
+#: 目標の近くの λ で「C が落ち着いた」と見なす判定: max_inner 反復あたり chi2_tol × _SETTLE_RATE
+#: の変化率を、max_inner / _SETTLE_WINDOW_DIV 反復の窓ごとに測る。内側の反復の上限は
+#: _HARD_CAP_FACTOR × max_inner
+_SETTLE_RATE = 0.5
+_SETTLE_WINDOW_DIV = 4
+_HARD_CAP_FACTOR = 8
+#: d log C / d log λ の典型値(目標の近く。ルチル・NaCl の合成データで -1.7〜-1.9)。
+#: 収束した点が目標の近くに 1 つしか無いときの外挿に使う
+_TYPICAL_SLOPE = -1.7
+#: 挟んだ区間 [lo, hi] がこの比より狭くなってもまだ目標に入らなければ、矛盾する端を捨てる
+_BRACKET_MIN_RATIO = 0.005
+#: 割線の傾きの推定に使う点は、目標の 1/30〜30 倍の範囲にある収束した点だけ
+#: (λ が小さすぎて密度が事前分布のままの点では C が飽和していて傾きが浅く出る)
+_INFORMATIVE = math.log(30.0)
+
+
 def _next_lambda(
-    pts: list[tuple[float, float]], lo: float | None, hi: float | None, target: float
+    pts: list[tuple[float, float]],
+    pts_conv: list[tuple[float, float]],
+    lo: float | None,
+    hi: float | None,
+    target: float,
 ) -> float:
-    """次の λ。log C は log λ についてほぼ直線なので割線法で外挿し、挟めたら二分する。"""
+    """次の λ。log C は log λ についてほぼ直線なので割線法で外挿し、挟めたら区間の中に収める。
+
+    pts は全部の (log λ, log C)(打ち切りの点も含む)、pts_conv は収束した点だけ。
+    傾きは、目標の近く(1/30〜30 倍)の収束した点が 2 つあればその割線、1 つなら典型値
+    _TYPICAL_SLOPE でその点から、無ければ(遠い λ の段階)直近 2 点の割線で外挿する。
+    挟めている(lo / hi がある)ときは割線の点が区間の内側ならそれを使い、外れたら二分(幾何平均)する。
+    """
     log_t = math.log(target)
-    lam_last = math.exp(pts[-1][0])
-    if lo is not None and hi is not None:
-        if len(pts) >= 2:
-            (x1, y1), (x2, y2) = pts[-2], pts[-1]
-            if abs(x2 - x1) > 1e-12 and (y2 - y1) != 0.0:
-                xs = x2 + (log_t - y2) * (x2 - x1) / (y2 - y1)
-                a, b = math.log(lo), math.log(hi)
-                # 挟んだ区間の内側(端から 10% 以上離れる)なら割線の点を使う
-                if a + 0.1 * (b - a) < xs < b - 0.1 * (b - a):
-                    return math.exp(xs)
-        return math.sqrt(lo * hi)
-    if len(pts) >= 2:
+    x_last = pts[-1][0]
+    good = [p for p in pts_conv if abs(p[1] - log_t) < _INFORMATIVE]
+    xs: float | None = None
+    if len(good) >= 2:
+        (x1, y1), (x2, y2) = good[-2], good[-1]
+        if abs(x2 - x1) > 1e-12 and (y2 - y1) < 0.0:
+            xs = x2 + (log_t - y2) * (x2 - x1) / (y2 - y1)
+    if xs is None and good:
+        x2, y2 = good[-1]
+        xs = x2 + (log_t - y2) / _TYPICAL_SLOPE
+    if xs is None and len(pts) >= 2:
         (x1, y1), (x2, y2) = pts[-2], pts[-1]
         if abs(x2 - x1) > 1e-12 and (y2 - y1) < 0.0:
             xs = x2 + (log_t - y2) * (x2 - x1) / (y2 - y1)
-            step = max(min(xs - x2, math.log(100.0)), -math.log(100.0))
-            return lam_last * math.exp(step)
-    return lam_last * 10.0 if lo is not None else lam_last / 10.0
+    if lo is not None and hi is not None:
+        # 挟んだ区間の内側なら割線の点を使う(端からの余裕は取らない: 区間が広いと余裕の分だけ
+        # 目標の近くの点を捨てて二分に落ち、λ が 100 分の 1 まで飛ぶ)。外れたら二分
+        if xs is not None and math.log(lo) < xs < math.log(hi):
+            return math.exp(xs)
+        return math.sqrt(lo * hi)
+    if xs is None:
+        # 傾きが取れないときは 10 倍刻み(C > 目標なら λ を増やす)
+        return math.exp(x_last) * (10.0 if pts[-1][1] > log_t else 0.1)
+    step = max(min(xs - x_last, math.log(100.0)), -math.log(100.0))
+    return math.exp(x_last + step)
 
 
 def _run_zspa(
@@ -631,7 +763,7 @@ def _run_zspa(
     for it in range(1, max_iter + 1):
         # Σ_h w_h (F_o - F_c) e^{-2πi h x} の実部 = -(1/2) × data_gradient
         corr = -0.5 * model.data_gradient(fc)
-        expo = (lam * f000 / model.n_refl) * corr
+        expo = (lam * f000 / max(model.n_f, 1)) * corr
         expo -= expo.max()  # オーバーフロー防止(規格化で消える)
         m_new = m * np.exp(expo)
         m_new *= f000 / float(np.sum(m_new))

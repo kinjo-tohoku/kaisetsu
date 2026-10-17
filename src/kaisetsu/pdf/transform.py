@@ -7,10 +7,14 @@ PDFgetX3 型のアドホック補正(Juhás, Davis, Farrow & Billinge, J. Appl. 
     3. 規格化                     高 Q 側(Q > q_norm)で I_c / <f²> の平均が 1 になるよう α を決める
     4. 生の F                     F_raw(Q) = Q (α I_c(Q) - <f²>(Q)) / <f>²(Q)
     5. 多項式補正                 次数 n = round(Q_max r_poly / π) の多項式を F_raw に当てて差し引く
-    5. 多項式補正                 次数 n = round(Q_max r_poly / π) の多項式を当てて差し引く
-                                  r < r_poly の構造は PDF に影響しない)
+                                  (r < r_poly の構造は PDF に影響しない)
     6. 正弦フーリエ変換           G(r) = (2/π) ∫_{Q_min}^{Q_max} F(Q) M(Q) sin(Qr) dQ
                                   M(Q) は Lorch 窓 sin(πQ/Q_max)/(πQ/Q_max)(任意、既定は無し)
+
+Q_max はデータの上限 Q(Cu Kα の 2θ = 150° で 7.9 Å⁻¹、Mo Kα で 17 Å⁻¹)で切り、その値を
+多項式の次数、Lorch 窓、フーリエ変換、出力のメタデータ(qmax、qmin、lorch。フィットの終端効果に
+使う)のすべてに使う。設定の Q_max(既定 25)がデータより大きいままだと、窓と次数と終端効果が
+データと食い違い、フィットの U とスケールが大きく偏る(レビュー 2026-10-17 精密化 #2、#3)。
 
 中性子では <f²>, <f>² を <b²>, <b>²(定数)に置き換える。入力はバナジウム規格化などを済ませた
 強度を想定し、同じアドホック補正を使う(PDFgetN3 と同じ考え方)。
@@ -34,6 +38,7 @@ import numpy.typing as npt
 
 from kaisetsu.crystal.atoms import normalize_species, split_species
 from kaisetsu.pattern.histogram import PowderData
+from kaisetsu.pdf.calculator import lorch_window
 from kaisetsu.pdf.data import PDFData
 from kaisetsu.profile.corrections import cylinder_absorption, polarization_factor
 from kaisetsu.scattering.neutron import NeutronScatteringLengths
@@ -110,7 +115,8 @@ class TransformSettings:
     Attributes:
         composition: 組成式(例 'Ni', 'CaF2')または元素 → 原子数
         radiation: 'xray' または 'neutron'
-        qmin, qmax: フーリエ変換に使う Q の範囲 [Å⁻¹]
+        qmin, qmax: フーリエ変換に使う Q の範囲 [Å⁻¹]。qmax がデータの上限より大きければ
+            データの上限に切り詰める(TransformResult.qmax_eff)
         qmaxinst: データとして信頼できる Q の上限(多項式補正はここまで当てる)。0 なら qmax
         rpoly: 多項式補正の r 側の目安 [Å](次数 n = round(qmax rpoly / π)。小さいほど補正は緩やか)
         bgscale: 容器・空セル強度に掛ける係数
@@ -141,7 +147,11 @@ class TransformSettings:
 
 @dataclass
 class TransformResult:
-    """変換結果(途中の量も持つ。GUI で確認用に表示する)。"""
+    """変換結果(途中の量も持つ。GUI で確認用に表示する)。
+
+    qmax_eff は実際にフーリエ変換・Lorch 窓・多項式の次数に使った Q_max(設定の qmax とデータの
+    上限 Q の小さい方)。フィットの終端効果にはこちらを使う(to_pdf_data のメタデータ)。
+    """
 
     q: FloatArray
     i_corrected: FloatArray
@@ -154,11 +164,14 @@ class TransformResult:
     gr: FloatArray
     settings: TransformSettings
     log: list[str] = field(default_factory=list)
+    qmax_eff: float = 0.0
 
     def to_pdf_data(self, name: str = "") -> PDFData:
+        """G(r) を PDFData にする。メタデータの qmax / qmin / lorch はフィットの終端効果に使う。"""
         meta: dict[str, object] = {
-            "qmax": self.settings.qmax,
+            "qmax": self.qmax_eff if self.qmax_eff > 0 else self.settings.qmax,
             "qmin": self.settings.qmin,
+            "lorch": bool(self.settings.lorch),
             "rpoly": self.settings.rpoly,
             "composition": str(self.settings.composition),
             "format": "kaisetsu-transform",
@@ -174,13 +187,10 @@ def powder_to_q(data: PowderData, wavelength: float) -> tuple[FloatArray, FloatA
 def sine_transform(
     q: FloatArray, fq: FloatArray, r: FloatArray, qmax: float, lorch: bool = False
 ) -> FloatArray:
-    """G(r) = (2/π) ∫ F(Q) M(Q) sin(Qr) dQ(台形則)。"""
+    """G(r) = (2/π) ∫ F(Q) M(Q) sin(Qr) dQ(台形則)。M(Q) は Lorch 窓(lorch が真のとき)。"""
     f = fq.copy()
     if lorch and qmax > 0:
-        x = math.pi * q / qmax
-        with np.errstate(invalid="ignore", divide="ignore"):
-            m = np.where(x > 0, np.sin(x) / x, 1.0)
-        f = f * m
+        f = f * lorch_window(q, qmax)
     dq = np.gradient(q)
     w = f * dq
     # 台形則の端点補正
@@ -238,8 +248,16 @@ def transform(
     use = (qa >= settings.qmin) & (qa <= qmaxinst) & np.isfinite(ic)
     if np.count_nonzero(use) < 20:
         raise ValueError("Q_min〜Q_max の範囲にデータ点が少なすぎます")
-    # 規格化: 高 Q 側で I_c/<f²> の平均が 1
     q_use = qa[use]
+    # Q_max はデータの上限で切る(実験室 X 線では設定の既定 25 Å⁻¹ よりずっと低い)
+    q_top = float(q_use[-1])
+    qmax_eff = min(settings.qmax, q_top)
+    qmaxinst = min(qmaxinst, q_top)
+    if qmax_eff < settings.qmax * (1.0 - 1e-9):
+        log.append(
+            f"Q_max をデータの上限 {qmax_eff:.3f} Å⁻¹ に下げました(設定 {settings.qmax:g} Å⁻¹)"
+        )
+    # 規格化: 高 Q 側で I_c/<f²> の平均が 1
     q_hi = q_use[-1] - settings.q_norm_fraction * (q_use[-1] - q_use[0])
     hi = use & (qa >= q_hi)
     ratio = ic[hi] / np.maximum(mean_f2[hi], 1e-12)
@@ -248,8 +266,8 @@ def transform(
     with np.errstate(invalid="ignore", divide="ignore"):
         sq = (alpha * ic - mean_f2 + mean_f_sq) / mean_f_sq
     fq_raw = qa * (sq - 1.0)
-    # 多項式補正
-    n = round(settings.qmax * settings.rpoly / math.pi)
+    # 多項式補正(次数はデータで切った Q_max から)
+    n = round(qmax_eff * settings.rpoly / math.pi)
     poly = np.zeros_like(qa)
     if n > 0:
         qf = qa[use]
@@ -263,10 +281,10 @@ def transform(
     fq = np.where(np.isfinite(fq_raw), fq_raw - poly, 0.0)
 
     r = np.arange(settings.rmin, settings.rmax + 0.5 * settings.rstep, settings.rstep)
-    ft = (qa >= settings.qmin) & (qa <= settings.qmax) & np.isfinite(fq)
-    gr = sine_transform(qa[ft], fq[ft], r, settings.qmax, settings.lorch)
+    ft = (qa >= settings.qmin) & (qa <= qmax_eff) & np.isfinite(fq)
+    gr = sine_transform(qa[ft], fq[ft], r, qmax_eff, settings.lorch)
     log.append(
-        f"フーリエ変換: Q = {settings.qmin:g}〜{settings.qmax:g} Å⁻¹"
+        f"フーリエ変換: Q = {settings.qmin:g}〜{qmax_eff:.3f} Å⁻¹"
         + ("(Lorch 窓あり)" if settings.lorch else "")
     )
     return TransformResult(
@@ -281,6 +299,7 @@ def transform(
         gr=gr,
         settings=settings,
         log=log,
+        qmax_eff=qmax_eff,
     )
 
 

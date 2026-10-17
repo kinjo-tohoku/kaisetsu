@@ -3,12 +3,18 @@
 観測構造因子: Rietveld 分配で得た "観測" 積分強度 I_obs,k から
     |F_obs|² = |F_calc|² I_obs / I_calc、位相はモデル(初回)または前回の MEM 密度(2 回目以降)から。
     σ(|F|) は I_obs の誤差伝播 σ(I_obs) から(σ(F²) = F²_calc σ(I)/I_calc、σ(|F|) = σ(F²)/(2|F|))。
+    X 線では異常分散 f′, f″ を除く: MEM の密度は f0 だけの電子密度(F000 = Σ f0(0) = 電子数)なので
+    |F_obs|² に |F_calc(f0)|² / |F_calc(f0 + f′ + if″)|² を掛け、位相も f0 だけの F_calc から取る
+    (RIETAN-FP / Dysnomia と同じ扱い。F. Izumi & R. A. Dilanian, Recent Res. Devel. Phys. 3,
+    699 (2002))。
 
 MPF(Takata, Nishibori & Sakata, Z. Kristallogr. 216, 71 (2001)):
     1. Rietveld 精密化 → F_obs(位相はモデル)
     2. MEM → 密度 ρ_MEM → F_MEM(h)
     3. |F_MEM|² を固定した構造因子表としてパターンフィッティング(スケール・背景・格子・プロファイル)
-       → 重なった反射を F_MEM の比で再分配した新しい F_obs(位相は F_MEM)
+       → 重なった反射を F_MEM の比で再分配した新しい F_obs(位相は F_MEM)。
+       X 線では表に |F_calc(f0 + f′ + if″)|² / |F_calc(f0)|² を掛けて異常分散を戻す
+       (F_MEM は f0 だけの電子密度の構造因子、観測強度には f′, f″ が入っている)
     4. 2 に戻る。Rwp と密度の変化が小さくなるまで繰り返す。
 """
 
@@ -22,6 +28,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from kaisetsu.crystal.structure import Structure
 from kaisetsu.mem.core import MEMInput, MEMResult, run_mem
 from kaisetsu.pdf.calculator import scattering_lengths
 from kaisetsu.refine.project import Project
@@ -30,8 +37,11 @@ from kaisetsu.refine.rfactors import (
     partition_uncertainties,
     reflections_inside,
 )
-from kaisetsu.reflections.structure_factor import structure_factors
-from kaisetsu.scattering.xray import XrayScatteringFactors
+from kaisetsu.reflections.structure_factor import (
+    powder_structure_factor_squared,
+    structure_factors,
+)
+from kaisetsu.scattering import Radiation
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -77,9 +87,15 @@ def observed_structure_factors(
     """Rietveld 分配から MEM 用の観測構造因子を作る。
 
     Args:
-        phases: 代表 hkl → 位相を取る複素数(None ならモデルの構造因子。異常分散の虚部は除く)
+        phases: 代表 hkl → 位相を取る複素数(None ならモデルの構造因子。X 線では異常分散を除いた
+            f0 だけの構造因子)
         min_rel_sigma: σ(|F|) の下限(|F| に対する比)
         min_abs_sigma: σ(|F|) の絶対値の下限(None なら |F| の最大値の 1e-3)
+
+    X 線では |F_obs|² と σ に |F_calc(f0)|² / |F_calc(f0 + f′ + if″)|² を掛けて異常分散を除く
+    (モジュールの docstring)。MPF の 2 周目以降は tbl.f2 が |F_MEM|² になるが、観測強度には
+    異常分散が残っているので同じ比を掛ける。比は構造モデルから計算し、MPF では構造を動かさない
+    ので 1 周目と同じ値になる。
     """
     h = project.histograms[hist]
     res = project.calculate(hist)
@@ -106,28 +122,35 @@ def observed_structure_factors(
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(tbl.intensity_total > 0, i_obs / tbl.intensity_total, 0.0)
         ratio_s = np.where(tbl.intensity_total > 0, sig_i / tbl.intensity_total, 0.0)
-    f2_obs = np.maximum(tbl.f2 * ratio, 0.0)
+
+    ph = project.phases[phase]
+    ph.sync()
+    rad = h.instrument.radiation
+    fc0: ComplexArray | None = None
+    corr = np.ones(len(tbl.hkl))
+    if rad.is_xray:
+        fc0, corr = anomalous_correction(
+            ph.structure, tbl.hkl, rad, anomalous=h.anomalous, override=h.scattering_override
+        )
+    f2_obs = np.maximum(tbl.f2 * ratio * corr, 0.0)
     f_abs = np.sqrt(f2_obs)
-    sig_f2 = tbl.f2 * ratio_s
+    sig_f2 = tbl.f2 * ratio_s * corr
     with np.errstate(divide="ignore", invalid="ignore"):
         sig_f = np.where(f_abs > 0, sig_f2 / (2.0 * f_abs), np.sqrt(np.maximum(sig_f2, 0.0)))
     fmax = float(f_abs.max()) if len(f_abs) else 1.0
     floor_abs = min_abs_sigma if min_abs_sigma is not None else 1e-3 * fmax
     sig_f = np.maximum(np.maximum(sig_f, min_rel_sigma * f_abs), floor_abs)
+    # 中心が測定範囲外の反射は観測していないので σ = inf(MEM の拘束に入れず N_F にも数えない。
+    # 値は計算値のまま残すので位相と振幅の参考にはなる)
+    sig_f = np.where(inside, sig_f, np.inf)
 
-    ph = project.phases[phase]
-    ph.sync()
-    rad = h.instrument.radiation
     if phases is None:
-        anomalous = h.anomalous
-        if rad.is_xray and anomalous is None:
-            xt = XrayScatteringFactors()
-            anomalous = {
-                sp: complex(xt.anomalous(sp, rad.wavelength).real, 0.0)
-                for sp in ph.structure.species_list()
-            }
-        fc = structure_factors(
-            ph.structure, tbl.hkl, rad, anomalous=anomalous, override=h.scattering_override
+        fc = (
+            fc0
+            if fc0 is not None
+            else structure_factors(
+                ph.structure, tbl.hkl, rad, anomalous=h.anomalous, override=h.scattering_override
+            )
         )
         unit = np.where(np.abs(fc) > 0, fc / np.maximum(np.abs(fc), 1e-300), 1.0 + 0j)
     else:
@@ -153,6 +176,38 @@ def _unit(z: complex) -> complex:
     return z / a if a > 0 else 1.0 + 0j
 
 
+def anomalous_correction(
+    structure: Structure,
+    hkl: IntArray,
+    radiation: Radiation,
+    *,
+    anomalous: Mapping[str, complex] | None = None,
+    override: Mapping[str, npt.ArrayLike] | None = None,
+) -> tuple[ComplexArray, FloatArray]:
+    """X 線の構造因子から異常分散を除く比と、f0 だけの構造因子。
+
+    Returns:
+        fc0: f′ = f″ = 0 で計算した構造因子(位相用)
+        corr: |F_calc(f0)|² / |F_calc(f0 + f′ + if″)|²(粉末の Friedel 平均)。|F_obs|² と σ(|F|²) に
+            掛ける。分母がほぼ 0 の反射(観測できない)は 1
+
+    MEM の密度は f0 だけの電子密度で F000 = Σ f0(0) = 電子数なので、|F_obs| もそれに合わせる
+    (RIETAN-FP / Dysnomia の流儀)。Cu Kα で Pb、Fe、Co、Mn、ランタノイドなどを測ると
+    f′ が −2〜−10 e になり、補正しないと重原子の電子数が数 % 少なく、密度が歪む。
+    """
+    no_anom = dict.fromkeys(structure.species_list(), 0j)
+    fc0 = structure_factors(structure, hkl, radiation, anomalous=no_anom, override=override)
+    f2_anom = powder_structure_factor_squared(
+        structure, hkl, radiation, anomalous=anomalous, override=override
+    )
+    f2_f0 = np.abs(fc0) ** 2
+    top = max(float(f2_anom.max()) if len(f2_anom) else 0.0, 1e-300)
+    # どちらかがほぼ 0 の反射(観測できない、または比が不安定)は補正しない。逆数も使うので両方見る
+    safe = (f2_anom > 1e-9 * top) & (f2_f0 > 1e-9 * top)
+    corr = np.where(safe, f2_f0 / np.where(safe, f2_anom, 1.0), 1.0)
+    return fc0, np.asarray(corr, dtype=np.float64)
+
+
 def overlap_groups_from_project(
     project: Project, hist: int, phase: str, overlap_fwhm: float = 0.5
 ) -> list[tuple[IntArray, float, float, IntArray]]:
@@ -167,10 +222,12 @@ def overlap_groups_from_project(
     tbl = res.peaks[k]
     pos = tbl.two_theta
     order = np.argsort(pos)
+    obs = observed_structure_factors(project, hist, phase)
     groups: list[list[int]] = []
     current: list[int] = []
     for j in order:
-        if not np.isfinite(pos[j]):
+        # 位置が無い反射と測定範囲外(σ = inf)の反射は群に入れない
+        if not np.isfinite(pos[j]) or not np.isfinite(obs.sigma[j]):
             continue
         if current:
             prev = current[-1]
@@ -184,7 +241,6 @@ def overlap_groups_from_project(
         groups.append(current)
     if not groups:
         return []
-    obs = observed_structure_factors(project, hist, phase)
     f_abs = np.abs(obs.f_obs)
     sig_f2 = 2.0 * f_abs * obs.sigma
     out: list[tuple[IntArray, float, float, IntArray]] = []
@@ -277,6 +333,8 @@ def run_mpf(
     モデルに戻すには ``project.phases[phase].le_bail = False``。
     """
     ph = project.phases[phase]
+    h = project.histograms[hist]
+    rad = h.instrument.radiation
     log: list[str] = []
 
     def say(msg: str) -> None:
@@ -304,10 +362,19 @@ def run_mpf(
             (int(a), int(b), int(c)): complex(f)
             for (a, b, c), f in zip(mem.hkl, mem.f_calc, strict=True)
         }
-        # |F_MEM|² を固定した構造因子表でパターンフィッティング
+        # |F_MEM|² を固定した構造因子表でパターンフィッティング。X 線では F_MEM が f0 だけの
+        # 電子密度の構造因子なので、観測強度に合わせて異常分散の比を戻す(|F_MEM|² / corr)。
+        # 次の周の observed_structure_factors が同じ比を掛けるので
+        # |F_obs|² = |F_MEM|² I_obs / I_calc になる
+        table = {k: abs(v) ** 2 for k, v in f_mem.items()}
+        if rad.is_xray:
+            _fc0, corr = anomalous_correction(
+                ph.structure, mem.hkl, rad, anomalous=h.anomalous, override=h.scattering_override
+            )
+            table = {k: f2 / c for (k, f2), c in zip(table.items(), corr, strict=True)}
         ph.le_bail = True
         ph.f2_update = False
-        ph.f2_tables[hist] = {k: abs(v) ** 2 for k, v in f_mem.items()}
+        ph.f2_tables[hist] = table
         project.fix_all()
         pats = [s.format(i=hist, p=phase) for s in fit_patterns]
         for pat in pats:
