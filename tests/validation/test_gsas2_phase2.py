@@ -22,6 +22,7 @@ CASES = [
     "diamond_xray_sim",
     "pbso4_xray_asym",
     "pbso4_neutron_abs",
+    "pbso4_xray_lgmix",  # サイズ・歪みのローレンツ割合 0.5(ガウス成分の換算。物理 #2)
 ]
 
 pytestmark = pytest.mark.validation
