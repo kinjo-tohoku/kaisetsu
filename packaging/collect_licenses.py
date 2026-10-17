@@ -78,7 +78,7 @@ KNOWN_BINARIES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)^python3\d*\.dll$"), "Python 本体(PSF License。本文は上の Python の節)"),
     (re.compile(r"(?i)^base_library\.zip$"), "Python 標準ライブラリ(PSF License)"),
     (
-        re.compile(r"(?i)^(libssl|libcrypto)-[\w.]+\.dll$"),
+        re.compile(r"(?i)^(libssl|libcrypto)-[\w.-]+\.dll$"),
         "OpenSSL 3(Apache License 2.0。Python 本体に付属。本文は下の「固定の本文」)",
     ),
     (
@@ -98,7 +98,8 @@ KNOWN_BINARIES: list[tuple[re.Pattern[str], str]] = [
 ]
 """配布物の直下に置かれる、Python パッケージ由来でないファイル → 出どころとライセンス"""
 
-OPENSSL_RE = re.compile(r"(?i)^(libssl|libcrypto)-[\w.]+\.dll$")
+# CI の python-build-standalone は libcrypto-3-x64.dll(ハイフン入り)、手元は libcrypto-3.dll
+OPENSSL_RE = re.compile(r"(?i)^(libssl|libcrypto)-[\w.-]+\.dll$")
 
 
 @dataclass

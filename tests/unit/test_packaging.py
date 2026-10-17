@@ -91,6 +91,8 @@ def test_manifest_mode_lists_only_bundled_packages(cl: ModuleType, tmp_path: Pat
         binaries=[
             "libssl-3.dll",
             "libcrypto-3.dll",
+            "libssl-3-x64.dll",  # CI の python-build-standalone はこの名前
+            "libcrypto-3-x64.dll",
             "python314.dll",
             "VCRUNTIME140.dll",
             "numpy/_core/_multiarray_umath.pyd",
