@@ -76,9 +76,9 @@ jobs:
         with:
           python-version: "3.14"
           enable-cache: true
-      - name: 依存のインストール
-        run: uv sync --extra gui --group build
-      - name: PyInstaller + Inno Setup
+      - name: 依存のインストール(配布用: dev グループ無し)
+        run: uv sync --no-default-groups --extra gui --group build
+      - name: PyInstaller + Inno Setup(起動確認・ライセンス一覧の突き合わせを含む)
         shell: pwsh
         run: .\packaging\build_windows.ps1
       - uses: actions/upload-artifact@v4
