@@ -280,8 +280,13 @@ def _cell_result(project: Project, phase: str, hist: int = 0) -> CellResult:
     esds = {nm: _esd_of(project, f"{phase}:cell:{nm}") for nm in CELL_NAMES}
     lat = Lattice.from_parameters([values[nm] for nm in CELL_NAMES])
     volume = lat.volume
-    # 体積の esd: 動かした格子定数ごとの ∂V/∂p × σ を二乗和(格子定数どうしの相関は無視)
-    var = 0.0
+    # 体積の esd: 動かした格子定数の勾配 g = ∂V/∂p と直近の精密化の共分散 C から gᵀ C g。
+    # 共分散が無い(直近の精密化に無い)成分は相関を無視して (∂V/∂p σ)² を足す
+    # (斜方晶では a, b, c の相関が +0.4〜0.8 あり、二乗和だと esd が 0.6〜0.7 倍に出る。
+    # レビュー 2026-10-17 #9)
+    fit = project.last_fit
+    grads: dict[str, float] = {}
+    var_indep = 0.0
     any_esd = False
     for k, nm in enumerate(CELL_NAMES):
         p = project.params[f"{phase}:cell:{nm}"]
@@ -303,7 +308,16 @@ def _cell_result(project: Project, phase: str, hist: int = 0) -> CellResult:
         v_plus = Lattice.from_parameters(shifted(1.0)).volume
         v_minus = Lattice.from_parameters(shifted(-1.0)).volume
         dv = (v_plus - v_minus) / (2.0 * step)
-        var += (dv * p.esd) ** 2
+        if fit is not None and p.name in fit.names:
+            grads[p.name] = dv
+        else:
+            var_indep += (dv * p.esd) ** 2
+    var = var_indep
+    if grads and fit is not None:
+        idx = [fit.names.index(n) for n in grads]
+        g = np.array(list(grads.values()), dtype=float)
+        cov = np.asarray(fit.covariance, dtype=float)[np.ix_(idx, idx)]
+        var += max(float(g @ cov @ g), 0.0)
     h = project.histograms[hist]
     k_phase = list(h.contributions).index(phase)
     n_refl = len(project.calculate(hist).peaks[k_phase].hkl)
