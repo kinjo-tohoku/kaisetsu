@@ -26,3 +26,6 @@ Thumbs.db
 
 # 実行例の出力
 examples/output/
+
+# Claude Code のローカル作業ディレクトリ(worktree など)
+.claude/
