@@ -116,7 +116,7 @@ def cmd_refine(args: argparse.Namespace) -> int:
             coordinates=not args.no_coordinates,
             adp=not args.no_adp,
             occupancy=args.occupancy,
-            sample_displacement=args.displacement,
+            position="displacement" if args.displacement else args.position,
             preferred_orientation=args.preferred_orientation,
             roughness=args.roughness,
             try_no_kalpha2=not args.no_kalpha2_trial,
@@ -293,7 +293,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-coordinates", action="store_true", help="原子座標を動かさない")
     p.add_argument("--no-adp", action="store_true", help="変位パラメータ U を動かさない")
     p.add_argument("--occupancy", action="store_true", help="占有率も動かす(混合・部分占有サイト)")
-    p.add_argument("--displacement", action="store_true", help="ゼロ点の代わりに試料変位を動かす")
+    p.add_argument(
+        "--position",
+        choices=["auto", "zero", "displacement", "both"],
+        default="auto",
+        help="ピーク位置の補正: auto(既定。ゼロ点のみ / 試料変位のみ / 両方を試して χ² で選ぶ)、"
+        "zero(ゼロ点だけ)、displacement(試料変位だけ。平板: 高さずれ、キャピラリ: x, y ずれ)、"
+        "both(両方)",
+    )
+    p.add_argument(
+        "--displacement",
+        action="store_true",
+        help="--position displacement と同じ(旧オプション)",
+    )
     p.add_argument(
         "--preferred-orientation", action="store_true", help="選択配向(March-Dollase)も動かす"
     )
@@ -319,9 +331,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", help="装置プリセット(番号か短い名前。`kaisetsu presets` で一覧)")
     p.add_argument(
         "--position",
-        choices=["none", "zero", "distance"],
+        choices=["none", "zero", "distance", "both", "auto"],
         default="zero",
-        help="位置の補正: zero(ゼロ点、既定)、distance(試料位置)、none",
+        help="位置の補正: zero(ゼロ点、既定)、distance(試料位置)、both(両方)、"
+        "auto(zero / distance / both を試して χ² で選ぶ)、none",
     )
     p.add_argument(
         "--widths",

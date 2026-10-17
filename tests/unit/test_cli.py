@@ -126,6 +126,28 @@ def test_refine_unconverged_is_reported_even_when_quiet(
     assert saved.params["h0:inst:w"].value > 0
 
 
+def test_refine_position_option(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """--position の選択肢と旧 --displacement(= displacement)。"""
+    parser = build_parser()
+    assert parser.parse_args(["refine", "p.json"]).position == "auto"
+    assert parser.parse_args(["refine", "p.json", "--position", "both"]).position == "both"
+    assert parser.parse_args(["refine", "p.json", "--displacement"]).displacement
+    with pytest.raises(SystemExit):
+        parser.parse_args(["refine", "p.json", "--position", "distance"])
+    assert parser.parse_args(["lattice", "d.xy", "--cif", "c.cif", "--position", "auto"]).position
+    pf = _project_file(tmp_path)
+    code = main(
+        ["refine", str(pf), "--cycles", "3", "--no-coordinates", "--no-adp", "--no-kalpha2-trial",
+         "--no-humps", "--no-cell-scan", "--position", "displacement",
+         "--out", str(tmp_path / "disp.kaisetsu.json")]
+    )  # fmt: skip
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[格子定数とピーク位置]" in out and "[ピーク位置の補正を選ぶ]" not in out
+    saved = load_project(tmp_path / "disp.kaisetsu.json")
+    assert saved.params["h0:sample:displacement"].vary and not saved.params["h0:inst:zero"].vary
+
+
 def test_refine_current_without_vary_fails(tmp_path: Path) -> None:
     proj = load_project(_project_file(tmp_path))
     proj.fix_all()

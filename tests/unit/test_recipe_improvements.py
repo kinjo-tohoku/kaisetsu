@@ -204,6 +204,7 @@ def test_standard_recipe_step_names_and_options() -> None:
         "格子定数とピーク位置",
         "ピーク幅 W",
         "ピーク幅 U, V, X, Y",
+        "ピーク位置の補正を選ぶ",
         "残差のこぶを背景に試す",
         "Kα2 なしを試す",
         "非対称(放射光)",
@@ -213,6 +214,17 @@ def test_standard_recipe_step_names_and_options() -> None:
     ]
     names = [s.name for s in standard_recipe("*", "h0", try_no_kalpha2=False).steps]
     assert "Kα2 なしを試す" not in names
+    # 位置の補正を固定すると試行の段階は無く、「格子定数とピーク位置」が指定の補正を動かす
+    for position in ("zero", "displacement", "both"):
+        r = standard_recipe("*", "h0", position=position)  # type: ignore[arg-type]
+        assert "ピーク位置の補正を選ぶ" not in [s.name for s in r.steps]
+    assert standard_recipe("*", "h0", position="zero").steps[2].patterns == (
+        "*:cell:*",
+        "h0:inst:zero",
+    )
+    assert standard_recipe("*", "h0", sample_displacement=True).steps[2].filter is not None
+    with pytest.raises(ValueError, match="position"):
+        standard_recipe("*", "h0", position="distance")  # type: ignore[arg-type]
     names = [s.name for s in standard_recipe("*", "h0", humps=False).steps]
     assert "残差のこぶを背景に試す" not in names
     # 人が足したハンプは「スケールと背景」で動く
