@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import sys
 import urllib.error
 from pathlib import Path
@@ -16,12 +18,15 @@ from kaisetsu.update import (
     RELEASES_PAGE,
     ZIP_URL,
     DownloadCancelled,
+    DownloadIntegrityError,
     ReleaseInfo,
     check_for_update,
     download_file,
+    download_installer,
     fetch_latest,
     install_kind,
     is_newer,
+    parse_digest,
     parse_release,
     parse_version,
 )
@@ -202,6 +207,92 @@ def test_download_file_cancel_and_truncation(
     with pytest.raises(OSError, match="途中"):
         download_file("https://x", tmp_path / "c.exe")
     assert not (tmp_path / "c.exe").exists() and not (tmp_path / "c.exe.part").exists()
+
+
+def test_parse_release_reads_asset_digest() -> None:
+    good = "sha256:" + "ab" * 32
+    data = {
+        "tag_name": "v0.1.14",
+        "assets": [
+            {"name": "kaisetsu-windows-setup.exe", "size": 10, "digest": good},
+            {"name": "kaisetsu-windows.zip", "size": 5, "digest": "sha256:" + "cd" * 32},
+        ],
+    }
+    assert parse_release(data).installer_sha256 == "ab" * 32
+    data["assets"][0]["digest"] = "md5:" + "ab" * 16  # sha256 以外は使わない
+    assert parse_release(data).installer_sha256 == ""
+    data["assets"][0]["digest"] = None  # 古い API の応答(digest 無し)
+    assert parse_release(data).installer_sha256 == ""
+    assert parse_digest("SHA256:" + "AB" * 32) == "ab" * 32
+    assert parse_digest("sha256:short") == "" and parse_digest(None) == ""
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
+    monkeypatch.setattr(
+        update,
+        "_open",
+        lambda url, timeout, accept=None: _FakeResponse(
+            payload, url, {"Content-Length": str(len(payload))}
+        ),
+    )
+
+
+def test_download_file_verifies_sha256(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = bytes(range(256)) * 300
+    _serve(monkeypatch, payload)
+    good = hashlib.sha256(payload).hexdigest()
+    dest = tmp_path / "setup.exe"
+    assert download_file("https://x", dest, sha256=good.upper(), chunk=7000) == dest
+    assert dest.read_bytes() == payload
+
+    bad = "0" * 64
+    with pytest.raises(DownloadIntegrityError, match="SHA-256"):
+        download_file("https://x", tmp_path / "bad.exe", sha256=bad, expected_size=len(payload))
+    assert not (tmp_path / "bad.exe").exists() and not (tmp_path / "bad.exe.part").exists()
+    # digest が合っても大きさの記載と違えば失敗(API の応答が壊れている)
+    with pytest.raises(DownloadIntegrityError, match="大きさ"):
+        download_file("https://x", tmp_path / "s.exe", sha256=good, expected_size=len(payload) + 1)
+    assert not (tmp_path / "s.exe").exists()
+    assert issubclass(DownloadIntegrityError, OSError)  # 既存のダイアログは Exception を表示する
+
+
+def test_download_file_without_digest_checks_size_and_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload = b"MZ" + bytes(4000)
+    _serve(monkeypatch, payload)
+    with caplog.at_level(logging.INFO, logger="kaisetsu.update"):
+        download_file("https://x", tmp_path / "a.exe", expected_size=len(payload))
+    assert "ハッシュ未確認" in caplog.text and "大きさ" in caplog.text
+    with pytest.raises(DownloadIntegrityError, match="大きさ"):
+        download_file("https://x", tmp_path / "b.exe", expected_size=len(payload) - 1)
+    assert not (tmp_path / "b.exe").exists()
+    # レート制限の経路(大きさ 0、digest 無し)でも「確認済み」にはしない
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="kaisetsu.update"):
+        download_file("https://x", tmp_path / "c.exe")
+    assert "ハッシュ未確認" in caplog.text and "確認できません" in caplog.text
+    assert (tmp_path / "c.exe").read_bytes() == payload
+
+
+def test_download_installer_passes_release_info(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"MZ" + bytes(1000)
+    _serve(monkeypatch, payload)
+    info = ReleaseInfo(
+        version="0.1.14",
+        tag="v0.1.14",
+        url="u",
+        installer_url="https://x/setup.exe",
+        installer_size=len(payload),
+        installer_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    assert download_installer(info, tmp_path / "ok.exe").read_bytes() == payload
+    wrong = ReleaseInfo(version="0.1.14", tag="v0.1.14", url="u", installer_sha256="f" * 64)
+    with pytest.raises(DownloadIntegrityError):
+        download_installer(wrong, tmp_path / "ng.exe")
+    assert not (tmp_path / "ng.exe").exists()
 
 
 def test_install_kind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
