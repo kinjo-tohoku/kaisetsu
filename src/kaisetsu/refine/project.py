@@ -531,11 +531,15 @@ class Project:
         if qmax is None:
             q = data.metadata.get("qmax", 0.0)
             qmax = float(q) if isinstance(q, int | float) else 0.0
+        # qmin と Lorch 窓は kaisetsu の I(Q) 変換が記録したものだけ引き継ぐ。PDFgetX3 などの .gr
+        # ヘッダにも qmin はあるが、PDFfit2 は Q_min の帯域制限をしないので(検証の参照)、外部の
+        # G(r) は従来どおり qmin = 0、窓なしで扱う
+        own = data.metadata.get("format") == "kaisetsu-transform"
         if qmin is None:
-            q0 = data.metadata.get("qmin", 0.0)
+            q0 = data.metadata.get("qmin", 0.0) if own else 0.0
             qmin = float(q0) if isinstance(q0, int | float) else 0.0
         if lorch is None:
-            lorch = bool(data.metadata.get("lorch", False))
+            lorch = bool(data.metadata.get("lorch", False)) if own else False
         g = PDFEntry(
             name=name or data.name or f"g{len(self.pdf_datasets)}",
             data=data,

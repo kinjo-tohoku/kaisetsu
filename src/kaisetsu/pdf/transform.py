@@ -249,8 +249,10 @@ def transform(
     if np.count_nonzero(use) < 20:
         raise ValueError("Q_min〜Q_max の範囲にデータ点が少なすぎます")
     q_use = qa[use]
-    # Q_max はデータの上限で切る(実験室 X 線では設定の既定 25 Å⁻¹ よりずっと低い)
-    q_top = float(q_use[-1])
+    # Q_max はデータの上限で切る(実験室 X 線では設定の既定 25 Å⁻¹ よりずっと低い)。上限は
+    # 使う範囲の最後の点ではなくデータそのものの最大 Q(q <= Q_max で切った最後の点を使うと、
+    # np.arange の丸めで 24.0 が 23.99 になる)
+    q_top = float(np.max(qa[np.isfinite(ic)]))
     qmax_eff = min(settings.qmax, q_top)
     qmaxinst = min(qmaxinst, q_top)
     if qmax_eff < settings.qmax * (1.0 - 1e-9):

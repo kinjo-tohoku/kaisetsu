@@ -74,10 +74,16 @@ phase 3(PbSO4 同時精密化)はヤコビアンの修正で最終段階が平�
 
 | 対象 | 結果 |
 |---|---|
-| 高速(`-m "not slow"`) | 後述(リリース時に記録) |
-| slow の unit / integration / gui | 後述 |
-| `tests/validation`(GSAS-II・PDFfit2・Z-Rietveld 参照値、新ケース pbso4_xray_lgmix を含む) | 後述 |
+| 高速(`-m "not slow"`) | 635 passed(202 s。v0.1.13 は 488) |
+| slow の unit / integration | 11 passed(394 s) |
+| slow の gui | 23 passed |
+| `tests/validation`(GSAS-II・PDFfit2・Z-Rietveld 参照値、新ケース pbso4_xray_lgmix を含む) | 38 passed |
 | ruff / ruff format / mypy | クリーン |
+
+統合直後は 3 本落ちた。PDFfit2 比較 2 本は、統合後の追従で `add_pdf` が外部 .gr ヘッダの qmin(Get_XPDF の
+`qmin=1.0`)まで帯域制限に使うようにしたため(PDFfit2 は Q_min の帯域制限をしない)で、kaisetsu 自身の
+変換の記録だけ引き継ぐように戻した。GUI の変換テスト 1 本は Q_max をデータの上限で切るときに
+`q <= 24.0` で切った最後の点(23.99)を使っていたためで、データそのものの最大 Q を使うようにした。
 
 各担当の worktree では: 物理 542 + validation 38、精密化 508 + slow 10 + validation 36、GUI/IO 531 + slow GUI 23、MEM/PDF 501 + slow MEM 3 + `test_mem_pbso4`、配布 505(新規 24)。
 
