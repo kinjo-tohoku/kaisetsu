@@ -117,6 +117,9 @@ def refine_sequence(
     h = project.histograms[hist]
     vary_names = project.params.free_names()
     prev_rwp: float | None = None
+    # フィット範囲は最初の設定を保ち、データが届かない分だけ狭める(前のデータで狭めた範囲を
+    # 次のデータに引きずらない。GLM レビュー 2026-10-17 #7)
+    x_min0, x_max0 = h.x_min, h.x_max
 
     real_fit: FitResult | None = None  # 本番の精密化の結果(esd 付け直しの 1 サイクルは除く)
 
@@ -138,8 +141,8 @@ def refine_sequence(
         try:
             data = read_powder_data(p)
             h.data = data
-            h.x_min = max(h.x_min, float(data.x[0]))
-            h.x_max = min(h.x_max, float(data.x[-1]))
+            h.x_min = max(x_min0, float(data.x[0]))
+            h.x_max = min(x_max0, float(data.x[-1]))
             h.result = None
             if reset_background:
                 project.reset_background(hist, None, True)

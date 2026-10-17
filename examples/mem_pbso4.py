@@ -5,7 +5,7 @@
 
 出力(examples/output/):
     pbso4_mem.ccp4 / .xplor / .grd  VESTA で開ける電子密度(e/Å³)
-    pbso4_mem_z0.csv                 z = 1/4 の断面(Pb と S が乗る鏡面)
+    pbso4_mem_y025.csv               y = 1/4 の断面(Pnma で Pb と S が乗る鏡面)
 """
 
 from __future__ import annotations

@@ -175,7 +175,7 @@ INS  1PRCF11   0.239700E+03  -0.298200E+03   0.180800E+03   0.500000E+01
 INS  1PRCF12   0.000000E+00   0.000000E+00
 """
 _PRM_LAB = """INS   HTYPE   PXCR
-INS  1 ICONS  1.540500  1.544300    0.0000               0.500    0     0.780
+INS  1 ICONS  1.540500  1.544300    0.0000               0.780    0     0.500
 INS  1PRCF1     3   19   0.00100
 INS  1PRCF11       2.000000      -2.000000       5.000000   0.000000E+00
 INS  1PRCF12       1.000000       2.000000       0.010000       0.020000
@@ -206,7 +206,8 @@ def test_gsas_prm_cw_neutron_type1(tmp_path: Path) -> None:
     assert inst.x == 0.0 and inst.y == 0.0 and inst.sh_l == pytest.approx(0.002)
 
 
-def test_gsas_prm_lab_kalpha2(tmp_path: Path) -> None:
+def test_gsas_prm_lab_kalpha2(tmp_path: Path, data_dir: Path) -> None:
+    # ICONS の 41〜50 桁目が偏光 POLA、56〜65 桁目が Kα2 の比 KRATIO
     inst = CWInstrument.from_instrument_file(_write(tmp_path, "lab.prm", _PRM_LAB))
     rad = inst.radiation
     assert rad.wavelength == pytest.approx(1.5405) and rad.wavelength2 == pytest.approx(1.5443)
@@ -214,6 +215,11 @@ def test_gsas_prm_lab_kalpha2(tmp_path: Path) -> None:
     assert inst.polarization == pytest.approx(0.78)
     assert inst.sh_l == pytest.approx(0.03)
     assert inst.x == pytest.approx(0.02) and inst.y == pytest.approx(0.01)
+    # GSAS-II 5.7.4 に PbSO4 の INST_XRY.PRM を読ませると I(L2)/I(L1) = 0.5、Polariz. = 0.7
+    # (v0.1.14 までは取り違えて比 0.7・偏光 0.5 にしていた)
+    real = CWInstrument.from_instrument_file(data_dir / "pbso4" / "INST_XRY.PRM")
+    assert real.radiation.ratio2 == pytest.approx(0.5)
+    assert real.polarization == pytest.approx(0.7)
 
 
 def test_gsas_instprm_cw_and_tof_rejection(tmp_path: Path) -> None:

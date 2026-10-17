@@ -88,6 +88,24 @@ class FitResult:
         return "\n".join(lines)
 
 
+def bounded_step(value: float, step: float, lower: float, upper: float) -> float:
+    """数値微分の刻み(符号付き)。上限に近ければ後退差分、両側に余地が無ければ広い側に縮める。
+
+    上下限が一致していて動かせないときは 0 を返す(呼び出し側は列を 0 にする)。
+    以前は後退差分が下限を割ったら下限に丸めて刻みを「下限 − 現在値」にしていたので、
+    現在値が下限ちょうどで刻みが上下限の幅より大きいと 0 で割って NaN の列が入った
+    (GLM / DeepSeek レビュー 2026-10-17)。
+    """
+    step = abs(float(step))
+    if value + step <= upper:
+        return step
+    if value - step >= lower:
+        return -step
+    room_up = max(upper - value, 0.0)
+    room_down = max(value - lower, 0.0)
+    return room_up if room_up >= room_down else -room_down
+
+
 def numerical_jacobian(
     fun: Callable[[FloatArray], FloatArray],
     x: FloatArray,
@@ -96,18 +114,16 @@ def numerical_jacobian(
     upper: FloatArray,
     base: FloatArray | None = None,
 ) -> FloatArray:
-    """前進差分ヤコビアン。上限に近いパラメータは後退差分にする。"""
+    """前進差分ヤコビアン。上限に近いパラメータは後退差分にする(`bounded_step`)。"""
     r0 = fun(x) if base is None else base
     jac = np.empty((len(r0), len(x)))
     for k in range(len(x)):
-        h = steps[k]
+        h = bounded_step(float(x[k]), float(steps[k]), float(lower[k]), float(upper[k]))
+        if h == 0.0:
+            jac[:, k] = 0.0  # 上下限が一致していて動かせない
+            continue
         xk = x.copy()
-        if xk[k] + h > upper[k]:
-            h = -h
         xk[k] += h
-        if xk[k] < lower[k]:
-            xk[k] = lower[k]
-            h = xk[k] - x[k]
         jac[:, k] = (fun(xk) - r0) / h
     return jac
 

@@ -69,7 +69,10 @@ class ReflectionList:
         return ReflectionList(self.hkl[m], self.d[m], self.multiplicity[m])
 
     def index_of(self, h: int, k: int, l: int) -> int:
-        """指定 hkl(代表でなくてもよい)の添字。無ければ -1。"""
+        """格納されている代表 hkl と完全に一致する行の添字。無ければ -1。
+
+        等価な別の hkl は見つからない。代表に写してから探すには `canonical_hkl` を使う。
+        """
         match = np.where(np.all(self.hkl == np.array([h, k, l]), axis=1))[0]
         return int(match[0]) if len(match) else -1
 
@@ -87,12 +90,14 @@ def _hkl_key(hkl: IntArray, base: int, offset: int) -> IntArray:
 def canonical_hkl(spacegroup: SpaceGroup, hkl: npt.ArrayLike) -> IntArray:
     """各 hkl をラウエ群における代表 hkl((h,k,l) 辞書式最大)に写す。"""
     h = np.atleast_2d(np.asarray(hkl, dtype=np.int64))
-    hmax = int(np.abs(h).max()) if h.size else 0
+    # 位取りは回転像も含めた最大の成分で決める(六方晶の h + k などは入力の最大を超えるので、
+    # 入力だけで決めると桁が繰り上がって順序が狂う。DeepSeek レビュー 2026-10-17 #2)
+    images = [h @ rot for rot in spacegroup.laue_rotations]
+    hmax = max((int(np.abs(im).max()) for im in images if im.size), default=0)
     base = 2 * hmax + 1
     best = h.copy()
     best_key = _hkl_key(h, base, hmax)
-    for rot in spacegroup.laue_rotations:
-        hr = h @ rot
+    for hr in images:
         key = _hkl_key(hr, base, hmax)
         better = key > best_key
         best[better] = hr[better]
@@ -120,10 +125,11 @@ def generate_reflections(
     """
     if d_min <= 0:
         raise ValueError(f"d_min は正でなければなりません: {d_min}")
-    # |h| ≤ a/d_min(h = a·s, |s| = 1/d のコーシー・シュワルツ)
-    hmax = math.floor(lattice.a / d_min)
-    kmax = math.floor(lattice.b / d_min)
-    lmax = math.floor(lattice.c / d_min)
+    # |h| ≤ a/d_min(h = a·s, |s| = 1/d のコーシー・シュワルツ)。採否の判定(下の keep)と
+    # 同じ相対誤差を見込む(a/d_min がちょうど整数のとき端の反射が候補から落ちないように)
+    hmax = math.floor(lattice.a / d_min * (1.0 + 1e-12))
+    kmax = math.floor(lattice.b / d_min * (1.0 + 1e-12))
+    lmax = math.floor(lattice.c / d_min * (1.0 + 1e-12))
     n_cand = (2 * hmax + 1) * (2 * kmax + 1) * (2 * lmax + 1)
     if n_cand > max_candidates:
         raise PatternSizeError(

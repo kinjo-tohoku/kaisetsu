@@ -160,7 +160,10 @@ class CWInstrument:
         """GSAS(旧)の装置パラメータファイル(.prm / .inst / .iparm)を読む。CW(PXC / PNC)用。
 
         APS 11-BM などが配っている形式。GSAS-II の SetPowderInstParms と同じ対応で読む:
-        ICONS 行は固定桁(λ1, λ2, ゼロ点 [cdeg]、λ2 があれば比 I2/I1 と偏光、無ければ偏光)、
+        ICONS 行は固定桁(λ1, λ2, ゼロ点 [cdeg]、41〜50 桁目が偏光 POLA、56〜65 桁目が
+        Kα2 の強度比 KRATIO。λ2 が無ければ比は使わない。GSAS-II のソースのコメントは
+        「pola & ratio」の順だが、実際の対応は names の並びで決まり偏光が先。GSAS-II 5.7.4 に
+        PbSO4 の INST_XRY.PRM を読ませると I(L2)/I(L1) = 0.5、Polariz. = 0.7)、
         PRCF1 行のプロファイル型が 3 なら PRCF11 = U V W、PRCF12 = X Y S/L H/L(SH/L はその和)、
         それ以外は X = Y = 0、SH/L = 0.002。U, V, W は cdeg²、X, Y は cdeg(GSAS の単位)。
         """
@@ -183,12 +186,14 @@ class CWInstrument:
         lam2 = _sfloat(s[10:20])
         zero = _sfloat(s[20:30]) / 100.0
         d: dict[str, Any] = {"Type": htype, "Zero": zero, "Z": 0.0}
+        # 偏光は λ2 の有無によらず 41〜50 桁目(v0.1.14 までは λ2 があるとき比と偏光を
+        # 取り違えていて、実験室 X 線の .prm で Kα2 比 0.7・偏光 0.5 になっていた。
+        # DeepSeek レビュー 2026-10-17 #4 の裏取りで発見)
+        d["Polariz."] = _sfloat(s[40:50])
         if lam2 > 0.0:
-            d.update({"Lam1": lam1, "Lam2": lam2, "I(L2)/I(L1)": _sfloat(s[40:50]) or 0.5})
-            d["Polariz."] = _sfloat(s[55:65])
+            d.update({"Lam1": lam1, "Lam2": lam2, "I(L2)/I(L1)": _sfloat(s[55:65]) or 0.5})
         else:
             d["Lam"] = lam1
-            d["Polariz."] = _sfloat(s[40:50])
         if "N" in htype:
             d["Polariz."] = 0.0
         ptype = 0

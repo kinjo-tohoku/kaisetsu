@@ -1151,7 +1151,15 @@ class Project:
                 pc.structure = self.phases[pname].structure
                 basis = pc.texture_basis()
                 n_sh = basis_size(basis)
-                if pc.sh_coefficients is None or len(pc.sh_coefficients) != n_sh:
+                if pc.sh_coefficients is not None and len(pc.sh_coefficients) != n_sh:
+                    # 空間群や次数を変えた後は基底の数が変わる。黙って捨てずに記録する
+                    # (DeepSeek レビュー 2026-10-17 #1)
+                    self.log.append(
+                        f"{ppre}: 球面調和関数の係数の数({len(pc.sh_coefficients)})が今の"
+                        f"対称性の基底の数({n_sh})と合わないので、選択配向の係数を 0 に戻しました"
+                    )
+                    pc.sh_coefficients = None
+                if pc.sh_coefficients is None:
                     pc.sh_coefficients = np.zeros(n_sh)
                 for k, nm in enumerate(coefficient_names(basis)):
                     ell = nm[2:].split("_")[0]
@@ -1782,6 +1790,12 @@ class Project:
     # 結果
     # ------------------------------------------------------------------
     def rfactors(self) -> dict[str, RFactors]:
+        """ヒストグラムごと(名前)・PDF ごと(g0, g1, …)・全体("total")の R 因子。
+
+        R_exp と χ² の自由度は、ヒストグラムごとの値でもプロジェクト全体の変数の数で引く
+        (FullProf の多パターン精密化と同じ約束。複数ヒストグラムではヒストグラムごとの χ² が
+        少し小さめに出る。Rwp は自由度を含まないので影響しない)。
+        """
         n_par = len(self.params.free())
         out: dict[str, RFactors] = {}
         all_o: list[FloatArray] = []

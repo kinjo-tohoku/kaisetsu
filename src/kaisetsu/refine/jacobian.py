@@ -32,6 +32,7 @@ import numpy.typing as npt
 from kaisetsu.pattern.calculator import PeakTable, PhaseContribution
 from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.profile.texture import coefficient_names
+from kaisetsu.refine.lsq import bounded_step
 from kaisetsu.reflections.structure_factor import powder_structure_factor_squared
 
 if TYPE_CHECKING:
@@ -205,7 +206,6 @@ def project_jacobian(
             if not ph.uses_f2_table:
                 step = p.step
                 targets = [(hi, hists[hi])] if hi is not None else list(enumerate(hists))
-                done = True
                 for i, h in targets:
                     if phase not in h.contributions or h.result is None:
                         continue
@@ -261,12 +261,12 @@ def project_jacobian(
                         jac[o : o + len(sw_g[gi]), col] = (new_g - base_g) / step
                     _perturbed(project, p, -step)
                     restore_results()
-                if done:
-                    continue
-        # それ以外は数値微分(前進差分、上限に近ければ後退)
-        step = p.step
-        if math.isfinite(p.max) and p.value + step > p.max:
-            step = -step
+                # 相がどのヒストグラムにも入っていなければ列は 0 のまま(数値微分でも 0 になる)
+                continue
+        # それ以外は数値微分(前進差分、上限に近ければ後退。両側に余地が無ければ広い側に縮める)
+        step = bounded_step(p.value, p.step, p.min, p.max)
+        if step == 0.0:
+            continue  # 上下限が一致していて動かせない(列は 0 のまま)
         _perturbed(project, p, step)
         r1 = fn()
         _perturbed(project, p, -step)

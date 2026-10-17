@@ -27,6 +27,20 @@ from kaisetsu.crystal.structure import Structure
 spglib.error.OLD_ERROR_HANDLING = False  # 失敗は None でなく SpglibError で受ける
 
 
+def _u_equiv(site: AtomSite, structure: Structure) -> float:
+    """等価等方変位パラメータ U_eq = (1/3) Σ_ij U^ij a*_i a*_j (a_i · a_j)。
+
+    等方性サイトは U_iso をそのまま返す。
+    出典: Fischer & Tillmanns, Acta Cryst. C44, 775-776 (1988)。
+    """
+    if site.u_aniso is None:
+        return float(site.u_iso)
+    rec = structure.lattice.reciprocal
+    a_star = np.array([rec.a, rec.b, rec.c])
+    g = structure.lattice.metric_tensor
+    return float(np.sum(site.u_matrix() * np.outer(a_star, a_star) * g) / 3.0)
+
+
 @dataclass(frozen=True)
 class SymmetryResult:
     """`find_symmetry` の結果。"""
@@ -66,6 +80,8 @@ def find_symmetry(
 
     元の構造に空間群があればまず全原子に展開してから調べる(P1 でなくてもよい)。
     散乱種・占有率・U_iso が違う原子は別の種類として扱う(同じ元素でも混ざらない)。
+    異方性 U_ij は標準設定への変換で向きが変わるので持ち越さず、等価等方 U_eq
+    (= (1/3) Σ_ij U^ij a*_i a*_j a_i·a_j)に落とす。
 
     Args:
         structure: 入力構造(たいてい P1 の全原子)
@@ -79,7 +95,7 @@ def find_symmetry(
     types: list[int] = []
     for k in range(len(exp)):
         site = structure.sites[int(exp.site_index[k])]
-        key = (site.species, round(site.occupancy, 6), round(site.u_iso, 6))
+        key = (site.species, round(site.occupancy, 6), round(_u_equiv(site, structure), 6))
         if key not in kinds:
             kinds.append(key)
         types.append(kinds.index(key) + 1)

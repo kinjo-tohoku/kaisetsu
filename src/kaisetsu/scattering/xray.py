@@ -47,7 +47,14 @@ class XrayScatteringFactors:
 
     # ------------------------------------------------------------------
     def resolve(self, species: str) -> str:
-        """テーブルに存在するキーに解決する。イオンが無ければ中性原子に落とす。"""
+        """テーブルに存在するキーに解決する。イオンが無ければ中性原子に落とす。
+
+        'Cval'(価電子状態の C)、'Hiso'、'Sival' のようなテーブル固有のラベルは、
+        元素 + 電荷の正規化を通さずそのまま引く。
+        """
+        raw = species.strip()
+        if raw in self._table:
+            return raw
         key = normalize_species(species)
         if key in self._table:
             return key

@@ -152,7 +152,8 @@ def fcj_pseudo_voigt(
         pos: ピーク位置 2θ_B [deg]
         fwhm_g, fwhm_l: ガウス・ローレンツ成分の FWHM [deg]
         s_l, h_l: 試料長 S / 検出器スリット長 H を試料-検出器距離 L で割ったもの
-        n_quad: 求積点数。None なら自動選択。
+        n_quad: 求積点数('gsas' 法のみ。None なら自動選択。'accurate' 法は一括カーネルが
+            点数を自分で決めるので無視する)。
         method: 'accurate'(変数変換で特異点を除いた Gauss-Legendre、既定)または
             'gsas'(GSAS-II と同じ正の半分の節点)。詳細は fcj_batch モジュール参照。
     """

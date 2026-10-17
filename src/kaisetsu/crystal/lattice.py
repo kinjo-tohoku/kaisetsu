@@ -135,9 +135,14 @@ class Lattice:
         """逆格子(2π を含まない結晶学の定義)。"""
         gs = self.reciprocal_metric_tensor
         ar, br, cr = (math.sqrt(gs[i, i]) for i in range(3))
-        alpha_r = math.degrees(math.acos(gs[1, 2] / (br * cr)))
-        beta_r = math.degrees(math.acos(gs[0, 2] / (ar * cr)))
-        gamma_r = math.degrees(math.acos(gs[0, 1] / (ar * br)))
+
+        def _angle(cos_value: float) -> float:
+            # 退化に近い格子では丸めで |cos| が 1 をわずかに超える
+            return math.degrees(math.acos(min(1.0, max(-1.0, cos_value))))
+
+        alpha_r = _angle(gs[1, 2] / (br * cr))
+        beta_r = _angle(gs[0, 2] / (ar * cr))
+        gamma_r = _angle(gs[0, 1] / (ar * br))
         return Lattice(ar, br, cr, alpha_r, beta_r, gamma_r)
 
     # ------------------------------------------------------------------

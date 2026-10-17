@@ -84,6 +84,8 @@ class _PositionTrial:
     fit: FitResult
     chi2: float
     rwp: float
+    ssq: float  #: Σ w (y_o − y_c)²(自由度で割る前。候補の比較に使う)
+    dof: int
     values: dict[str, float]
     tables: dict[str, dict[int, dict[tuple[int, int, int], float]]]
 
@@ -528,6 +530,7 @@ class Recipe:
                 last_exc = exc
                 continue
             rf = project.rfactors()["total"]
+            dof = max(rf.n_points - rf.n_params, 1)
             tried.append(
                 _PositionTrial(
                     label=label,
@@ -535,6 +538,8 @@ class Recipe:
                     fit=res,
                     chi2=rf.chi2,
                     rwp=rf.rwp,
+                    ssq=rf.chi2 * dof,
+                    dof=dof,
                     values=project.snapshot(),
                     tables=_copy_f2_tables(project),
                 )
@@ -550,9 +555,10 @@ class Recipe:
                 if c.chi2 < best.chi2:
                     best = c
                 continue
-            dof = max(c.fit.n_data - c.fit.n_params, 1)
-            gain = (best.chi2 - c.chi2) / max(c.chi2, 1e-300)
-            if gain >= POSITION_F_CRIT * extra / dof:
+            # Hamilton の比検定は自由度で割る前の Σw(y_o − y_c)² で比べる(換算 χ² で比べると
+            # 変数の少ない側の自由度が大きい分だけ閾値が厳しくなる。GLM レビュー 2026-10-17 #1)
+            gain = (best.ssq - c.ssq) / max(c.ssq, 1e-300)
+            if gain >= POSITION_F_CRIT * extra / c.dof:
                 best = c
         _restore_trial_state(project, best.values, best.tables)
         for n in all_pos:
@@ -662,7 +668,7 @@ def _restore_trial_state(
 #: 軽原子とみなす原子番号の上限(H〜Ne)。X 線では重原子が共存すると U_iso が個別に決まらない
 LIGHT_ATOM_Z_MAX = 10
 #: ピーク位置の補正で変数の多い候補(両方、キャピラリの x, y ずれ)を採る F 検定の臨界値。
-#: χ² の相対改善が POSITION_F_CRIT × 増えた変数の数 / 自由度 以上なら採る
+#: Σw(y_o − y_c)² の相対改善が POSITION_F_CRIT × 増えた変数の数 / 自由度 以上なら採る
 #: (F(1, ∞) の 0.1% 点は 10.8。自由度 5000 なら相対 0.2%)
 POSITION_F_CRIT = 10.0
 #: 位置の補正の候補が評価回数の上限で止まったとき、続きから回し直す回数の上限

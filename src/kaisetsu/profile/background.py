@@ -52,6 +52,8 @@ class ChebyshevBackground:
 
     def __post_init__(self) -> None:
         self.coefficients = np.asarray(self.coefficients, dtype=np.float64).ravel()
+        if len(self.coefficients) == 0:
+            raise ValueError("Chebyshev 背景の係数は 1 個以上必要です")
         if self.x_max <= self.x_min:
             raise ValueError("x_max は x_min より大きくなければなりません")
 
@@ -95,8 +97,8 @@ class InterpolatedBackground:
 
     points_x: FloatArray = field(default_factory=lambda: np.array([0.0, 1.0]))
     coefficients: FloatArray = field(default_factory=lambda: np.zeros(2))
-    x_min: float = 0.0
-    x_max: float = 1.0
+    x_min: float = math.nan  #: 省略すると固定点の両端
+    x_max: float = math.nan
 
     def __post_init__(self) -> None:
         self.points_x = np.asarray(self.points_x, dtype=np.float64).ravel()
@@ -105,7 +107,7 @@ class InterpolatedBackground:
             raise ValueError("固定点は昇順に 2 点以上必要です")
         if len(self.coefficients) != len(self.points_x):
             raise ValueError("固定点の数と係数の数が一致しません")
-        if self.x_max <= self.x_min:
+        if not self.x_max > self.x_min:  # NaN(省略)もここで固定点の両端に合わせる
             self.x_min, self.x_max = float(self.points_x[0]), float(self.points_x[-1])
 
     @property

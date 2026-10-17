@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -60,6 +61,11 @@ class Radiation:
             raise ValueError(f"波長は正でなければなりません: {self.wavelength}")
         if self.wavelength2 is not None and self.wavelength2 <= 0:
             raise ValueError(f"副波長は正でなければなりません: {self.wavelength2}")
+        if self.wavelength3 is not None and self.wavelength3 <= 0:
+            raise ValueError(f"第 3 の波長は正でなければなりません: {self.wavelength3}")
+        for label, ratio in (("I(λ2)/I(λ1)", self.ratio2), ("I(λ3)/I(λ1)", self.ratio3)):
+            if not math.isfinite(ratio) or ratio < 0:
+                raise ValueError(f"強度比 {label} は 0 以上の有限値でなければなりません: {ratio}")
 
     @classmethod
     def xray(

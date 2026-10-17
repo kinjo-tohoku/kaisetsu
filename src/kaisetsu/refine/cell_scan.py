@@ -211,7 +211,9 @@ def scan_cell(
     notes: list[str] = []
     span_used = span
     # 等方。±span で谷が無く Rwp も悪ければ ±CELL_SCAN_WIDE_SPAN に広げてもう一度
-    for sp in (span, max(CELL_SCAN_WIDE_SPAN, span)):
+    # (最初から広ければ 1 回だけ。同じ範囲を 2 回走査していた、GLM レビュー 2026-10-17 #6)
+    spans = [span] if span >= CELL_SCAN_WIDE_SPAN else [span, CELL_SCAN_WIDE_SPAN]
+    for sp in spans:
         step_sp, half_sp = scan_step(project, sp)
         f_iso, rwp_iso = _scan_1d(project, params, step_sp, half_sp, progress)
         n_points += len(f_iso)
