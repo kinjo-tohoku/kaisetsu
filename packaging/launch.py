@@ -7,8 +7,9 @@ import sys
 
 
 def main() -> int:
-    os.environ.setdefault("PYTHONUTF8", "1")
-    # 配布フォルダ内のサンプルデータを初期フォルダの候補にする
+    # UTF-8 モードは kaisetsu.spec の EXE(options=[("X utf8_mode=1", ...)]) で有効にしている。
+    # ここで環境変数 PYTHONUTF8 を設定しても、起動後では効かない。
+    # 配布フォルダ内のサンプルデータ(gui/paths.py が初回にドキュメントへコピーする)
     base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(sys.argv[0]))
     os.environ.setdefault("KAISETSU_SAMPLE_DIR", os.path.join(base, "data", "public"))
     # 同梱の説明書(ヘルプ → 利用者ガイド)

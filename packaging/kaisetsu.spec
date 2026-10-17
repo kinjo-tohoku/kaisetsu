@@ -10,11 +10,31 @@ PyInstaller 自体は GPL(ブートローダ例外付き)で、生成した配�
 (配布物のライセンスは kaisetsu と依存ライブラリのものになる)。
 """
 
+import json
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821  (SPECPATH は PyInstaller が与える)
+
+# 配布物に入れてはいけない開発用パッケージ(ライセンス一覧に載らないまま同梱されていた:
+# 外部レビュー 2026-10-17 #11)。uv sync の既定で dev グループが入るので、ビルドは
+# `uv sync --no-default-groups --extra gui --group build` で行い、念のためここでも除外する。
+DEV_EXCLUDES = [
+    "hypothesis",
+    "coverage",
+    "pytest",
+    "_pytest",
+    "pytest_cov",
+    "pytestqt",
+    "setuptools",
+    "pkg_resources",
+    "_distutils_hack",
+    "mypy",
+]
+# 配布物の Python を UTF-8 モードで動かす(ファイルの既定の文字コードを cp932 にしない)。
+# 起動スクリプトで環境変数 PYTHONUTF8 を設定しても起動後では効かない(外部レビュー #14)。
+UTF8_OPTION = ("X utf8_mode=1", None, "OPTION")
 
 datas = []
 datas += collect_data_files("gemmi")
@@ -42,7 +62,8 @@ a = Analysis(  # noqa: F821
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore"],
+    excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore"]
+    + DEV_EXCLUDES,
     noarchive=False,
 )
 
@@ -68,7 +89,19 @@ def _keep_module(entry: tuple) -> bool:
 
 a.datas = [e for e in a.datas if _keep_data(e)]
 a.pure = [e for e in a.pure if _keep_module(e)]
+for _name in DEV_EXCLUDES:
+    assert not any(str(e[0]).split(".")[0] == _name for e in a.pure), f"{_name} が同梱される"
 pyz = PYZ(a.pure)  # noqa: F821
+
+# 実際に同梱したモジュール・バイナリ・データの一覧。packaging/collect_licenses.py が、
+# 依存の閉包ではなくこれからライセンス一覧を作り、未知のものがあればビルドを失敗させる。
+manifest = {
+    "modules": sorted({str(e[0]) for e in a.pure}),
+    "binaries": sorted({str(e[0]).replace("\\", "/") for e in a.binaries}),
+    "datas": sorted({str(e[0]).replace("\\", "/") for e in a.datas}),
+}
+manifest_path = Path(workpath) / "bundle_manifest.json"  # noqa: F821  (workpath = build/kaisetsu)
+manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
 exe = EXE(  # noqa: F821
     pyz,
@@ -82,6 +115,7 @@ exe = EXE(  # noqa: F821
     upx=False,
     console=False,
     icon=str(ROOT / "packaging" / "kaisetsu.ico"),
+    options=[UTF8_OPTION],
 )
 # コマンドライン版: 同じ解析結果(pyz)を使い、起動スクリプトだけ差し替えたコンソール exe
 cli_scripts = [s for s in a.scripts if not str(s[1]).replace("\\", "/").endswith("packaging/launch.py")]
@@ -98,6 +132,7 @@ exe_cli = EXE(  # noqa: F821
     upx=False,
     console=True,
     icon=str(ROOT / "packaging" / "kaisetsu.ico"),
+    options=[UTF8_OPTION],
 )
 coll = COLLECT(  # noqa: F821
     exe,
