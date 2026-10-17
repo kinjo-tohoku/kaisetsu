@@ -108,6 +108,46 @@ begin
     RemoveFromPath(ExpandConstant('{app}'));
 end;
 
+{ 更新(上書きインストール)の前に、前の版の _internal(Qt のプラグイン、古い DLL や .pyd)を消す。
+  ignoreversion の上書きだけでは無くなったファイルが残り、Qt が古いプラグインを読もうとする。
+  _internal\data(サンプルデータ)だけは残す: v0.1.13 以前は保存の初期フォルダがそこだったので、
+  利用者のプロジェクトが置かれていることがある(外部レビュー 2026-10-17 #12)。 }
+procedure DeleteInternalExceptData;
+var
+  Base, Item: string;
+  FindRec: TFindRec;
+begin
+  Base := ExpandConstant('{app}\_internal');
+  if not DirExists(Base) then
+    exit;
+  if FindFirst(Base + '\*', FindRec) then
+  begin
+    try
+      repeat
+        Item := FindRec.Name;
+        if (Item <> '.') and (Item <> '..') and (CompareText(Item, 'data') <> 0) then
+        begin
+          if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+            DelTree(Base + '\' + Item, True, True, True)
+          else
+            DeleteFile(Base + '\' + Item);
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    DeleteInternalExceptData;
+end;
+
 [UninstallDelete]
-; numba のキャッシュなど、実行時にできるファイルも消す
-Type: filesandordirs; Name: "{app}"
+; アンインストールで消すのは、こちらが入れたファイル(Inno Setup が自動で消す)と、実行時にできる
+; 既知のものだけ。{app} を丸ごと消してはいけない: 利用者がそこに保存したプロジェクトや、
+; インストール先に指定された既存フォルダまで消える(外部レビュー 2026-10-17 #12)。
+; numba のキャッシュは %LOCALAPPDATA%\numba\Cache にでき、他の numba アプリと共用なので触らない。
+Type: filesandordirs; Name: "{app}\_internal\__pycache__"

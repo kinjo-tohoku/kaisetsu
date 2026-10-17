@@ -2,6 +2,9 @@
 #   git tag v0.1.0 && git push origin v0.1.0
 # ダウンロード URL(常に最新):
 #   https://github.com/kinjo-tohoku/kaisetsu/releases/latest/download/kaisetsu-windows-setup.exe
+# 順序: テスト(高速)→ ビルド(dev グループ無し)→ Release を draft で作る → asset を上げる → 公開。
+# 公開してから asset を上げると、その間に更新確認をした利用者には 404 になる(外部レビュー 2026-10-17 #10)。
+# actions はタグで固定している(SHA 固定はネットワークから SHA を確かめてから行う)。
 name: Release
 
 on:
@@ -18,6 +21,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v5
 
@@ -26,12 +30,10 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: 依存のインストール
-        run: uv sync --extra gui --group build
-
       - name: バージョンとタグの一致を確認
         shell: pwsh
         run: |
+          uv sync --extra gui
           $version = (uv run python -c "import kaisetsu; print(kaisetsu.__version__)").Trim()
           $tag = "${{ github.ref_name }}"
           Write-Host "kaisetsu.__version__ = $version, tag = $tag"
@@ -40,14 +42,23 @@ jobs:
           }
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: PyInstaller + Inno Setup(起動確認を含む)
+      - name: pytest(高速。落ちたら Release を作らない)
+        shell: pwsh
+        env:
+          QT_QPA_FONTDIR: C:\Windows\Fonts
+        run: uv run pytest -q -m "not slow"
+
+      - name: 依存のインストール(配布用: dev グループ無し)
+        run: uv sync --no-default-groups --extra gui --group build
+
+      - name: PyInstaller + Inno Setup(起動確認・ライセンス一覧の突き合わせを含む)
         shell: pwsh
         run: .\packaging\build_windows.ps1
 
       - name: wheel と sdist
         run: uv build
 
-      - name: Release に載せる
+      - name: Release に載せる(draft で作ってから asset を上げ、最後に公開する)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -59,7 +70,8 @@ jobs:
           Copy-Item "dist\kaisetsu-$env:VERSION-windows.zip" "dist\kaisetsu-windows.zip"
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title "kaisetsu $env:VERSION" --generate-notes
+            gh release create $tag --draft --title "kaisetsu $env:VERSION" --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw "gh release create に失敗しました" }
           }
           gh release upload $tag --clobber `
             "dist\kaisetsu-$env:VERSION-windows-setup.exe" `
@@ -67,6 +79,10 @@ jobs:
             "dist\kaisetsu-$env:VERSION-windows.zip" `
             "dist\kaisetsu-windows.zip" `
             (Get-ChildItem dist\*.whl, dist\*.tar.gz | ForEach-Object { $_.FullName })
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload に失敗しました" }
+          # asset がそろってから公開する(アプリ内更新が digest と大きさを照合できる状態にする)
+          gh release edit $tag --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "gh release edit --draft=false に失敗しました" }
 
       - uses: actions/upload-artifact@v4
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}

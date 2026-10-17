@@ -4,13 +4,18 @@
   `ReleaseInfo` を返す。API のレート制限(認証なしは 1 時間 60 回 / IP)に引っかかったときは、
   `releases/latest` のリダイレクト先からタグだけを読む(変更点の本文は空になる)。
 - 送る情報は無い(GitHub にアクセスするだけ)。プロキシは環境変数 HTTPS_PROXY を urllib が読む。
-- `download_file()` はインストーラをファイルに落とす(進捗と中止のコールバック付き)。
+- `download_file()` はインストーラをファイルに落とす(進捗と中止のコールバック付き)。Releases API の
+  asset にある `digest`(sha256)と照合し、一致しなければ `DownloadIntegrityError` にしてファイルを
+  消す。digest が無いときは大きさだけ、それも無ければ確認できない旨をログに出す(ハッシュ未確認)。
+  `download_installer()` は `ReleaseInfo` からその照合情報を渡す入口。
 - `install_kind()` で「インストーラで入れた」「zip 版」「Python 環境」を見分け、GUI が案内を変える。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -24,6 +29,8 @@ from pathlib import Path
 from typing import Literal, cast
 
 from kaisetsu import __version__
+
+log = logging.getLogger(__name__)
 
 REPO = "kinjo-tohoku/kaisetsu"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -53,10 +60,14 @@ class ReleaseInfo:
     """公開日時(ISO 8601)"""
     installer_url: str = INSTALLER_URL
     installer_size: int = 0
+    """インストーラの大きさ(バイト)。API から分からなければ 0"""
+    installer_sha256: str = ""
+    """インストーラの SHA-256(16 進、小文字)。Releases API の asset の digest から。無ければ空"""
     zip_url: str = ZIP_URL
 
 
 _VERSION_RE = re.compile(r"^\s*v?(\d+(?:\.\d+)*)(.*?)\s*$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def parse_version(text: str) -> tuple[tuple[int, ...], int, str]:
@@ -85,12 +96,25 @@ def is_newer(candidate: str, current: str) -> bool:
     return (_padded(a_nums, n), a_final, a_suffix) > (_padded(b_nums, n), b_final, b_suffix)
 
 
+def parse_digest(value: object) -> str:
+    """Releases API の asset の digest("sha256:<16 進 64 桁>")から 16 進を取り出す。
+
+    形式が違う・無いときは空文字(sha256 以外のアルゴリズムは使わない)。
+    """
+    text = str(value or "").strip().lower()
+    algo, _, hexdigest = text.partition(":")
+    if algo == "sha256" and _SHA256_RE.match(hexdigest):
+        return hexdigest
+    return ""
+
+
 def parse_release(data: dict[str, object]) -> ReleaseInfo:
     """Releases API の JSON(1 件分)を `ReleaseInfo` にする。"""
     tag = str(data.get("tag_name") or "")
     version = tag[1:] if tag.startswith("v") else tag
     installer_url = INSTALLER_URL
     installer_size = 0
+    installer_sha256 = ""
     zip_url = ZIP_URL
     assets = data.get("assets")
     if isinstance(assets, list):
@@ -101,6 +125,7 @@ def parse_release(data: dict[str, object]) -> ReleaseInfo:
             if name == INSTALLER_NAME:
                 installer_url = str(a.get("browser_download_url") or INSTALLER_URL)
                 installer_size = int(a.get("size") or 0)
+                installer_sha256 = parse_digest(a.get("digest"))
             elif name == ZIP_NAME:
                 zip_url = str(a.get("browser_download_url") or ZIP_URL)
     return ReleaseInfo(
@@ -111,6 +136,7 @@ def parse_release(data: dict[str, object]) -> ReleaseInfo:
         published=str(data.get("published_at") or ""),
         installer_url=installer_url,
         installer_size=installer_size,
+        installer_sha256=installer_sha256,
         zip_url=zip_url,
     )
 
@@ -162,6 +188,60 @@ class DownloadCancelled(Exception):
     """利用者がダウンロードを中止した。"""
 
 
+class DownloadIntegrityError(OSError):
+    """ダウンロードしたファイルが Release の記載(SHA-256 か大きさ)と合わない。ファイルは消した。"""
+
+
+def verify_download(
+    size: int,
+    actual_sha256: str,
+    *,
+    expected_size: int = 0,
+    sha256: str = "",
+    name: str = "ファイル",
+) -> str:
+    """ダウンロード結果を Release の記載と突き合わせ、確認した内容を文字列で返す(ログ用)。
+
+    - sha256(16 進)があれば SHA-256 を照合する。不一致なら `DownloadIntegrityError`。
+    - 無ければ expected_size と大きさを比べる(従来どおり)。ログには「ハッシュ未確認」と出す。
+    - どちらも無いとき(API のレート制限でタグだけ読めたときなど)は、確認できない旨を出す。
+      大きさ 0 を「確認済み」と扱わない。
+    """
+    if sha256:
+        if actual_sha256.lower() != sha256.lower():
+            raise DownloadIntegrityError(
+                f"ダウンロードした {name} の SHA-256 が Release の記載と一致しません"
+                "(途中で壊れたか、改ざんの可能性があります)。ファイルは削除しました。\n"
+                f"  Release の記載: {sha256}\n  ダウンロード結果: {actual_sha256}"
+            )
+        if expected_size and size != expected_size:
+            raise DownloadIntegrityError(
+                f"ダウンロードした {name} の大きさが Release の記載と違います"
+                f"({size} / {expected_size} バイト)。ファイルは削除しました。"
+            )
+        message = f"{name} の SHA-256 を Release の記載と照合しました({size} バイト)"
+        log.info(message)
+        return message
+    if expected_size:
+        if size != expected_size:
+            raise DownloadIntegrityError(
+                f"ダウンロードした {name} の大きさが Release の記載と違います"
+                f"({size} / {expected_size} バイト)。ファイルは削除しました。"
+            )
+        message = (
+            f"ハッシュ未確認: Release に digest が無いので、{name} は大きさ({size} バイト)だけ"
+            "確認しました"
+        )
+        log.warning(message)
+        return message
+    message = (
+        f"ハッシュ未確認: Release の digest と大きさが分からないので、{name}({size} バイト)の"
+        "完全性を確認できませんでした"
+    )
+    log.warning(message)
+    return message
+
+
 def download_file(
     url: str,
     dest: Path,
@@ -170,13 +250,19 @@ def download_file(
     cancel: Callable[[], bool] | None = None,
     timeout: float = 30.0,
     chunk: int = 1 << 16,
+    expected_size: int = 0,
+    sha256: str = "",
 ) -> Path:
     """URL をファイルに落とす。progress(受信バイト, 総バイト(不明なら 0))、cancel() が真なら中止。
 
     途中のファイルは `dest` に ".part" を付けた名前に書き、終わってから改名する。
+    `sha256`(16 進)があれば受信しながら SHA-256 を計算して照合し、無ければ `expected_size` と
+    大きさを比べる(`verify_download`)。一致しなければ `DownloadIntegrityError` で、ファイルは
+    残さない。
     """
     part = dest.with_name(dest.name + ".part")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
     try:
         with _open(url, timeout) as r, part.open("wb") as f:
             total = int(r.headers.get("Content-Length") or 0)
@@ -188,11 +274,15 @@ def download_file(
                 if not buf:
                     break
                 f.write(buf)
+                digest.update(buf)
                 done += len(buf)
                 if progress is not None:
                     progress(done, total)
         if total and done != total:
             raise OSError(f"ダウンロードが途中で切れました({done} / {total} バイト)")
+        verify_download(
+            done, digest.hexdigest(), expected_size=expected_size, sha256=sha256, name=dest.name
+        )
     except BaseException:
         part.unlink(missing_ok=True)
         raise
@@ -200,6 +290,26 @@ def download_file(
         dest.unlink()
     part.rename(dest)
     return dest
+
+
+def download_installer(
+    info: ReleaseInfo,
+    dest: Path,
+    *,
+    progress: Callable[[int, int], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
+    timeout: float = 30.0,
+) -> Path:
+    """Release のインストーラを落とし、その Release の digest(無ければ大きさ)と照合する。"""
+    return download_file(
+        info.installer_url,
+        dest,
+        progress=progress,
+        cancel=cancel,
+        timeout=timeout,
+        expected_size=info.installer_size,
+        sha256=info.installer_sha256,
+    )
 
 
 def install_kind() -> InstallKind:
@@ -213,9 +323,14 @@ def install_kind() -> InstallKind:
 
 
 def launch_installer(path: Path) -> None:
-    """ダウンロードしたインストーラを別プロセスで起動する(呼び出し側がアプリを終了する)。"""
+    """ダウンロードしたインストーラを別プロセスで起動する(呼び出し側がアプリを終了する)。
+
+    照合(SHA-256 か大きさ)は `download_file` / `download_installer` で済ませておくこと。
+    """
     if os.name != "nt":
         raise OSError("インストーラは Windows 用です")
+    if not path.is_file():
+        raise FileNotFoundError(f"インストーラがありません: {path}")
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
         subprocess, "CREATE_NEW_PROCESS_GROUP", 0
     )
@@ -227,14 +342,18 @@ __all__ = [
     "RELEASES_PAGE",
     "ZIP_URL",
     "DownloadCancelled",
+    "DownloadIntegrityError",
     "InstallKind",
     "ReleaseInfo",
     "check_for_update",
     "download_file",
+    "download_installer",
     "fetch_latest",
     "install_kind",
     "is_newer",
     "launch_installer",
+    "parse_digest",
     "parse_release",
     "parse_version",
+    "verify_download",
 ]
