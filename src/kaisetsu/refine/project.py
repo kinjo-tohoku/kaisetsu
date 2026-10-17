@@ -703,7 +703,7 @@ class Project:
         # 原子
         for site in st.sites:
             spre = f"{pre}:{site.label}"
-            pc = position_constraint(st.spacegroup, site.position)
+            pc = position_constraint(st.spacegroup, site.position, lattice=st.lattice)
             if not np.allclose(pc.symmetrized, site.position, atol=1e-6):
                 log.info(
                     "%s の座標を特殊位置に乗せ直しました: %s -> %s",

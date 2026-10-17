@@ -80,6 +80,15 @@ CASES: dict[str, dict[str, object]] = {
             "2000",
         ],
     },
+    # CW でサイズ・歪み広がりのローレンツ割合を 0.5 にしたケース(ガウス成分への換算の検証。
+    # 以前は 8 ln2 が余分で FWHM_G が 2.35 倍だった: レビュー 2026-10-17 物理 #2)
+    "pbso4_xray_lgmix": {
+        "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",
+        "data": DATA / "pbso4" / "PBSO4.XRA",
+        "instprm": DATA / "pbso4" / "INST_XRY.PRM",
+        "phase_name": "PbSO4",
+        "extra": ["--size", "0.3", "--mustrain", "2000", "--lgmix", "0.5"],
+    },
     # Phase 3: GSAS-II に実際に精密化させる(段階的にフラグを増やす)
     "pbso4_xray_fit": {
         "cif": DATA / "pbso4" / "PbSO4-Wyckoff.cif",

@@ -15,7 +15,7 @@ import numpy.typing as npt
 
 from kaisetsu.crystal.atoms import AtomSite
 from kaisetsu.crystal.lattice import Lattice
-from kaisetsu.crystal.spacegroup import SpaceGroup
+from kaisetsu.crystal.spacegroup import DISTANCE_TOL, SpaceGroup
 
 AVOGADRO = 6.02214076e23  # 1/mol
 
@@ -81,10 +81,13 @@ class Structure:
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_cif(cls, path: str, block: str | None = None) -> Structure:
+    def from_cif(
+        cls, path: str, block: str | None = None, *, warnings: list[str] | None = None
+    ) -> Structure:
+        """CIF から読む。warnings にリストを渡すと読み込み時の注意(日本語)を受け取れる。"""
         from kaisetsu.crystal.cif import read_structure
 
-        return read_structure(path, block)
+        return read_structure(path, block, warnings=warnings)
 
     # ------------------------------------------------------------------
     @property
@@ -97,10 +100,31 @@ class Structure:
                 return s
         raise KeyError(f"サイト {label!r} はありません")
 
-    def multiplicities(self) -> IntArray:
+    def multiplicities(self, tol: float = DISTANCE_TOL) -> IntArray:
+        """各サイトの多重度。同じ位置の判定は直交座標の距離 tol [Å] で行う。"""
+        sg, lat = self.spacegroup, self.lattice
         return np.array(
-            [self.spacegroup.multiplicity(s.position) for s in self.sites], dtype=np.int64
+            [sg.multiplicity(s.position, tol, lattice=lat) for s in self.sites], dtype=np.int64
         )
+
+    def min_image_distances(self, tol: float = DISTANCE_TOL) -> FloatArray:
+        """サイトごとに、対称等価な像どうしの最短距離 [Å] を返す(像が 1 つなら inf)。
+
+        特殊位置から僅かにずれた座標(桁落ち)や空間群・原点の取り違えがあると、
+        本来 1 つに重なるはずの像が 0.0x〜0.3 Å 離れて残る。その検出に使う。
+        """
+        g = self.lattice.metric_tensor
+        out = np.full(len(self.sites), np.inf)
+        for i, s in enumerate(self.sites):
+            pos, _ = self.spacegroup.equivalent_positions(s.position, tol, lattice=self.lattice)
+            if len(pos) < 2:
+                continue
+            d = pos[:, None, :] - pos[None, :, :]
+            d -= np.round(d)
+            dist2 = np.einsum("ijk,kl,ijl->ij", d, g, d)
+            dist2[np.diag_indices(len(pos))] = np.inf
+            out[i] = math.sqrt(float(dist2.min()))
+        return out
 
     def species_list(self) -> tuple[str, ...]:
         seen: list[str] = []
@@ -155,9 +179,10 @@ class Structure:
         return g
 
     # ------------------------------------------------------------------
-    def expand(self, tol: float = 1e-4) -> ExpandedAtoms:
+    def expand(self, tol: float = DISTANCE_TOL) -> ExpandedAtoms:
         """対称操作で単位胞内の全原子に展開する。
 
+        同じ位置に重なる像は直交座標の距離 tol [Å] で 1 つにまとめる。
         異方性 U^{ij} は操作の回転部 R で U' = R U R^T と変換し、
         β_ij = 2π^2 a*_i a*_j U'^{ij} に直して保持する。
         """
@@ -175,7 +200,9 @@ class Structure:
         aniso: list[bool] = []
         mult: list[int] = []
         for i, s in enumerate(self.sites):
-            positions, op_index = self.spacegroup.equivalent_positions(s.position, tol)
+            positions, op_index = self.spacegroup.equivalent_positions(
+                s.position, tol, lattice=self.lattice
+            )
             m = len(positions)
             mult.append(m)
             u_mat = s.u_matrix() if s.is_anisotropic else None

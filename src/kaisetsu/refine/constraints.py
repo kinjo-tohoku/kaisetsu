@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from kaisetsu.crystal.lattice import CrystalSystem
+from kaisetsu.crystal.lattice import CrystalSystem, Lattice
 from kaisetsu.crystal.spacegroup import SpaceGroup
 
 FloatArray = npt.NDArray[np.float64]
@@ -119,27 +119,32 @@ def constraint_from_projector(
 
 
 def position_constraint(
-    spacegroup: SpaceGroup, xyz: npt.ArrayLike, tol: float = 5e-4
+    spacegroup: SpaceGroup,
+    xyz: npt.ArrayLike,
+    tol: float | None = None,
+    *,
+    lattice: Lattice | None = None,
 ) -> SymmetryConstraint:
     """原子座標 (x, y, z) の対称拘束。
 
-    tol は特殊位置と見なす許容差(分率座標)。CIF の丸め(4 桁)程度のずれは特殊位置に乗せ直す。
+    特殊位置と見なす許容差 tol は、lattice を与えたときは直交座標の距離 [Å]
+    (既定 `DISTANCE_TOL` = 0.01 Å)、与えないときは分率座標の成分ごとの差(既定 5e-4)。
+    CIF の丸め(3〜4 桁)程度のずれは特殊位置に乗せ直す。分率座標の成分比較では六方晶の
+    (−y, x−y, z) で誤差が 2 倍になり (0.333, 0.667, z) を取りこぼすので、格子が分かるときは
+    必ず lattice を渡す(レビュー 2026-10-17 物理 #1)。
     """
     x = np.asarray(xyz, dtype=np.float64).reshape(3)
-    ops = spacegroup.site_symmetry(x, tol)
+    if lattice is None and tol is None:
+        tol = 5e-4
+    ops = spacegroup.site_symmetry(x, tol, lattice=lattice)
     proj = np.zeros((3, 3))
     for op in ops:
         proj += op.rot
     proj /= len(ops)
-    # 射影の像で座標を対称化(特殊位置から僅かにずれていれば乗せ直す)
-    # 変位の射影なので、まず現在値を不変点に近づける: x_sym = x + P(x_ref - x) ではなく
-    # サイト対称操作の平均像 (1/n) Σ (R x + t) を使う(格子並進の違いを補正)。
-    xs = np.zeros(3)
-    for op in ops:
-        img = op.apply(x)
-        img -= np.round(img - x)
-        xs += img
-    xs /= len(ops)
+    # 射影の像で座標を対称化(特殊位置から僅かにずれていれば乗せ直す)。
+    # 変位の射影 P(x_ref - x) ではなく、サイト対称操作の平均像 (1/n) Σ (R x + t - n) を使う
+    # (格子並進の違いを補正した、並進を含む不変点)。
+    xs = spacegroup.symmetrized_position(x, tol, lattice=lattice)
     # xs は並進を含む不変点なので射影し直さない(y = x/2 + 1/2 の 1/2 が落ちる)
     c = constraint_from_projector(proj, xs, 1e-8, project_values=False)
     return SymmetryConstraint(c.free, c.dependent, c.fixed, xs)
@@ -157,10 +162,20 @@ def _mat_to_u6(m: FloatArray) -> FloatArray:
 
 
 def adp_constraint(
-    spacegroup: SpaceGroup, xyz: npt.ArrayLike, u6: npt.ArrayLike | None = None, tol: float = 5e-4
+    spacegroup: SpaceGroup,
+    xyz: npt.ArrayLike,
+    u6: npt.ArrayLike | None = None,
+    tol: float | None = None,
+    *,
+    lattice: Lattice | None = None,
 ) -> SymmetryConstraint:
-    """異方性変位パラメータ (U11, U22, U33, U12, U13, U23) の対称拘束。"""
-    ops = spacegroup.site_symmetry(np.asarray(xyz, dtype=np.float64), tol)
+    """異方性変位パラメータ (U11, U22, U33, U12, U13, U23) の対称拘束。
+
+    tol と lattice の意味は `position_constraint` と同じ。
+    """
+    if lattice is None and tol is None:
+        tol = 5e-4
+    ops = spacegroup.site_symmetry(np.asarray(xyz, dtype=np.float64), tol, lattice=lattice)
     proj = np.zeros((6, 6))
     for k in range(6):
         e = np.zeros(6)

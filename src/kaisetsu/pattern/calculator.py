@@ -24,7 +24,7 @@ import numpy.typing as npt
 
 from kaisetsu.crystal.structure import Structure
 from kaisetsu.errors import PatternSizeError
-from kaisetsu.pattern.instrument import EIGHT_LN2, CWInstrument, GeometryKind, SampleGeometry
+from kaisetsu.pattern.instrument import CWInstrument, GeometryKind, SampleGeometry
 from kaisetsu.profile.corrections import (
     axis_cos2,
     cylinder_absorption,
@@ -62,8 +62,9 @@ class PhaseContribution:
             (GSAS-II の uniaxial と同じ。size_um は軸に垂直な方向のサイズ)
         strain_e6: 等方的な微小歪み(×10^-6、GSAS-II と同じ定義)。
             Γ_strain = (180/π) (ε × 10^-6) tanθ [deg]
-        size_lorentz_fraction, strain_lorentz_fraction: 各広がりのローレンツ成分の割合。
-            残りはガウス成分に Γ^2 として加える(GSAS-II と同じ扱い)。
+        size_lorentz_fraction, strain_lorentz_fraction: 各広がりのローレンツ成分の割合 f。
+            f Γ をローレンツ FWHM に、((1−f) Γ)² をガウス FWHM² に加える(GSAS-II の
+            Size;mx / Mustrain;mx と同じ扱い。GSAS-II は σ² に /8 ln2 で足している)。
         stephens: Stephens の異方的歪みの係数 S_HKL(15 個、×10⁻¹² Å⁻⁴)。None なら等方的な
             strain_e6 を使う。ローレンツ成分の割合は strain_lorentz_fraction を共用
         sh_order, sh_coefficients: 球面調和関数の集合組織(`profile.texture`)。sh_order が 0 なら
@@ -164,7 +165,11 @@ class PhaseContribution:
             g_strain = deg * (self.strain_e6 * 1.0e-6) * np.tan(th)
         fs, fm = self.size_lorentz_fraction, self.strain_lorentz_fraction
         add_l = fs * g_size + fm * g_strain
-        add_g2 = EIGHT_LN2 * (((1.0 - fs) * g_size) ** 2 + ((1.0 - fm) * g_strain) ** 2)
+        # ガウス成分は FWHM² に ((1−f) Γ)² を足す。GSAS-II(GSASIIstrMath.GetSampleSigGam)は
+        # σ² に ((1−mx) Γ)² / (8 ln2) を足していて、FWHM² = 8 ln2 σ² に直すと同じ量になる。
+        # 以前はここにさらに 8 ln2 を掛けていて、ローレンツ割合 < 1 でガウス幅が 2.35 倍に
+        # なっていた(レビュー 2026-10-17 物理 #2)。TOF 側(tof.py)は σ² に /8 ln2 で足している。
+        add_g2 = ((1.0 - fs) * g_size) ** 2 + ((1.0 - fm) * g_strain) ** 2
         return np.asarray(add_g2), np.asarray(add_l)
 
     @classmethod
