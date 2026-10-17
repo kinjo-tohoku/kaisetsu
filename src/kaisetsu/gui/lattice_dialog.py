@@ -60,6 +60,8 @@ POSITION_CHOICES: list[tuple[str, PositionMode]] = [
     ("動かさない(校正済みのテンプレートを使う)", "none"),
     ("ゼロ点(2θ の定数ずれ)", "zero"),
     ("試料–検出器距離(ビーム方向の試料位置のずれ)", "distance"),
+    ("ゼロ点と距離の両方", "both"),
+    ("自動(ゼロ点 / 距離 / 両方を試して χ² で選ぶ)", "auto"),
 ]
 WIDTH_CHOICES: list[tuple[str, WidthMode]] = [
     ("試料の広がりだけ(ローレンツ成分 X, Y。装置の幅は固定)", "sample"),

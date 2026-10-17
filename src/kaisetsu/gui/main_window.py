@@ -1056,12 +1056,16 @@ class MainWindow(QMainWindow):
             if dlg.exec() != PDFDataDialog.DialogCode.Accepted:
                 return
             options = dlg.values()
+        qmin_opt = options.get("qmin")
+        lorch_opt = options.get("lorch")
         self.project.add_pdf(
             data,
             str(options.get("radiation", "xray")),
             qmax=float(options.get("qmax", 0.0)),
+            qmin=float(qmin_opt) if isinstance(qmin_opt, int | float) else None,
             qdamp=float(options.get("qdamp", 0.0)),
             qbroad=float(options.get("qbroad", 0.0)),
+            lorch=lorch_opt if isinstance(lorch_opt, bool) else None,
             r_min=options.get("r_min"),
             r_max=options.get("r_max"),
         )
@@ -1086,11 +1090,14 @@ class MainWindow(QMainWindow):
         for line in dlg.result.log if dlg.result else []:
             self.log("  " + line)
         settings = dlg.settings()
+        # 変換の記録(データの上限で切った Q_max、Q_min、Lorch 窓の有無)をフィットにも引き継ぐ
         self.add_pdf_dataset(
             data,
             {
                 "radiation": settings.radiation,
-                "qmax": settings.qmax,
+                "qmax": data.metadata.get("qmax", settings.qmax),
+                "qmin": data.metadata.get("qmin", settings.qmin),
+                "lorch": data.metadata.get("lorch", settings.lorch),
                 "qdamp": 0.04,
                 "qbroad": 0.0,
                 "r_min": 1.0,
@@ -1111,8 +1118,9 @@ class MainWindow(QMainWindow):
         """CIF から相を追加する。追加できたら True。"""
         if self._running:
             return False
+        notes: list[str] = []
         try:
-            st = read_structure(path)
+            st = read_structure(path, warnings=notes)
         except Exception as exc:
             QMessageBox.critical(self, "読み込みエラー", f"CIF を読み込めませんでした:\n{exc}")
             return False
@@ -1132,6 +1140,14 @@ class MainWindow(QMainWindow):
         self.project.build_parameters()
         self.current_phase = name
         self.log(f"相を追加しました: {name} ({st.spacegroup.hm}, {st.lattice})")
+        for note in notes:
+            self.log("  注意: " + note)
+        if notes:
+            # 原点選択の推定、分数座標の解釈、特殊位置への乗せ直し、多重度の不一致など
+            self._inform(
+                "CIF の読み込みで注意があります",
+                "\n\n".join(notes) + "\n\n組成や多重度が論文と違うときは、ここを確認してください。",
+            )
         self.mark_dirty()
         self._refresh_all()
         return True
@@ -1536,6 +1552,8 @@ class MainWindow(QMainWindow):
                     + "; ".join(f"{a}–{b} ({c:+.2f})" for a, b, c in hc[:5])
                 )
             for note in self.project.diagnostics():
+                if note in message:
+                    continue  # 未収束の注意は「完了」の 2 行目に出ている
                 self.log("注意: " + note)
 
     def open_residual_dialog(self) -> None:
@@ -1716,6 +1734,10 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Save:
             return self.save_project()
         return answer == QMessageBox.StandardButton.Discard
+
+    def _inform(self, title: str, text: str) -> None:
+        """情報ダイアログを出す(テストで差し替える)。"""
+        QMessageBox.information(self, title, text)
 
     def _ask(self, box: QMessageBox) -> QMessageBox.StandardButton:
         """QMessageBox を出して押された標準ボタンを返す(テストで差し替える)。Esc はキャンセル。"""

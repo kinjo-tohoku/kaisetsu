@@ -485,8 +485,23 @@ class RecipeDialog(QDialog):
         self.adp = QCheckBox("変位パラメータ(U)を動かす")
         self.adp.setChecked(True)
         self.occ = QCheckBox("占有率を動かす(混合サイト・部分占有のサイトだけ)")
-        self.disp = QCheckBox(
-            "ゼロ点ではなく試料変位を動かす(平板: 高さずれ、キャピラリ: x, y ずれ)"
+        # ピーク位置の補正(standard_recipe の position)。既定は自動で、幅が合ったあとに
+        # ゼロ点のみ / 試料変位のみ / 両方を試して χ² で選ぶ(ウィザードと同じ選択肢)
+        self.disp = QComboBox()
+        for label, mode in (
+            ("ピーク位置の補正: 自動(ゼロ点 / 試料変位 / 両方を試して良い方を採る)", "auto"),
+            ("ピーク位置の補正: ゼロ点だけ", "zero"),
+            (
+                "ピーク位置の補正: 試料変位だけ(平板: 高さずれ、キャピラリ: x, y ずれ)",
+                "displacement",
+            ),
+            ("ピーク位置の補正: ゼロ点と試料変位の両方", "both"),
+        ):
+            self.disp.addItem(label, mode)
+        self.disp.setToolTip(
+            "平板(Bragg-Brentano)の主な系統誤差は試料高さのずれで、ゼロ点だけを動かすと"
+            "格子定数がそのずれを吸います(高さ 0.15 mm で −200 ppm)。自動では幅が合ったあとに"
+            "3 通りを試し、χ² の差が小さければ変数の少ない方を採ります"
         )
         self.asym = QCheckBox("ピーク非対称 (SH/L) を動かす")
         self.po = QCheckBox("選択配向 (March-Dollase) を動かす")
@@ -553,7 +568,7 @@ class RecipeDialog(QDialog):
             coordinates=self.coords.isChecked(),
             adp=self.adp.isChecked(),
             occupancy=self.occ.isChecked(),
-            sample_displacement=self.disp.isChecked(),
+            position=str(self.disp.currentData()),
             asymmetry=True if self.asym.isChecked() else None,
             preferred_orientation=self.po.isChecked(),
             roughness=self.rough.isChecked(),

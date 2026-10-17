@@ -121,14 +121,14 @@ def test_dialog_download_then_launch(
     payload = b"MZ" + bytes(5000)
     monkeypatch.setattr(ud, "download_dir", lambda: tmp_path)
 
-    def fake_download(url: str, dest: Path, *, progress=None, cancel=None) -> Path:
-        assert url == NEW.installer_url
+    def fake_download(info: ud.ReleaseInfo, dest: Path, *, progress=None, cancel=None) -> Path:
+        assert info.installer_url == NEW.installer_url
         dest.write_bytes(payload)
         if progress is not None:
             progress(len(payload), len(payload))
         return dest
 
-    monkeypatch.setattr(ud, "download_file", fake_download)
+    monkeypatch.setattr(ud, "download_installer", fake_download)
     launched: list[Path] = []
     confirmed: list[bool] = []
 
@@ -153,7 +153,7 @@ def test_dialog_download_refused_quit(
 ) -> None:
     monkeypatch.setattr(ud, "download_dir", lambda: tmp_path)
     monkeypatch.setattr(
-        ud, "download_file", lambda url, dest, **kw: dest.write_bytes(b"x") and dest
+        ud, "download_installer", lambda info, dest, **kw: dest.write_bytes(b"x") and dest
     )
     msgs: list[str] = []
     monkeypatch.setattr(ud.QMessageBox, "information", lambda *a, **k: msgs.append(a[2]))

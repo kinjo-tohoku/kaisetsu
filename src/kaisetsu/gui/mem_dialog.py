@@ -94,16 +94,18 @@ class _MEMWorker(QObject):
                 sigma = np.where(
                     np.isfinite(sig) & (f_abs > 0), sig / (2.0 * np.maximum(f_abs, 1e-300)), np.inf
                 )
+                # σ の無い反射は inf のまま(拘束に使わず N_F にも数えない)
                 sigma = np.where(
                     np.isfinite(sigma),
                     np.maximum(sigma, 0.01 * np.maximum(f_abs, 1e-3)),
-                    1e3 * max(float(f_abs.max()), 1.0),
+                    np.inf,
                 )
                 ph = proj.phases[self.phase]
+                # two_channel=None は負の散乱長があれば自動で 2 チャンネルにする
                 inp = MEMInput(
                     ph.structure.lattice, ph.structure.spacegroup, hkl, f_abs * unit, sigma,
-                    obs.f000, self.grid, two_channel=bool(self.two_channel),
-                    f000_negative=obs.f000_negative if self.two_channel else 0.0,
+                    obs.f000, self.grid, two_channel=self.two_channel,
+                    f000_negative=obs.f000_negative if self.two_channel is not False else 0.0,
                 )  # fmt: skip
                 mem = run_mem(
                     inp,

@@ -306,9 +306,13 @@ class HistogramEntry:
 
 
 def _structure_key(st: Structure) -> bytes:
-    """原子対リストの再利用判定用: 格子・座標・占有率・変位パラメータのバイト列。"""
-    parts = [np.ascontiguousarray(st.lattice.parameters, dtype=np.float64).tobytes()]
+    """原子対リストの再利用判定用: 空間群・格子・散乱種・座標・占有率・変位パラメータのバイト列。"""
+    parts = [
+        st.spacegroup.hm.encode("utf-8"),
+        np.ascontiguousarray(st.lattice.parameters, dtype=np.float64).tobytes(),
+    ]
     for site in st.sites:
+        parts.append(site.species.encode("utf-8") + b"\0")
         parts.append(np.ascontiguousarray(site.position, dtype=np.float64).tobytes())
         parts.append(np.array([site.occupancy, site.u_iso], dtype=np.float64).tobytes())
         if site.u_aniso is not None:
@@ -324,6 +328,7 @@ class PDFEntry:
         radiation: 'xray' または 'neutron'
         qmax, qmin: 変換に使った Q の範囲 [Å^-1](終端効果の計算に使う)
         qdamp, qbroad: 装置分解能のパラメータ
+        lorch: 変換で Lorch 窓を掛けたなら真(モデルにも同じ窓を掛ける)
         scale: データセットのスケール因子(PDFfit2 の dscale)
         phases: 相の名前 → PDF 用パラメータ
         r_min, r_max: フィットに使う r の範囲 [Å]
@@ -339,6 +344,7 @@ class PDFEntry:
     qmin: float = 0.0
     qdamp: float = 0.0
     qbroad: float = 0.0
+    lorch: bool = False
     scale: float = 1.0
     weight_factor: float = 1.0
     dr_fine: float = 0.01
@@ -500,7 +506,7 @@ class Project:
         radiation: str = "xray",
         *,
         qmax: float | None = None,
-        qmin: float = 0.0,
+        qmin: float | None = None,
         qdamp: float = 0.0,
         qbroad: float = 0.0,
         name: str | None = None,
@@ -508,10 +514,12 @@ class Project:
         r_min: float | None = None,
         r_max: float | None = None,
         weight_factor: float = 1.0,
+        lorch: bool | None = None,
     ) -> PDFEntry:
         """PDF データセット G(r) を追加する。
 
-        qmax を省略するとデータのメタデータ(.gr ヘッダ)から取り、無ければ 0(終端効果なし)。
+        qmax / qmin / lorch を省略するとデータのメタデータ(.gr ヘッダ、I(Q) 変換の記録)から取り、
+        無ければ 0 / 0 / 偽(終端効果なし・窓なし)。I(Q) 変換の qmax はデータの上限で切った値。
         r_min の既定は 1.0 Å(それより内側は終端リップルだけで情報が無い)。
         """
         if radiation not in ("xray", "neutron"):
@@ -523,6 +531,11 @@ class Project:
         if qmax is None:
             q = data.metadata.get("qmax", 0.0)
             qmax = float(q) if isinstance(q, int | float) else 0.0
+        if qmin is None:
+            q0 = data.metadata.get("qmin", 0.0)
+            qmin = float(q0) if isinstance(q0, int | float) else 0.0
+        if lorch is None:
+            lorch = bool(data.metadata.get("lorch", False))
         g = PDFEntry(
             name=name or data.name or f"g{len(self.pdf_datasets)}",
             data=data,
@@ -531,6 +544,7 @@ class Project:
             qmin=qmin,
             qdamp=qdamp,
             qbroad=qbroad,
+            lorch=lorch,
             phases={n: PDFPhase(self.phases[n].structure) for n in names},
             r_min=max(float(data.r[0]), 1.0) if r_min is None else r_min,
             r_max=float(data.r[-1]) if r_max is None else r_max,
@@ -1433,6 +1447,7 @@ class Project:
             scale=g.scale,
             dr_fine=g.dr_fine,
             pairs=pairs,
+            lorch=g.lorch,
         )
         g.result = res
         return res

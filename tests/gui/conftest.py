@@ -35,6 +35,8 @@ def _no_modal_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
     from kaisetsu.gui.main_window import MainWindow
 
     monkeypatch.setattr(MainWindow, "_ask", lambda self, box: QMessageBox.StandardButton.Discard)
+    # CIF の読み込みの注意(情報ダイアログ)も同じ理由で出さない
+    monkeypatch.setattr(MainWindow, "_inform", lambda self, title, text: None)
 
 
 def write_tiny_pattern(path: Path, scale: float = 1.0, seed: int = 0) -> Path:

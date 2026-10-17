@@ -108,11 +108,15 @@ class PhasePage(_FilePage):
         )
 
     def describe(self, path: str) -> str:
+        notes: list[str] = []
         try:
-            st = read_structure(path)
+            st = read_structure(path, warnings=notes)
         except Exception as exc:
             return f"読み込めません: {exc}"
-        return f"{st.name}: 空間群 {st.spacegroup.hm}, {st.lattice}, {st.n_sites} サイト"
+        text = f"{st.name}: 空間群 {st.spacegroup.hm}, {st.lattice}, {st.n_sites} サイト"
+        for note in notes:
+            text += "\n注意: " + note
+        return text
 
 
 class InstrumentPage(QWizardPage):

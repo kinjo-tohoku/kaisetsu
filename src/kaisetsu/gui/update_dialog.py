@@ -33,10 +33,11 @@ from kaisetsu import __version__
 from kaisetsu.gui.i18n import tr
 from kaisetsu.update import (
     DownloadCancelled,
+    DownloadIntegrityError,
     InstallKind,
     ReleaseInfo,
     check_for_update,
-    download_file,
+    download_installer,
     fetch_latest,
     install_kind,
     launch_installer,
@@ -118,11 +119,10 @@ class _DownloadWorker(QObject):
     progress = Signal(int, int)
     finished = Signal(bool, str, str)  # 成否、メッセージ、保存先
 
-    def __init__(self, url: str, dest: Path, expected_size: int = 0) -> None:
+    def __init__(self, info: ReleaseInfo, dest: Path) -> None:
         super().__init__()
-        self.url = url
+        self.info = info
         self.dest = dest
-        self.expected_size = expected_size
         self._cancel = False
 
     def cancel(self) -> None:
@@ -130,18 +130,15 @@ class _DownloadWorker(QObject):
 
     def run(self) -> None:
         try:
-            path = download_file(
-                self.url, self.dest, progress=self.progress.emit, cancel=lambda: self._cancel
+            # Release の asset の digest(SHA-256)と照合する。無ければ大きさだけ(ログに残る)
+            path = download_installer(
+                self.info, self.dest, progress=self.progress.emit, cancel=lambda: self._cancel
             )
-            size = path.stat().st_size
-            if self.expected_size and size != self.expected_size:
-                path.unlink(missing_ok=True)
-                raise OSError(
-                    f"ファイルの大きさが Release の記載と違います({size} / {self.expected_size} バイト)"
-                )
             self.finished.emit(True, "", str(path))
         except DownloadCancelled:
             self.finished.emit(False, "中止しました", "")
+        except DownloadIntegrityError as exc:
+            self.finished.emit(False, str(exc), "")
         except Exception as exc:
             self.finished.emit(False, f"{type(exc).__name__}: {exc}", "")
 
@@ -261,7 +258,7 @@ class UpdateDialog(QDialog):
                 self._worker.cancel()
             return
         dest = download_dir() / f"kaisetsu-{self.info.version}-windows-setup.exe"
-        self._worker = _DownloadWorker(self.info.installer_url, dest, self.info.installer_size)
+        self._worker = _DownloadWorker(self.info, dest)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

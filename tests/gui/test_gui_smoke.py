@@ -121,11 +121,15 @@ def test_instrument_and_recipe_dialogs(qtbot) -> None:
     assert inst.radiation.is_neutron and smp.kind.value == "debye-scherrer"
     rd = RecipeDialog(["PbSO4"])
     qtbot.addWidget(rd)
-    rd.disp.setChecked(True)
+    assert rd.disp.currentData() == "auto"
+    rd.disp.setCurrentIndex(
+        [rd.disp.itemData(i) for i in range(rd.disp.count())].index("displacement")
+    )
     r = rd.recipe()
     names = [s.name for s in r.steps]
     assert names[:2] == ["格子定数の初期値を振る", "スケールと背景"] and "原子座標" in names
     assert any("sample:displacement" in p for s in r.steps for p in s.patterns)
+    assert "ピーク位置の補正を選ぶ" not in names  # 固定モードでは試行しない
 
 
 def test_background_dialog_and_reset(qtbot, data_dir: Path) -> None:
