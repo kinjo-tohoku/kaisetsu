@@ -95,7 +95,7 @@ def test_residual_dialog_copies_and_exports_peak_list(qtbot, tmp_path: Path) -> 
     assert f"{p.d:.5f}" in text
     out = dlg.export_csv(str(tmp_path / "peaks.csv"))
     assert out is not None and Path(out).exists()
-    lines = Path(out).read_text(encoding="utf-8").splitlines()
+    lines = Path(out).read_text(encoding="utf-8-sig").splitlines()
     assert lines[0].startswith("hist,kind,position,unit,d,") and len(lines) == n + 1
     assert any("書き出しました" in line for line in proj.log)
 

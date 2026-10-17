@@ -88,11 +88,20 @@ def test_read_xrdml(tmp_path: Path) -> None:
     assert d.y[-1] == 140.0
     assert d.metadata["target"] == "Cu"
     assert d.metadata["wavelength"] == pytest.approx(1.540598)
-    assert d.metadata["ratio2"] == pytest.approx(0.5)
+    # intended="K-Alpha 1" は Kα1 単色化のデータ: kAlpha2 が書かれていても Kα2 は出さない
+    # (レビュー 2026-10-17 GUI #9)
+    assert "wavelength2" not in d.metadata and "ratio2" not in d.metadata
+    assert d.metadata["monochromatic"] is True
     # 拡張子が違っても中身で判定する
     q = tmp_path / "c.xml"
     q.write_text(XRDML, encoding="utf-8")
     assert len(read_powder_data(q)) == 5
+    # intended="K-Alpha"(Kα1 + Kα2)なら Kα2 の波長と強度比を出す
+    r = tmp_path / "d.xrdml"
+    r.write_text(XRDML.replace('intended="K-Alpha 1"', 'intended="K-Alpha"'), encoding="utf-8")
+    e = read_powder_data(r)
+    assert e.metadata["wavelength2"] == pytest.approx(1.544426)
+    assert e.metadata["ratio2"] == pytest.approx(0.5) and "monochromatic" not in e.metadata
 
 
 def test_txt_with_header_and_comma(tmp_path: Path) -> None:

@@ -124,12 +124,12 @@ def test_unindexed_peak_has_d_spacing_and_can_be_exported(tmp_path: Path) -> Non
     assert first.split("\t")[1] == "未同定" and f"{p.d:.5f}" in first
 
     out = write_unexplained_peaks_csv(proj, tmp_path / "peaks.csv")
-    lines = out.read_text(encoding="utf-8").splitlines()
+    lines = out.read_text(encoding="utf-8-sig").splitlines()
     expect = "hist,kind,position,unit,d,height,rel_height_pct,sigma,nearest_reflection,lo,hi"
     assert lines[0] == expect
     assert any(ln.startswith("h0,unindexed,") and f",{p.d:.5f}," in ln for ln in lines[1:])
     only = write_unexplained_peaks_csv(proj, tmp_path / "u.csv", include_misfit=False)
-    assert all("misfit" not in ln for ln in only.read_text(encoding="utf-8").splitlines())
+    assert all("misfit" not in ln for ln in only.read_text(encoding="utf-8-sig").splitlines())
 
 
 def test_observed_d_spacing_removes_zero_and_displacement() -> None:

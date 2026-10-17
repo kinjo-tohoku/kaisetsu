@@ -166,10 +166,15 @@ def _local(tag: str) -> str:
     return tag.split("}")[-1]
 
 
-def read_xrdml(path: str | Path) -> PowderData:
-    p = Path(path)
-    root = ElementTree.parse(p).getroot()
+def _xrdml_from_root(root: ElementTree.Element, name: str) -> PowderData:
+    """XRDML の木から最初の <scan> を読む(read_xrdml と parse_xrdml_text で共用)。
+
+    `<usedWavelength intended="K-Alpha 1">` は Kα1 単色化(Ge(111) モノクロメータなど)の
+    データなので、ファイルに kAlpha2 の波長が書かれていても Kα2 の情報は出さない
+    (出すと GUI が Kα2 ありで始めてしまう。レビュー 2026-10-17 GUI #9)。
+    """
     meta: dict[str, object] = {"format": "PANalytical XRDML"}
+    monochromatic = False
     for el in root.iter():
         t = _local(el.tag)
         if t == "kAlpha1" and el.text:
@@ -180,9 +185,16 @@ def read_xrdml(path: str | Path) -> PowderData:
             meta["ratio2"] = float(el.text)
         elif t == "anodeMaterial" and el.text:
             meta["target"] = el.text.strip()
+        elif t == "usedWavelength":
+            intended = el.attrib.get("intended", "")
+            monochromatic = "1" in intended and "2" not in intended
+    if monochromatic:
+        meta.pop("wavelength2", None)
+        meta.pop("ratio2", None)
+        meta["monochromatic"] = True
     scans = [el for el in root.iter() if _local(el.tag) == "scan"]
     if not scans:
-        raise ValueError(f"{p.name}: <scan> が見つかりません")
+        raise ValueError(f"{name}: <scan> が見つかりません")
     scan = scans[0]
     start = end = None
     for pos in scan.iter():
@@ -203,9 +215,15 @@ def read_xrdml(path: str | Path) -> PowderData:
             inten = np.array([float(v) for v in c.text.split()])
             break
     if inten is None or start is None or end is None:
-        raise ValueError(f"{p.name}: 2θ の範囲か強度が見つかりません")
+        raise ValueError(f"{name}: 2θ の範囲か強度が見つかりません")
     x = np.linspace(start, end, len(inten))
-    return _powder(list(x), list(inten), p.stem, meta)
+    return _powder(list(x), list(inten), name, meta)
+
+
+def read_xrdml(path: str | Path) -> PowderData:
+    p = Path(path)
+    root = ElementTree.parse(p).getroot()
+    return _xrdml_from_root(root, p.stem)
 
 
 def read_rasx_or_ras(path: str | Path) -> PowderData:
@@ -219,33 +237,4 @@ def parse_xrdml_text(text: str, name: str = "") -> PowderData:
     """文字列から .xrdml を読む(テスト用)。"""
     tmp = io.BytesIO(text.encode("utf-8"))
     root = ElementTree.parse(tmp).getroot()
-    tmp_path = Path(name or "xrdml")
-    # read_xrdml と同じ処理を root から行う
-    meta: dict[str, object] = {"format": "PANalytical XRDML"}
-    for el in root.iter():
-        t = _local(el.tag)
-        if t == "kAlpha1" and el.text:
-            meta["wavelength"] = float(el.text)
-        elif t == "kAlpha2" and el.text:
-            meta["wavelength2"] = float(el.text)
-        elif t == "ratioKAlpha2KAlpha1" and el.text:
-            meta["ratio2"] = float(el.text)
-        elif t == "anodeMaterial" and el.text:
-            meta["target"] = el.text.strip()
-    scan = next(el for el in root.iter() if _local(el.tag) == "scan")
-    start = end = None
-    for pos in scan.iter():
-        if _local(pos.tag) == "positions" and pos.attrib.get("axis", "").lower() == "2theta":
-            for c in pos:
-                if _local(c.tag) == "startPosition" and c.text:
-                    start = float(c.text)
-                elif _local(c.tag) == "endPosition" and c.text:
-                    end = float(c.text)
-    inten = next(
-        np.array([float(v) for v in c.text.split()])
-        for c in scan.iter()
-        if _local(c.tag) in ("intensities", "counts") and c.text
-    )
-    assert start is not None and end is not None
-    x = np.linspace(start, end, len(inten))
-    return _powder(list(x), list(inten), tmp_path.stem, meta)
+    return _xrdml_from_root(root, Path(name or "xrdml").stem)
