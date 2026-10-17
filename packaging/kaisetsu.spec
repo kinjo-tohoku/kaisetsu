@@ -34,7 +34,8 @@ DEV_EXCLUDES = [
 ]
 # 配布物の Python を UTF-8 モードで動かす(ファイルの既定の文字コードを cp932 にしない)。
 # 起動スクリプトで環境変数 PYTHONUTF8 を設定しても起動後では効かない(外部レビュー #14)。
-UTF8_OPTION = ("X utf8_mode=1", None, "OPTION")
+# ブートローダが解釈する形は Python の -X と同じ "X utf8"("X utf8_mode=1" は効かない。実測)。
+UTF8_OPTION = ("X utf8", None, "OPTION")
 
 datas = []
 datas += collect_data_files("gemmi")
@@ -106,7 +107,7 @@ manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), enc
 exe = EXE(  # noqa: F821
     pyz,
     a.scripts,
-    [],
+    [UTF8_OPTION],  # OPTION は位置引数の TOC として渡す(options= というキーワードは無視される)
     exclude_binaries=True,
     name="kaisetsu",
     debug=False,
@@ -115,7 +116,6 @@ exe = EXE(  # noqa: F821
     upx=False,
     console=False,
     icon=str(ROOT / "packaging" / "kaisetsu.ico"),
-    options=[UTF8_OPTION],
 )
 # コマンドライン版: 同じ解析結果(pyz)を使い、起動スクリプトだけ差し替えたコンソール exe
 cli_scripts = [s for s in a.scripts if not str(s[1]).replace("\\", "/").endswith("packaging/launch.py")]
@@ -123,7 +123,7 @@ cli_scripts.append(("launch_cli", str(ROOT / "packaging" / "launch_cli.py"), "PY
 exe_cli = EXE(  # noqa: F821
     pyz,
     cli_scripts,
-    [],
+    [UTF8_OPTION],
     exclude_binaries=True,
     name="kaisetsu-cli",
     debug=False,
@@ -132,7 +132,6 @@ exe_cli = EXE(  # noqa: F821
     upx=False,
     console=True,
     icon=str(ROOT / "packaging" / "kaisetsu.ico"),
-    options=[UTF8_OPTION],
 )
 coll = COLLECT(  # noqa: F821
     exe,

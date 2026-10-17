@@ -141,9 +141,11 @@ def test_bundle_dir_check_flags_missing_and_dev(cl: ModuleType, tmp_path: Path) 
 
 def test_spec_enables_utf8_mode_and_excludes_dev_packages() -> None:
     text = (PACKAGING / "kaisetsu.spec").read_text(encoding="utf-8")
-    assert "X utf8_mode=1" in text
-    # GUI と CLI の両方の EXE に options を付ける
-    assert text.count("options=[UTF8_OPTION]") == 2
+    # ブートローダが解釈するのは "X utf8"(Python の -X utf8)。"X utf8_mode=1" は効かない(実測)
+    assert '("X utf8", None, "OPTION")' in text
+    # GUI と CLI の両方の EXE に、位置引数の TOC として渡す(options= キーワードは無視される)
+    assert text.count("[UTF8_OPTION],") == 2
+    assert re.search(r"^\s*options=", text, re.M) is None
     tree = ast.parse(text)
     excludes: list[str] = []
     for node in ast.walk(tree):
