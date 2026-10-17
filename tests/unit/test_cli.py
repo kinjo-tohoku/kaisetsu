@@ -111,6 +111,21 @@ def test_refine_standard_recipe(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert rwp < 25.0
 
 
+def test_refine_unconverged_is_reported_even_when_quiet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """評価回数の上限で止まった精密化は --quiet でも「注意:」で知らせる(レビュー 2026-10-17)。"""
+    proj = load_project(_project_file(tmp_path))
+    proj.vary("PbSO4:cell:*", "h0:inst:w", "h0:inst:u", "h0:inst:v", "h0:inst:x", "h0:inst:y")
+    pf = save_project(proj, tmp_path / "many.kaisetsu.json")
+    assert main(["refine", str(pf), "--recipe", "current", "--cycles", "1", "-q"]) == 0
+    out = capsys.readouterr().out
+    assert "注意: 評価回数の上限で止まり、収束していません" in out
+    assert "注意: 注意:" not in out
+    saved = load_project(tmp_path / "many_refined.kaisetsu.json")
+    assert saved.params["h0:inst:w"].value > 0
+
+
 def test_refine_current_without_vary_fails(tmp_path: Path) -> None:
     proj = load_project(_project_file(tmp_path))
     proj.fix_all()

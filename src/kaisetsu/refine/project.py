@@ -1774,8 +1774,24 @@ class Project:
         return canonical_hkl(self.phases[phase].structure.spacegroup, hkl)
 
     def diagnostics(self) -> list[str]:
-        """精密化結果の簡単な点検。初心者向けの注意点を日本語で返す(問題が無ければ空)。"""
+        """精密化結果の簡単な点検。初心者向けの注意点を日本語で返す(問題が無ければ空)。
+
+        直近の精密化が評価回数の上限で止まって収束していなければ、その注意を先頭に入れる
+        (結果の要約、CLI、Le Bail 一括処理の warnings にまとめて出すため。レビュー 2026-10-17)。
+        """
+        from kaisetsu.refine.lsq import convergence_note, position_correlations
+
         notes: list[str] = []
+        unconverged = convergence_note(self.last_fit)
+        if unconverged:
+            # 呼び出し側が「注意:」を付けて出すので、文頭の接頭辞は外す
+            notes.append(unconverged.removeprefix("注意: "))
+        for z, d, c in position_correlations(self.last_fit):
+            notes.append(
+                f"{z} と {d} の相関が {c:+.3f} と強く、ゼロ点と試料変位は区別できていません"
+                "(2θ 範囲が狭いか反射が少ない)。格子定数の esd が膨らむので、どちらかを固定して"
+                "ください(平板なら試料変位を残し、標準試料で校正したゼロ点があればその値に固定)。"
+            )
         ps = self.params
         adp_tags = ("uiso", "u11", "u22", "u33")
         for p in ps:

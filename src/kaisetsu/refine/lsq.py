@@ -47,6 +47,14 @@ class FitResult:
     insensitive: list[str] = field(default_factory=list)
     #: J^T J の特異方向ごとの変数の組(このデータでは組み合わせでしか決まらない)
     degenerate: list[list[str]] = field(default_factory=list)
+    #: scipy.optimize.least_squares の終了状態(0 = 評価回数の上限で停止、1 = gtol、2 = ftol、
+    #: 3 = xtol、4 = ftol と xtol、-1 = 不正な入力)。未収束の種類はこれで判定する
+    status: int = -1
+
+    @property
+    def hit_evaluation_limit(self) -> bool:
+        """評価回数の上限(max_nfev)で止まったか。"""
+        return not self.success and self.status == 0
 
     def high_correlations(self, threshold: float = 0.9) -> list[tuple[str, str, float]]:
         out = []
@@ -242,6 +250,7 @@ def refine_least_squares(
         history=history,
         insensitive=[names[i] for i in insens],
         degenerate=[[names[i] for i in idx] for idx in degen],
+        status=int(getattr(res, "status", -1)),
     )
 
 
@@ -310,16 +319,47 @@ def covariance_from_jacobian(
     return cov, esd, corr, insens, degen
 
 
+#: ゼロ点と試料変位を両方動かしたとき、相関がこれ以上なら「区別できていない」と知らせる
+POSITION_CORRELATION_WARN = 0.95
+
+
+def position_correlations(
+    fit: FitResult | None, threshold: float = POSITION_CORRELATION_WARN
+) -> list[tuple[str, str, float]]:
+    """同じヒストグラムのゼロ点と試料変位が両方動いていて相関が強い組 [(ゼロ点, 変位, ρ)]。
+
+    ゼロ点(定数)と試料変位(平板 cos θ、キャピラリ cos 2θ / sin 2θ)は 2θ 範囲が狭いと
+    区別できず、両方動かすと格子定数の esd が膨らむ。標準手順の位置の試行と
+    `Project.diagnostics()` が使う(レビュー 2026-10-17 精密化 #1)。
+    """
+    if fit is None:
+        return []
+    out: list[tuple[str, str, float]] = []
+    for i, z in enumerate(fit.names):
+        if not z.endswith(":inst:zero"):
+            continue
+        head = z.split(":", 1)[0]
+        for j, d in enumerate(fit.names):
+            if not d.startswith(f"{head}:sample:disp"):
+                continue
+            c = float(fit.correlation[i, j])
+            if abs(c) >= threshold:
+                out.append((z, d, c))
+    return out
+
+
 def convergence_note(fit: FitResult | None, *, short: bool = False) -> str:
     """未収束の精密化に添える注意(収束していれば空文字)。
 
     scipy の least_squares は関数評価回数の上限(max_nfev)で止まると success=False を返すが
-    例外にはならない。GUI の「完了」と逐次精密化の行はこの文を添えて利用者に知らせる
-    (レビュー 2026-10-17 #5)。short は表の備考向けの短い形。
+    例外にはならない。GUI の「完了」、逐次精密化の行、`Project.diagnostics()`(結果の要約、
+    CLI)はこの文を添えて利用者に知らせる(レビュー 2026-10-17 #5)。上限で止まったかは
+    scipy のメッセージ文字列ではなく `FitResult.status`(0)で判定する。short は表の備考向けの
+    短い形。
     """
     if fit is None or fit.success:
         return ""
-    capped = "function evaluations" in fit.message
+    capped = fit.hit_evaluation_limit
     if short:
         return "未収束(評価回数の上限で停止)" if capped else f"未収束({fit.message})"
     if capped:

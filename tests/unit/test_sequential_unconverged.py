@@ -64,12 +64,13 @@ def test_convergence_note_texts() -> None:
         success=True, message="`ftol` termination condition is satisfied.", elapsed=0.0,
     )  # fmt: skip
     assert convergence_note(fit) == ""
-    capped = dataclasses.replace(
-        fit, success=False, message="The maximum number of function evaluations is exceeded."
-    )
+    # 上限で止まったかは scipy のメッセージ文字列ではなく status(0 = max_nfev)で判定する
+    capped = dataclasses.replace(fit, success=False, status=0, message="(文言は問わない)")
+    assert capped.hit_evaluation_limit
     assert "評価回数の上限" in convergence_note(capped)
     assert convergence_note(capped, short=True) == "未収束(評価回数の上限で停止)"
-    other = dataclasses.replace(fit, success=False, message="xyz")
+    other = dataclasses.replace(fit, success=False, status=-1, message="xyz")
+    assert not other.hit_evaluation_limit
     assert convergence_note(other, short=True) == "未収束(xyz)"
 
 
@@ -79,15 +80,21 @@ def test_sequence_row_notes_unconverged(tmp_path: Path, monkeypatch: pytest.Monk
 
     def capped_refine(*args: object, **kwargs: object) -> FitResult:
         fit = real_refine(*args, **kwargs)  # type: ignore[arg-type]
-        proj.last_fit = dataclasses.replace(
-            fit, success=False, message="The maximum number of function evaluations is exceeded."
-        )
+        proj.last_fit = dataclasses.replace(fit, success=False, status=0)
         return proj.last_fit
 
     monkeypatch.setattr(proj, "refine", capped_refine)
     res = refine_sequence(proj, paths, params=["Ni:cell:a"], cell_scan=False)
     assert len(res.rows) == 2 and all(r.ok for r in res.rows)
     assert all("未収束(評価回数の上限で停止)" in r.message for r in res.rows)
+    # 備考は CSV の note 列と summary にも出る(レビュー 2026-10-17 差分 #2)
+    csv_path = res.to_csv(tmp_path / "seq.csv")
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0].endswith(",note")
+    assert all("未収束(評価回数の上限で停止)" in line for line in lines[1:])
+    assert "未収束(評価回数の上限で停止)" in res.summary()
+    # Project.diagnostics() にも入る(結果の要約・CLI がこれを出す)
+    assert any("評価回数の上限" in n for n in proj.diagnostics())
 
 
 def test_sequence_row_quiet_when_converged(tmp_path: Path) -> None:

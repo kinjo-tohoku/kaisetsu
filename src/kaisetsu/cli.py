@@ -40,7 +40,8 @@ def _say(quiet: bool, msg: str) -> None:
 
 
 def _report(project: object, quiet: bool) -> None:
-    """R 因子と診断を出す。"""
+    """R 因子と診断を出す。未収束(評価回数の上限で停止)の注意は --quiet でも出す。"""
+    from kaisetsu.refine.lsq import convergence_note
     from kaisetsu.refine.project import Project
 
     assert isinstance(project, Project)
@@ -56,8 +57,9 @@ def _report(project: object, quiet: bool) -> None:
     for name, ph in project.phases.items():
         ph.sync()
         print(f"相 {name}: {ph.structure.spacegroup.symbol}, {ph.structure.lattice}")
-    if not quiet:
-        for note in project.diagnostics():
+    unconverged = convergence_note(project.last_fit).removeprefix("注意: ")
+    for note in project.diagnostics():
+        if not quiet or note == unconverged:
             print(f"注意: {note}")
 
 
