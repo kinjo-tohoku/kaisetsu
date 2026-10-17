@@ -174,6 +174,72 @@ def test_grid_too_coarse_raises() -> None:
                  100.0, (8, 8, 8))  # fmt: skip
 
 
+def test_grid_check_uses_equivalent_reflections() -> None:
+    """格子点数の検査は全等価反射で行う(レビュー 2026-10-17 精密化 #12)。
+
+    石英 P3₁21 では独立反射の |h| は (9, 5, 11) でも等価反射に (−h−k) 成分の 14 が出る。
+    修正前は (19, 11, 23) が通り、96 の等価反射が同じ格子点に折り返されて C = 371 で上限に達した。
+    """
+    st = Structure(
+        Lattice.hexagonal(4.9, 5.4),
+        SpaceGroup.from_symbol("P 31 2 1"),
+        [
+            AtomSite("Si", "Si", [0.47, 0.0, 0.0], u_iso=0.01),
+            AtomSite("O", "O", [0.41, 0.27, 0.12], u_iso=0.01),
+        ],
+    )
+    refl = generate_reflections(st.lattice, st.spacegroup, 1.0)
+    hmax = np.abs(refl.hkl).max(axis=0)
+    grid = tuple(int(2 * h + 1) for h in hmax)
+    f = np.ones(len(refl), dtype=complex)
+    with pytest.raises(ValueError, match="粗すぎます"):
+        MEMInput(st.lattice, st.spacegroup, refl.hkl, f, np.ones(len(refl)), 100.0, grid)
+    # 等価反射まで入る格子なら通る
+    MEMInput(st.lattice, st.spacegroup, refl.hkl, f, np.ones(len(refl)), 100.0, (30, 30, 23))
+
+
+def test_sigma_inf_excluded_from_constraint_and_count() -> None:
+    """σ = inf の反射は F 拘束に入れず N_F にも数えない(測定範囲外の反射)。"""
+    from kaisetsu.mem.core import _Model
+
+    inp, _ = _synthetic_input(_nacl(), 1.0, 16, 0.02)
+    n = len(inp.hkl)
+    base = _Model(inp)
+    sig = inp.sigma.copy()
+    sig[-3:] = np.inf
+    fobs = inp.f_obs.copy()
+    fobs[-3:] *= 10.0  # 値がどうでも C に効かない
+    inp2 = MEMInput(inp.lattice, inp.spacegroup, inp.hkl, fobs, sig, inp.f000, inp.grid)
+    model = _Model(inp2)
+    assert base.n_f == n + 1 and model.n_f == n + 1 - 3
+    assert np.all(model.w_eq[np.isin(model.owner, np.arange(n - 2, n + 1))] == 0.0)
+    m = np.full(model.n, inp.f000 / model.n)
+    c_full = base.chi2(base.f_calc_eq(m))
+    c_part = model.chi2(model.f_calc_eq(m))
+    # 残り n − 2 本(F000 込み)の寄与だけを N_F で割った値になる
+    d = base.f_obs_eq - base.f_calc_eq(m)
+    keep = ~np.isin(base.owner, np.arange(n - 2, n + 1))
+    expect = float(np.sum((base.w_eq * (d.real**2 + d.imag**2))[keep])) / (n + 1 - 3)
+    assert c_part == pytest.approx(expect, rel=1e-12)
+    assert c_part != pytest.approx(c_full, rel=1e-6)
+    with pytest.raises(ValueError):
+        MEMInput(inp.lattice, inp.spacegroup, inp.hkl, fobs, np.where(sig > 1, np.nan, sig),
+                 inp.f000, inp.grid)  # fmt: skip
+
+
+def test_two_channel_auto_from_negative_scattering() -> None:
+    """two_channel を省略(None)すると負の散乱長があるときだけ 2 チャンネルになる。"""
+    inp, _ = _synthetic_input(_rutile(), 0.8, 16, 0.01, neutron=True)
+    assert inp.f000_negative > 0
+    auto = MEMInput(inp.lattice, inp.spacegroup, inp.hkl, inp.f_obs, inp.sigma, inp.f000, inp.grid,
+                    f000_negative=inp.f000_negative)  # fmt: skip
+    assert auto.two_channel is True
+    xray, _ = _synthetic_input(_nacl(), 1.0, 16, 0.02)
+    assert xray.two_channel is False
+    assert MEMInput(xray.lattice, xray.spacegroup, xray.hkl, xray.f_obs, xray.sigma, xray.f000,
+                    xray.grid).two_channel is False  # fmt: skip
+
+
 def test_write_formats(tmp_path: Path) -> None:
     st = _nacl()
     inp, _ = _synthetic_input(st, 1.0, 16, 0.02)
@@ -201,9 +267,63 @@ def test_write_formats(tmp_path: Path) -> None:
 
 
 def test_mem_returns_closest_to_target_when_search_exhausted() -> None:
-    """λ の探索が上限に達したら、最後の λ ではなく目標 χ² に最も近かった解を返す。"""
+    """λ の探索が上限に達したら、最後の λ ではなく目標 χ² に最も近かった収束した解を返す。"""
     inp, _ = _synthetic_input(_nacl(), 1.0, 16, 0.02)
     res = run_mem(inp, max_outer=3)
     assert "上限" in res.message
-    best = min(res.history, key=lambda lc: abs(np.log(lc[1])))
+    assert len(res.history_converged) == len(res.history) == 3
+    conv = [lc for lc, ok in zip(res.history, res.history_converged, strict=True) if ok]
+    pool = conv if conv else res.history
+    best = min(pool, key=lambda lc: abs(np.log(lc[1])))
     assert res.lam == best[0] and res.chi2 == best[1]
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_lambda_search_with_small_inner_budget(seed: int) -> None:
+    """内側の予算が小さくても(400)λ の探索は収束する(レビュー 2026-10-17 差分 #1)。
+
+    修正前はルチル X 線の seed 0〜2 で、遠い λ の打ち切った C(1.48 など)が lo に入って探索が
+    そこに縮み、上限 25 回に達して打ち切り途中の密度を返した。
+    """
+    inp, _ = _synthetic_input(_rutile(), 0.8, 16, 0.01, seed=seed)
+    res = run_mem(inp, max_inner=400)
+    assert "収束" in res.message
+    assert res.chi2 == pytest.approx(1.0, abs=0.02)
+    assert len(res.history) < 15
+
+
+def test_lambda_search_ignores_truncated_chi2_for_bracket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """打ち切った内側の C は lo / hi に使わない(模擬の内側解法で探索の論理だけを試す)。
+
+    収束した C(λ) = (λ/λ*)^-1.7、打ち切り(遠い λ、小さな予算)の C は前の λ からの温かい
+    初期値の名残で「目標を少し超えた」値 1.5 を返す。修正前はこの λ が lo に入って探索が縮み、
+    上限に達した。
+    """
+    import kaisetsu.mem.core as core
+
+    lam_star = 0.1
+    calls: list[tuple[float, int]] = []
+
+    def fake_minimize(
+        objective, x0, lam, bounds, *, max_iter, window, settle_tol, settle_relative, chi2_of
+    ):  # type: ignore[no-untyped-def]
+        calls.append((lam, max_iter))
+        c_true = (lam / lam_star) ** -1.7
+        if max_iter < 1000:  # 遠い λ の小さな予算 = 打ち切り。C は当てにならない
+            c_true = 1.5 if c_true < 3.0 else c_true
+        # 変数は v = 2 sqrt(m) で m = v²/4。模擬の chi2 は m[0] を返すので v = 2 sqrt(C) にする
+        x = np.full_like(x0, 2.0 * np.sqrt(c_true))
+        if max_iter < 1000:
+            return x, max_iter, False, False
+        return x, max_iter // 4, False, True
+
+    inp, _ = _synthetic_input(_nacl(), 1.0, 16, 0.02)
+    monkeypatch.setattr(core, "_minimize_at_lambda", fake_minimize)
+    monkeypatch.setattr(core._Model, "chi2", lambda self, fc: float(np.real(fc[0])))
+    monkeypatch.setattr(core._Model, "f_calc_eq", lambda self, m: m.astype(np.complex128))
+    res = run_mem(inp, max_inner=2000, lam0=lam_star * 1e-3)
+    assert "収束" in res.message
+    assert res.lam == pytest.approx(lam_star, rel=0.02)
+    assert len(res.history) <= 10
+    # 打ち切りの点(C = 1.5)は収束扱いにならない
+    assert not all(res.history_converged)
