@@ -94,6 +94,12 @@ LE_BAIL_UPDATE_TOL = 1e-3
 #: 止める条件(Rwp の改善がこれ未満)
 LE_BAIL_AUTO_CYCLES = 5
 LE_BAIL_AUTO_TOL = 1e-4
+#: 結晶子サイズ h{i}:相:size を 0(= 広がりなし)から動かすときの初期値 [μm]。0 のまま前進差分を
+#: 取ると 1 歩目が「1 nm の結晶子」になって微分が意味を失い、0.0001 μm に潰れたまま
+#: success=True で終わる(レビュー 2026-10-17 #5)。`enable_uniaxial_size` と同じ 1 μm から始める
+SIZE_START_UM = 1.0
+#: 結晶子サイズがこれ未満 [μm] まで小さくなったら診断で知らせる(2 nm。幅のモデルが疑わしい)
+SIZE_COLLAPSE_UM = 2e-3
 _XYZ = ("x", "y", "z")
 
 
@@ -1203,10 +1209,33 @@ class Project:
                 )
 
     def vary(self, *patterns: str) -> list[str]:
-        return self.params.vary(*patterns)
+        names = self.params.vary(*patterns)
+        self._start_size_from_zero(names)
+        return names
 
     def fix(self, *patterns: str) -> list[str]:
         return self.params.fix(*patterns)
+
+    def _start_size_from_zero(self, names: Iterable[str] | None = None) -> list[str]:
+        """動かす結晶子サイズ h{i}:相:size が 0(= 広がりなし)なら SIZE_START_UM から始める。
+
+        0 は「無限大」の意味で、そこから前進差分を取ると 1 歩目が 1 nm の結晶子になり、
+        0.0001 μm に潰れたまま success=True で終わる(レビュー 2026-10-17 #5)。GUI の表で
+        チェックを入れた場合も拾えるように `refine` の最初でも呼ぶ。直した名前を返す
+        """
+        out: list[str] = []
+        for p in self._named(names):
+            if not p.is_free or p.value > 0.0:
+                continue
+            parts = p.name.split(":")
+            if len(parts) == 3 and parts[2] == "size" and parts[1] in self.phases:
+                p.value = SIZE_START_UM
+                p.apply()
+                out.append(p.name)
+                self.log.append(
+                    f"{p.name} は 0(広がりなし)から動かせないので {SIZE_START_UM:g} μm から始めます"
+                )
+        return out
 
     def fix_all(self) -> None:
         self.params.fix_all()
@@ -1492,6 +1521,7 @@ class Project:
         """
         if not self.histograms and not self.pdf_datasets:
             raise ValueError("ヒストグラムも PDF データもありません")
+        self._start_size_from_zero()
         self.params.evaluate_ties()
         self.params.apply_all()
         n_free = len(self.params.free())
@@ -1826,6 +1856,18 @@ class Project:
                 "ください(平板なら試料変位を残し、標準試料で校正したゼロ点があればその値に固定)。"
             )
         ps = self.params
+        for p in ps.free():
+            parts = p.name.split(":")
+            if (
+                len(parts) == 3
+                and parts[2] == "size"
+                and parts[1] in self.phases
+                and 0.0 < p.value < SIZE_COLLAPSE_UM
+            ):
+                notes.append(
+                    f"{p.name} が {1000 * p.value:.2f} nm まで小さくなりました。結晶子サイズでは"
+                    "説明できない幅のずれ(U, V, W, X, Y の初期値、装置の幅)を疑ってください。"
+                )
         adp_tags = ("uiso", "u11", "u22", "u33")
         for p in ps:
             tail = p.name.rsplit(":", 1)[-1]
