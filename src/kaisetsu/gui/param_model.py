@@ -53,8 +53,19 @@ class ParameterModel(QAbstractTableModel):
         super().__init__(parent)
         self._params: ParameterSet = params if params is not None else ParameterSet()
         self._rows: list[Parameter] = list(self._params)
+        self._read_only = False
 
     # ------------------------------------------------------------------
+    def set_read_only(self, flag: bool) -> None:
+        """精密化の実行中は値も「精密化」のチェックも変えられないようにする(レビュー GUI #3)。"""
+        if self._read_only == bool(flag):
+            return
+        self._read_only = bool(flag)
+        self.refresh()
+
+    def is_read_only(self) -> bool:
+        return self._read_only
+
     def set_params(self, params: ParameterSet) -> None:
         self.beginResetModel()
         self._params = params
@@ -89,7 +100,7 @@ class ParameterModel(QAbstractTableModel):
     def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
         f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         p = self._rows[index.row()]
-        editable = p.tie is None and not p.locked
+        editable = p.tie is None and not p.locked and not self._read_only
         if index.column() == COL_VARY and editable:
             f |= Qt.ItemFlag.ItemIsUserCheckable
         if index.column() == COL_VALUE and editable:
@@ -150,6 +161,8 @@ class ParameterModel(QAbstractTableModel):
         value: Any,
         role: int = Qt.ItemDataRole.EditRole,
     ) -> bool:
+        if self._read_only:
+            return False
         p = self._rows[index.row()]
         col = index.column()
         if col == COL_VARY and role == Qt.ItemDataRole.CheckStateRole:

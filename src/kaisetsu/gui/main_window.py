@@ -11,6 +11,7 @@ import numpy as np
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QCheckBox,
     QDockWidget,
     QFileDialog,
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
 from kaisetsu import __version__
 from kaisetsu.crystal.cif import read_structure, write_structure
 from kaisetsu.gui.background_dialog import BackgroundDialog
+from kaisetsu.gui.dialog_utils import DATA_FILTER
 from kaisetsu.gui.dialogs import InstrumentDialog, PhaseNameDialog, RecipeDialog
 from kaisetsu.gui.flow_layout import FlowLayout
 from kaisetsu.gui.help_viewer import HelpWindow
@@ -58,8 +60,8 @@ from kaisetsu.gui.structure_view import StructureView
 from kaisetsu.gui.update_dialog import SETTING_CHECK_ON_START, UpdateChecker, check_on_start
 from kaisetsu.gui.worker import RefineThread, RefineWorker
 from kaisetsu.io.export import write_pattern_csv, write_pdf_csv, write_reflections_csv
-from kaisetsu.io.project import load_project, save_project
-from kaisetsu.io.readers import read_powder_data
+from kaisetsu.io.project import load_project_with_notes, save_project
+from kaisetsu.io.readers import read_powder_data, too_few_points_message
 from kaisetsu.pattern.instrument import CWInstrument, SampleGeometry
 from kaisetsu.pattern.tof import TOFInstrument
 from kaisetsu.pdf.data import PDFData, read_pdf_data
@@ -69,10 +71,6 @@ from kaisetsu.userdocs import GUIDE_URL, user_guide_dir
 
 log = logging.getLogger(__name__)
 
-DATA_FILTER = (
-    "回折データ (*.xy *.xye *.chi *.dat *.txt *.csv *.asc *.ras *.rasx *.xrdml "
-    "*.gsa *.gsas *.fxye *.raw *.xra *.cwn *.cif);;すべて (*)"
-)
 PDF_FILTER = "PDF G(r) (*.gr *.dat *.txt *.csv);;すべて (*)"
 CIF_FILTER = "CIF (*.cif);;すべて (*)"
 PROJECT_FILTER = "kaisetsu プロジェクト (*.kaisetsu.json *.json);;すべて (*)"
@@ -88,7 +86,8 @@ PARAM_DOCK_WIDTH = 440
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"kaisetsu {__version__} — 粉末回折 Rietveld / PDF / MEM 解析")
+        # [*] は未保存の変更があるとき * になる(setWindowModified)
+        self.setWindowTitle(f"kaisetsu {__version__} — 粉末回折 Rietveld / PDF / MEM 解析[*]")
         # ノート PC(1366×768、拡大率 150% なら論理 911×512)でも画面からはみ出さない大きさにする
         avail = self.screen().availableGeometry()
         self.resize(min(1400, avail.width() - 40), min(850, avail.height() - 60))
@@ -102,6 +101,14 @@ class MainWindow(QMainWindow):
         self._worker: RefineWorker | None = None
         # 直前の精密化(または初期値に戻す操作)の前の値。Ctrl+Z で戻す
         self._undo_values: dict[str, float] | None = None
+        #: 保存していない変更があるか(閉じるとき・別のプロジェクトを開くときに確認する)
+        self._dirty = False
+        #: 精密化の実行中(モデルを変える操作は全部止める)
+        self._running = False
+        #: 実行中に閉じる操作がされた(中止を待ってから閉じる)
+        self._close_requested = False
+        #: ワーカーが最後に送ってきた曲線(実行中のツリー操作で再計算せずに表示する)
+        self._last_curves: dict[str, Any] | None = None
         self.settings = app_settings()
         self._help_window: HelpWindow | None = None
 
@@ -109,6 +116,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._restore_layout()
         self._refresh_all()
+        self.param_model.dataChanged.connect(self._on_param_edited)
 
         # 新しい版の確認(ヘルプ → 更新を確認、起動時は 1 日 1 回)
         self.updater = UpdateChecker(
@@ -276,7 +284,7 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         m_file = mb.addMenu(tr("ファイル(&F)"))
-        self._add_action(
+        self.act_new = self._add_action(
             m_file, tr("新規プロジェクト(&N)"), self.new_project, QKeySequence.StandardKey.New
         )
         self.act_open = self._add_action(
@@ -285,16 +293,22 @@ class MainWindow(QMainWindow):
         self.act_save = self._add_action(
             m_file, tr("プロジェクトを保存(&S)"), self.save_project, QKeySequence.StandardKey.Save
         )
-        self._add_action(
+        self.act_save_as = self._add_action(
             m_file,
             tr("名前を付けて保存(&A)…"),
             self.save_project_as,
             QKeySequence.StandardKey.SaveAs,
         )
         m_file.addSeparator()
-        self._add_action(m_file, tr("計算パターンを CSV に書き出す…"), self.export_pattern_csv)
-        self._add_action(m_file, tr("反射リストを CSV に書き出す…"), self.export_reflections_csv)
-        self._add_action(m_file, tr("相を CIF に書き出す(VESTA で開けます)…"), self.export_cif)
+        self.act_export_pattern = self._add_action(
+            m_file, tr("計算パターンを CSV に書き出す…"), self.export_pattern_csv
+        )
+        self.act_export_reflections = self._add_action(
+            m_file, tr("反射リストを CSV に書き出す…"), self.export_reflections_csv
+        )
+        self.act_export_cif = self._add_action(
+            m_file, tr("相を CIF に書き出す(VESTA で開けます)…"), self.export_cif
+        )
         self._add_action(m_file, tr("図を画像で保存 (PNG/SVG)…"), self.export_plot_image)
         m_file.addSeparator()
         self._add_action(m_file, tr("終了(&X)"), self.close, QKeySequence.StandardKey.Quit)
@@ -359,7 +373,7 @@ class MainWindow(QMainWindow):
         self.act_stop = self._add_action(m_ref, tr("中止(&T)"), self.stop_refine, "Esc")
         self.act_stop.setEnabled(False)
         m_ref.addSeparator()
-        self._add_action(m_ref, tr("すべて固定(&F)"), self.fix_all)
+        self.act_fix_all = self._add_action(m_ref, tr("すべて固定(&F)"), self.fix_all)
         self.act_undo = self._add_action(
             m_ref, tr("直前の精密化の前に戻す(&Z)"), self.undo_refine, "Ctrl+Z"
         )
@@ -521,6 +535,11 @@ class MainWindow(QMainWindow):
         self.param_model.set_params(self.project.params)
 
     def _refresh_plot(self) -> None:
+        if self._running:
+            # 実行中はワーカーと同じ Project を計算しない(配列の長さが変わって落ちる、numba の
+            # 並行アクセスでプロセスが終了する)。ワーカーが送ってきた曲線だけを表示する
+            self._show_live_curves()
+            return
         if self.current_view == "pdf" and self.project.pdf_datasets:
             self.plot_stack.setCurrentWidget(self.pdf_plot)
             i = min(self.current_pdf, len(self.project.pdf_datasets) - 1)
@@ -574,7 +593,8 @@ class MainWindow(QMainWindow):
             self.structure_view.set_structure(None)
             return
         ph = self.project.phases[name]
-        ph.sync()
+        if not self._running:
+            ph.sync()
         self.structure_view.set_structure(ph.structure)
         self.structure_dock.setWindowTitle(f"構造: {name}")
 
@@ -584,6 +604,12 @@ class MainWindow(QMainWindow):
         self._refresh_params()
         self._refresh_plot()
         self._refresh_structure()
+        self._update_model_actions()
+
+    def _update_model_actions(self) -> None:
+        """モデルの有無で決まるアクションの有効・無効(実行中は全部無効のまま)。"""
+        if self._running:
+            return
         has_model = bool(
             self.project.phases and (self.project.histograms or self.project.pdf_datasets)
         )
@@ -591,6 +617,87 @@ class MainWindow(QMainWindow):
         self.act_recipe.setEnabled(bool(self.project.phases and self.project.histograms))
         self.act_pdf_recipe.setEnabled(bool(self.project.phases and self.project.pdf_datasets))
         self.act_mem.setEnabled(bool(self.project.phases and self.project.histograms))
+        self.act_undo.setEnabled(self._undo_values is not None)
+
+    def _show_live_curves(self) -> None:
+        """精密化の実行中: 観測データと、ワーカーが最後に送ってきた計算曲線だけを描く。"""
+        if self.current_view == "pdf" and self.project.pdf_datasets:
+            self.plot_stack.setCurrentWidget(self.pdf_plot)
+            i = min(self.current_pdf, len(self.project.pdf_datasets) - 1)
+            g = self.project.pdf_datasets[i]
+            self.pdf_plot.set_data(g.data, (g.r_min, g.r_max))
+            pdfs = (self._last_curves or {}).get("pdf", [])
+            if 0 <= i < len(pdfs):
+                self.pdf_plot.update_curves(*pdfs[i])
+            return
+        self.plot_stack.setCurrentWidget(self.plot)
+        if not self.project.histograms:
+            self.plot.set_data(None)
+            return
+        i = min(self.current_hist, len(self.project.histograms) - 1)
+        h = self.project.histograms[i]
+        if isinstance(h.instrument, TOFInstrument):
+            self.plot.set_tof(h.instrument.difc)
+            self.plot.set_data(h.data, None)
+        else:
+            self.plot.set_tof(None)
+            self.plot.set_data(h.data, h.instrument.radiation.wavelength)
+        self.plot.set_excluded(h.excluded)
+        self.plot.set_fit_range(h.x_min, h.x_max)
+        hists = (self._last_curves or {}).get("hist", [])
+        if 0 <= i < len(hists):
+            self.plot.update_curves(*hists[i])
+
+    # ------------------------------------------------------------------
+    # 変更の有無(dirty)と実行中のガード
+    # ------------------------------------------------------------------
+    def is_dirty(self) -> bool:
+        """保存していない変更があるか。"""
+        return self._dirty
+
+    def mark_dirty(self) -> None:
+        """モデルを変えた(精密化、編集、データや相の追加、設定の変更)。窓のタイトルに * が付く。"""
+        self._set_dirty(True)
+
+    def _set_dirty(self, flag: bool) -> None:
+        self._dirty = bool(flag)
+        self.setWindowModified(self._dirty)
+
+    def _on_param_edited(self, *_args: object) -> None:
+        """表で値か「精密化」のチェックが変えられた。"""
+        self.mark_dirty()
+
+    def is_running(self) -> bool:
+        """精密化(ワーカー)の実行中か。"""
+        return self._running
+
+    def _set_running(self, flag: bool) -> None:
+        """精密化の実行中は、モデルを変えるアクション・表の編集・除外領域の帯を全部止める。
+
+        実行中も保存・読込・装置設定・表の編集などが有効だったので、ワーカーと同じ Project を
+        UI 側から書き換えられ、精密化が失敗する・表とモデルの値が食い違う・numba の構成に
+        よってはプロセスが終了していた(レビュー 2026-10-17 GUI #3)。
+        """
+        self._running = bool(flag)
+        blocked = (
+            self.act_new, self.act_open, self.act_save, self.act_save_as,
+            self.act_export_pattern, self.act_export_reflections, self.act_export_cif,
+            self.act_load, self.act_add_phase, self.act_instrument, self.act_background,
+            self.act_range, self.act_phase, self.act_lattice, self.act_load_pdf,
+            self.act_transform, self.act_wizard, self.act_sequence,
+            self.act_calc, self.act_refine, self.act_recipe, self.act_pdf_recipe,
+            self.act_fix_all, self.act_undo, self.act_reset, self.act_residual,
+            self.act_width_penalty, self.act_mem,
+            self.btn_vary_shown, self.btn_fix_shown, self.btn_reset_shown,
+        )  # fmt: skip
+        for a in blocked:
+            a.setEnabled(not self._running)
+        self.act_stop.setEnabled(self._running)
+        self.param_model.set_read_only(self._running)
+        self.plot.set_exclude_editable(not self._running)
+        if not self._running:
+            self._last_curves = None
+            self._update_model_actions()
 
     def _on_tree_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -622,28 +729,51 @@ class MainWindow(QMainWindow):
         self.param_filter.set_scope(scope)
 
     def _set_vary_shown(self, flag: bool) -> None:
+        if self._running:
+            return
         for r in range(self.param_filter.rowCount()):
             src = self.param_filter.mapToSource(self.param_filter.index(r, 0))
             p = self.param_model.parameter(src.row())
             if p.tie is None and not p.locked:
                 p.vary = flag
         self.param_model.refresh()
+        self.mark_dirty()
 
     # ------------------------------------------------------------------
     # ファイル
     # ------------------------------------------------------------------
-    def new_project(self) -> None:
-        if not self._confirm_discard():
-            return
-        self.project = Project("新規プロジェクト")
-        self.project_path = None
+    def _install_project(
+        self, project: Project, *, path: Path | None, dirty: bool, clear_log: bool
+    ) -> None:
+        """プロジェクトを差し替える唯一の経路(新規・開く・別のところで作った結果)。
+
+        Ctrl+Z の記録を必ず消す。以前は「開く」と「新規」が消していなかったので、別の
+        プロジェクトを開いた後の Ctrl+Z が前のプロジェクトの値(h0:inst:* など同じ名前)を
+        書き込んでいた(レビュー 2026-10-17 GUI #7)。
+        """
+        self.project = project
+        self.project_path = path
         self.current_hist = 0
         self.current_pdf = 0
-        self.current_view = "hist"
+        self.current_view = "hist" if project.histograms or not project.pdf_datasets else "pdf"
         self.current_phase = None
-        self.log_view.clear()
+        self._undo_values = None
+        self.act_undo.setEnabled(False)
+        self._last_curves = None
+        if clear_log:
+            self.log_view.clear()
         self.history_plot.clear()
+        self._set_dirty(dirty)
         self._refresh_all()
+
+    def new_project(self, *, confirm: bool = True) -> bool:
+        """新規プロジェクト。保存していない変更があれば確認する。やめたら False。"""
+        if self._running:
+            return False
+        if confirm and not self._confirm_discard():
+            return False
+        self._install_project(Project("新規プロジェクト"), path=None, dirty=False, clear_log=True)
+        return True
 
     def open_project(self) -> None:
         if not self._confirm_discard():
@@ -654,43 +784,61 @@ class MainWindow(QMainWindow):
         if path:
             self.open_project_file(path)
 
-    def open_project_file(self, path: str) -> None:
+    def open_project_file(self, path: str) -> bool:
+        if self._running:
+            return False
         try:
-            self.project = load_project(path)
+            project, notes = load_project_with_notes(path)
         except Exception as exc:
             QMessageBox.critical(
                 self, "読み込みエラー", f"プロジェクトを読み込めませんでした:\n{exc}"
             )
-            return
-        self.project_path = Path(path)
+            return False
         self._remember_dir(path)
-        self.current_hist = 0
-        self.current_pdf = 0
-        self.current_view = "hist" if self.project.histograms else "pdf"
-        self.current_phase = None
+        self._install_project(project, path=Path(path), dirty=False, clear_log=False)
         self.log(f"プロジェクトを開きました: {path}")
         for line in self.project.log[-20:]:
             self.log("  " + line)
-        self._refresh_all()
+        if notes:
+            QMessageBox.information(self, "古い版で保存されたプロジェクト", "\n\n".join(notes))
+        return True
 
-    def save_project(self) -> None:
+    def save_project(self) -> bool:
+        """保存する。失敗したらダイアログで知らせ、未保存のまま(False)。"""
         if self.project_path is None:
-            self.save_project_as()
-            return
-        save_project(self.project, self.project_path)
+            return self.save_project_as()
+        try:
+            save_project(self.project, self.project_path)
+        except Exception as exc:
+            # 書けない場所(読み取り専用、OneDrive のロック、ディスクいっぱい)。以前はスロットの
+            # 中で例外が出るだけで、配布物では何も見えなかった(レビュー 2026-10-17 GUI #2)
+            log.exception("プロジェクトを保存できませんでした: %s", self.project_path)
+            QMessageBox.critical(
+                self,
+                "保存エラー",
+                f"プロジェクトを保存できませんでした:\n{self.project_path}\n\n{exc}\n\n"
+                "別の場所に「名前を付けて保存」してください。",
+            )
+            return False
+        self._set_dirty(False)
         self.log(f"保存しました: {self.project_path}")
+        return True
 
-    def save_project_as(self) -> None:
+    def save_project_as(self) -> bool:
         path, _ = QFileDialog.getSaveFileName(
             self, "名前を付けて保存", self._last_dir(), PROJECT_FILTER
         )
         if not path:
-            return
+            return False
         if not path.endswith(".json"):
             path += ".kaisetsu.json"
+        previous = self.project_path
         self.project_path = Path(path)
         self._remember_dir(path)
-        self.save_project()
+        if not self.save_project():
+            self.project_path = previous
+            return False
+        return True
 
     def export_pattern_csv(self) -> None:
         if self.current_view == "pdf" and self.project.pdf_datasets:
@@ -774,13 +922,15 @@ class MainWindow(QMainWindow):
         n_background: int = 8,
         bank: int | None = None,
         all_banks: bool = False,
-    ) -> None:
-        """回折データを読み込んでヒストグラムを追加する。
+    ) -> bool:
+        """回折データを読み込んでヒストグラムを追加する。追加できたら True。
 
         複数 BANK の GSAS ファイルは、bank で番号を指定するか、all_banks=True でバンクごとに
         ヒストグラムを追加する(装置・試料は複製する。TOF ならバンクごとに装置ダイアログを出す)。
         どちらも無く instrument も無いときは選択ダイアログを出す。
         """
+        if self._running:
+            return False
         if all_banks or (bank is None and instrument is None):
             from kaisetsu.io.readers import bank_count
 
@@ -801,7 +951,7 @@ class MainWindow(QMainWindow):
                         False,
                     )
                     if not ok:
-                        return
+                        return False
                     idx = items.index(item)
                     if idx < n_banks:
                         bank = idx + 1
@@ -810,15 +960,19 @@ class MainWindow(QMainWindow):
                 if all_banks:
                     from dataclasses import replace
 
+                    loaded = False
                     for k in range(1, n_banks + 1):
-                        self.load_data_file(
-                            path,
-                            replace(instrument) if instrument is not None else None,
-                            replace(sample) if sample is not None else None,
-                            n_background,
-                            bank=k,
+                        loaded = (
+                            self.load_data_file(
+                                path,
+                                replace(instrument) if instrument is not None else None,
+                                replace(sample) if sample is not None else None,
+                                n_background,
+                                bank=k,
+                            )
+                            or loaded
                         )
-                    return
+                    return loaded
         kwargs: dict[str, object] = {}
         if bank is not None:
             kwargs["bank"] = bank
@@ -826,7 +980,12 @@ class MainWindow(QMainWindow):
             data = read_powder_data(path, **kwargs)
         except Exception as exc:
             QMessageBox.critical(self, "読み込みエラー", f"データを読み込めませんでした:\n{exc}")
-            return
+            return False
+        few = too_few_points_message(data, Path(path).name)
+        if few:
+            # 形式を読み違えて 2〜10 点のゴミになっているのを、そのまま精密化させない
+            QMessageBox.critical(self, "読み込みエラー", few)
+            return False
         self._remember_dir(path)
         if instrument is None and data.metadata.get("xunit") == "tof_us":
             from kaisetsu.gui.tof_dialog import TOFInstrumentDialog
@@ -836,7 +995,7 @@ class MainWindow(QMainWindow):
             if bank is not None:
                 tdlg.setWindowTitle(f"TOF 装置パラメータ(バンク {bank})")
             if tdlg.exec() != TOFInstrumentDialog.DialogCode.Accepted:
-                return
+                return False
             instrument = tdlg.result_instrument()
             sample = tdlg.result_sample()
         if instrument is None:
@@ -849,7 +1008,7 @@ class MainWindow(QMainWindow):
                     f"λ1 = {data.metadata.get('wavelength')} Å"
                 )
             if dlg.exec() != InstrumentDialog.DialogCode.Accepted:
-                return
+                return False
             instrument, sample = dlg.result_instrument()
         h = self.project.add_histogram(data, instrument, sample, n_background=n_background)
         self.current_hist = len(self.project.histograms) - 1
@@ -863,7 +1022,9 @@ class MainWindow(QMainWindow):
             f"データを読み込みました: {path}{where} "
             f"({len(data)} 点, {data.x[0]:.3f}–{data.x[-1]:.3f}{unit})"
         )
+        self.mark_dirty()
         self._refresh_all()
+        return True
 
     def load_pdf_data(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -906,6 +1067,7 @@ class MainWindow(QMainWindow):
         )
         self.current_pdf = len(self.project.pdf_datasets) - 1
         self.current_view = "pdf"
+        self.mark_dirty()
         self._refresh_all()
 
     def transform_iq(self) -> None:
@@ -945,29 +1107,34 @@ class MainWindow(QMainWindow):
             return
         self.add_phase_file(path)
 
-    def add_phase_file(self, path: str, name: str | None = None) -> None:
+    def add_phase_file(self, path: str, name: str | None = None) -> bool:
+        """CIF から相を追加する。追加できたら True。"""
+        if self._running:
+            return False
         try:
             st = read_structure(path)
         except Exception as exc:
             QMessageBox.critical(self, "読み込みエラー", f"CIF を読み込めませんでした:\n{exc}")
-            return
+            return False
         self._remember_dir(path)
         if name is None:
             default = (st.name or Path(path).stem).replace(":", "_")
             dlg = PhaseNameDialog(default, self)
             if dlg.exec() != PhaseNameDialog.DialogCode.Accepted:
-                return
+                return False
             name = dlg.value() or default
         if name in self.project.phases:
             QMessageBox.warning(self, "重複", f"相 {name!r} はすでにあります")
-            return
+            return False
         self.project.add_phase(st, name=name)
         for h in self.project.histograms:
             h.contributions[name].scale = self._initial_scale(h)
         self.project.build_parameters()
         self.current_phase = name
         self.log(f"相を追加しました: {name} ({st.spacegroup.hm}, {st.lattice})")
+        self.mark_dirty()
         self._refresh_all()
+        return True
 
     def _initial_scale(self, h: HistogramEntry) -> float:
         """観測強度の大きさからスケール因子の粗い初期値を作る。"""
@@ -1023,6 +1190,7 @@ class MainWindow(QMainWindow):
             + ("(観測から推定し直し)" if estimate else "(係数は引き継ぎ)")
             + (f"、ハンプ {n_humps} 個" if n_humps else "")
         )
+        self.mark_dirty()
         self._refresh_all()
 
     def edit_instrument(self) -> None:
@@ -1040,16 +1208,22 @@ class MainWindow(QMainWindow):
             h.sample = tdlg.result_sample()
             self.project.build_parameters()
             self.log("TOF 装置パラメータを更新しました")
+            self.mark_dirty()
             self._refresh_all()
             return
         dlg = InstrumentDialog(h.instrument, h.sample, self)
         if dlg.exec() != InstrumentDialog.DialogCode.Accepted:
             return
         inst, smp = dlg.result_instrument()
+        if inst == h.instrument and smp == h.sample:
+            # 開いて OK を押しただけ: 書き戻すと精密化した値が表示桁に丸まり esd も消える
+            self.log("装置パラメータは変更なし")
+            return
         h.instrument = inst
         h.sample = smp
         self.project.build_parameters()
         self.log("装置パラメータを更新しました")
+        self.mark_dirty()
         self._refresh_all()
 
     def edit_range(self) -> None:
@@ -1073,10 +1247,13 @@ class MainWindow(QMainWindow):
             f"h{i}: 範囲 {x_min:g}〜{x_max:g}、除外領域 "
             + ("、".join(f"{a:g}〜{b:g}" for a, b in h.excluded) or "なし")
         )
+        self.mark_dirty()
         self._refresh_all()
 
     def _toggle_width_penalty(self, _checked: bool = False) -> None:
         flag = self.act_width_penalty.isChecked()
+        if flag == bool(self.project.penalize_negative_widths):
+            return
         self.project.penalize_negative_widths = flag
         self.log(
             "ピーク幅が負にならない拘束を"
@@ -1084,6 +1261,7 @@ class MainWindow(QMainWindow):
             + "にしました"
             + ("(次の精密化から)" if flag else "")
         )
+        self.mark_dirty()
 
     def _range_keeps_points(
         self,
@@ -1121,22 +1299,24 @@ class MainWindow(QMainWindow):
     def _on_exclude_requested(self, lo: float, hi: float) -> None:
         """図の上で Shift + ドラッグされた範囲を除外領域に加える。"""
         cur = self._current_histogram()
-        if cur is None:
+        if cur is None or self._running:
             return
         i, h = cur
         if not self._range_keeps_points(h, h.x_min, h.x_max, [*h.excluded, (lo, hi)]):
             return
         h.set_excluded([*h.excluded, (lo, hi)])
         self.log(f"h{i}: {lo:.3f}〜{hi:.3f} を除外しました(帯の右クリックで解除)")
+        self.mark_dirty()
         self._refresh_plot()
 
     def _on_excluded_changed(self, ranges: list) -> None:  # type: ignore[type-arg]
         """帯の移動・削除を反映する。"""
         cur = self._current_histogram()
-        if cur is None:
+        if cur is None or self._running:
             return
         _, h = cur
         h.set_excluded([(float(a), float(b)) for a, b in ranges])
+        self.mark_dirty()
         self._refresh_plot()
 
     def edit_phase(self) -> None:
@@ -1156,6 +1336,7 @@ class MainWindow(QMainWindow):
             return
         for line in dlg.apply():
             self.log(line)
+        self.mark_dirty()
         self._refresh_all()
 
     # ------------------------------------------------------------------
@@ -1168,14 +1349,17 @@ class MainWindow(QMainWindow):
             self.log(f"計算: {rf}")
 
     def fix_all(self) -> None:
+        if self._running:
+            return
         self.project.fix_all()
         self.param_model.refresh()
+        self.mark_dirty()
 
     def undo_refine(self) -> None:
         """直前の精密化(または初期値に戻す操作)の前の値に戻す。もう一度でやり直し。"""
         if self._undo_values is None:
             return
-        if self._thread is not None and self._thread.isRunning():
+        if self._running:
             QMessageBox.information(self, "戻す", "精密化の実行中は戻せません(Esc で中止)")
             return
         current = self.project.snapshot()
@@ -1185,13 +1369,14 @@ class MainWindow(QMainWindow):
             f"直前の精密化の前の値に戻しました({len(names)} 個)。"
             "もう一度「直前の精密化の前に戻す」を選ぶと、戻す前の値に戻ります"
         )
+        self.mark_dirty()
         self._after_restore()
 
     def reset_to_initial(self, confirm: bool = True) -> None:
         """全パラメータを初期値(読み込んだとき・設定し直したときの値)に戻す。"""
         if not any(True for _ in self.project.params):
             return
-        if self._thread is not None and self._thread.isRunning():
+        if self._running:
             QMessageBox.information(self, "戻す", "精密化の実行中は戻せません(Esc で中止)")
             return
         if confirm:
@@ -1209,11 +1394,12 @@ class MainWindow(QMainWindow):
         self.log(
             f"すべてのパラメータを初期値に戻しました({len(names)} 個)。Ctrl+Z で戻す前の値に戻せます"
         )
+        self.mark_dirty()
         self._after_restore()
 
     def _reset_shown(self) -> None:
         """表に表示中(絞り込み後)のパラメータだけ初期値に戻す。"""
-        if self._thread is not None and self._thread.isRunning():
+        if self._running:
             return
         names = []
         for r in range(self.param_filter.rowCount()):
@@ -1227,6 +1413,7 @@ class MainWindow(QMainWindow):
         self.log(
             f"表示中の {len(done)} 個のパラメータを初期値に戻しました(Ctrl+Z で戻す前に戻せます)"
         )
+        self.mark_dirty()
         self._after_restore()
 
     def _after_restore(self) -> None:
@@ -1272,7 +1459,7 @@ class MainWindow(QMainWindow):
         self._start_worker(RefineWorker(self.project, recipe, companion=companion))
 
     def _start_worker(self, worker: RefineWorker) -> None:
-        if self._thread is not None and self._thread.isRunning():
+        if self._running or (self._thread is not None and self._thread.isRunning()):
             QMessageBox.information(self, "精密化", "すでに精密化が実行中です")
             return
         self._worker = worker
@@ -1282,10 +1469,7 @@ class MainWindow(QMainWindow):
         worker.iteration.connect(self._on_iteration)
         worker.step_started.connect(self.history_plot.mark_step)
         worker.finished.connect(self._on_refine_finished)
-        self.act_refine.setEnabled(False)
-        self.act_recipe.setEnabled(False)
-        self.act_pdf_recipe.setEnabled(False)
-        self.act_stop.setEnabled(True)
+        self._set_running(True)
         self.progress_label.setText("精密化中…")
         self.progress_bar.show()
         self.history_plot.clear()
@@ -1302,11 +1486,13 @@ class MainWindow(QMainWindow):
         self._thread.start()
 
     def _on_iteration(self, iteration: int, chi2: float, curves: object) -> None:
-        self.progress_label.setText(f"精密化中: 反復 {iteration}  χ² = {chi2:.3f}")
+        if not self._close_requested:
+            self.progress_label.setText(f"精密化中: 反復 {iteration}  χ² = {chi2:.3f}")
         self.history_plot.append(chi2)
         try:
             if not isinstance(curves, dict):
                 return
+            self._last_curves = curves
             if self.current_view == "pdf":
                 i = min(self.current_pdf, len(self.project.pdf_datasets) - 1)
                 pdfs = curves.get("pdf", [])
@@ -1329,13 +1515,16 @@ class MainWindow(QMainWindow):
 
     def _on_refine_finished(self, ok: bool, message: str) -> None:
         self.log(message)
-        self.act_undo.setEnabled(self._undo_values is not None)
-        self.act_refine.setEnabled(True)
-        self.act_recipe.setEnabled(bool(self.project.histograms))
-        self.act_pdf_recipe.setEnabled(bool(self.project.pdf_datasets))
-        self.act_stop.setEnabled(False)
+        self._set_running(False)
         self.progress_bar.hide()
-        self.progress_label.setText(message.split("\n")[0])
+        # 2 行目(評価回数の上限で止まった注意など)もステータス行に見えるようにする
+        self.progress_label.setText(_status_line(message))
+        self.progress_label.setToolTip(message)
+        self.mark_dirty()
+        if self._close_requested:
+            # 閉じる操作を中止で待っていた: 表示を更新したら閉じ直す(未保存の確認はそこで)
+            self._close_requested = False
+            QTimer.singleShot(0, self.close)
         self.param_model.refresh()
         self._refresh_plot()
         self._refresh_structure()
@@ -1380,10 +1569,15 @@ class MainWindow(QMainWindow):
                 self, "MEM", "先に粉末データと相を読み込み、Rietveld 精密化を行ってください"
             )
             return
+        if self._running:
+            QMessageBox.information(self, "MEM", "精密化の実行中は使えません(Esc で中止)")
+            return
         from kaisetsu.gui.mem_dialog import MEMDialog
 
         dlg = MEMDialog(self.project, self)
         dlg.exec()
+        if dlg.result is not None and dlg.mpf.value() > 0:
+            self.mark_dirty()  # MPF はパターンフィッティングでパラメータを動かす
         self._refresh_all()
 
     def run_sequence(self) -> None:
@@ -1392,16 +1586,28 @@ class MainWindow(QMainWindow):
                 self, tr("連続データを順に精密化"), "先に 1 つ目のデータで精密化しておいてください"
             )
             return
+        if self._running:
+            QMessageBox.information(
+                self, tr("連続データを順に精密化"), "精密化の実行中は使えません(Esc で中止)"
+            )
+            return
         from kaisetsu.gui.sequence_dialog import SequenceDialog
 
-        dlg = SequenceDialog(self.project, self)
+        # メインのプロジェクトは渡さない(ダイアログがコピーして走らせる)。「結果をメインに反映」で
+        # 最後のデータの状態を受け取る
+        dlg = SequenceDialog(self.project, self, apply=self._adopt_sequence_result)
         dlg.exec()
         self._refresh_all()
+
+    def _adopt_sequence_result(self, project: Project) -> None:
+        self.adopt_project(project, source="逐次精密化の最後のデータ")
 
     # ------------------------------------------------------------------
     # ウィザード
     # ------------------------------------------------------------------
     def run_wizard(self) -> None:
+        if self._running:
+            return
         from kaisetsu.gui.wizard import StartWizard
 
         wiz = StartWizard(self)
@@ -1469,36 +1675,56 @@ class MainWindow(QMainWindow):
         dlg = LatticeDialog(self.project, self, main=self)
         dlg.exec()
 
-    def adopt_project(self, project: Project, *, source: str = "") -> None:
-        """別のところで作ったプロジェクト(Le Bail の結果など)をメインウィンドウで開く。"""
-        if not self._confirm_discard():
-            return
-        self.project = project
-        self.project_path = None
-        self.current_hist = 0
-        self.current_pdf = 0
-        self.current_view = "hist" if project.histograms else "pdf"
-        self.current_phase = None
-        self._undo_values = None
-        self.act_undo.setEnabled(False)
-        self.log_view.clear()
-        self.history_plot.clear()
+    def adopt_project(self, project: Project, *, source: str = "") -> bool:
+        """別のところで作ったプロジェクト(Le Bail や逐次精密化の結果)をメインウィンドウで開く。
+
+        ファイルに保存されていない内容なので未保存の状態(タイトルに *)で始める。
+        """
+        if self._running or not self._confirm_discard():
+            return False
+        self._install_project(project, path=None, dirty=True, clear_log=True)
         self.log(f"プロジェクトを開きました: {source or project.name}")
         for line in project.log[-20:]:
             self.log("  " + line)
-        self._refresh_all()
+        return True
 
     def _confirm_discard(self) -> bool:
-        if (
-            not self.project.histograms
-            and not self.project.phases
-            and not self.project.pdf_datasets
-        ):
+        """今のプロジェクトを閉じてよいか。未保存の変更があれば 保存する / 保存しない / キャンセル。
+
+        保存していなければ聞かない(保存の直後、開いた直後、空のプロジェクト)。
+        「保存する」で保存できなかった(キャンセルした)ときは閉じない。
+        """
+        if not self._dirty:
             return True
-        r = QMessageBox.question(
-            self, "確認", "現在のプロジェクトを閉じますか?(保存していない変更は失われます)"
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("確認"))
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("プロジェクトに保存していない変更があります。")
+        box.setInformativeText(
+            "保存しますか?(保存しないと精密化の結果や読み込んだデータは失われます)"
         )
-        return r == QMessageBox.StandardButton.Yes
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        box.button(QMessageBox.StandardButton.Save).setText(tr("保存する"))
+        box.button(QMessageBox.StandardButton.Discard).setText(tr("保存しない"))
+        box.button(QMessageBox.StandardButton.Cancel).setText(tr("キャンセル"))
+        answer = self._ask(box)
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_project()
+        return answer == QMessageBox.StandardButton.Discard
+
+    def _ask(self, box: QMessageBox) -> QMessageBox.StandardButton:
+        """QMessageBox を出して押された標準ボタンを返す(テストで差し替える)。Esc はキャンセル。"""
+        box.exec()
+        # Esc で閉じると clickedButton() が None のことがある(型スタブは non-Optional)
+        clicked: QAbstractButton | None = box.clickedButton()
+        if clicked is None:
+            return QMessageBox.StandardButton.Cancel
+        return box.standardButton(clicked)
 
     def _last_dir(self) -> str:
         return last_dir(self.settings)
@@ -1521,13 +1747,41 @@ class MainWindow(QMainWindow):
         self.settings.setValue(SETTING_STATE, self.saveState())
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._save_layout()
-        if self._thread is not None and self._thread.isRunning():
-            if self._worker is not None:
+        """×・終了・Ctrl+Q。
+
+        精密化の実行中なら中止を要求して「中止を待っています」と出し、終わってから閉じ直す
+        (走ったままスレッドを壊すと異常終了する)。そのあと未保存の変更があれば
+        保存する / 保存しない / キャンセル を聞く(レビュー 2026-10-17 GUI #1, #13)。
+        """
+        if self._running:
+            if self._worker is not None and not self._close_requested:
                 self._worker.cancel()
-            self._thread.wait(5000)
-        self.updater.wait(3000)
+                self.log("閉じる前に精密化を中止します(現在の反復が終わると止まります)")
+            self._close_requested = True
+            self.progress_label.setText("中止を待っています…")
+            event.ignore()
+            return
+        if not self._confirm_discard():
+            event.ignore()
+            return
+        self._save_layout()
+        # 更新確認のスレッドは待たずに切り離す(結果は捨てる。app.main の最後で終わるのを待つ)
+        self.updater.detach()
         event.accept()
+
+
+def _status_line(message: str) -> str:
+    """精密化の完了メッセージをステータス行の 1 行にする(2 行目の注意も見えるように)。"""
+    lines = [ln.strip() for ln in message.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    text = lines[0]
+    if len(lines) > 1:
+        note = lines[1]
+        if len(note) > 90:
+            note = note[:89] + "…"
+        text += "  —  " + note
+    return text
 
 
 def _guess_tof_instrument(meta: dict[str, object]) -> TOFInstrument:

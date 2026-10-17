@@ -1,14 +1,33 @@
-"""ダイアログ共通の小道具: 画面に収まらないダイアログをスクロールできるようにする。
+"""ダイアログ共通の小道具: ファイルダイアログのフィルタ、画面に収まらないダイアログのスクロール化。
 
 ノート PC(拡大率 125〜150% で使える高さが 700〜860 px)では、装置や相の設定ダイアログが
-画面からはみ出して OK が押せなくなる。ここの関数を各ダイアログの最後で呼ぶと、中身を
-QScrollArea に移し、OK/キャンセルのボタンだけを常に見える位置に残す。
+画面からはみ出して OK が押せなくなる。`fit_dialog_to_screen` を各ダイアログの最後で呼ぶと、
+中身を QScrollArea に移し、OK/キャンセルのボタンだけを常に見える位置に残す。
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+
+from kaisetsu.io.readers import SUPPORTED_EXTENSIONS
+
+
+def data_file_filter() -> str:
+    """回折データのファイルダイアログのフィルタ。
+
+    リーダーが対応する拡張子の一覧(`SUPPORTED_EXTENSIONS`)から作り、メインウィンドウ・
+    ウィザード・逐次精密化・Le Bail 一括処理で共用する。ダイアログごとに手で書いていたときは
+    ウィザードに .ras / .rasx / .xrdml / .csv が無く、Rigaku や PANalytical のファイルを持った
+    初心者が自分のファイルを見つけられなかった(レビュー 2026-10-17 GUI #8)。
+    pdCIF(粉末データ入りの .cif)も読めるので足す。
+    """
+    exts = [".histogramIgor" if e == ".histogramigor" else e for e in SUPPORTED_EXTENSIONS]
+    patterns = " ".join(f"*{e}" for e in [*exts, ".cif"])
+    return f"回折データ ({patterns});;すべて (*)"
+
+
+DATA_FILTER = data_file_filter()
 
 
 def available_height(widget: QWidget) -> int:

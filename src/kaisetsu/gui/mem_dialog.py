@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSlider,
@@ -34,6 +35,10 @@ from kaisetsu.mem.core import MEMInput, MEMResult, run_mem
 from kaisetsu.mem.io import density_slice, write_ccp4, write_grd, write_xplor
 from kaisetsu.mem.mpf import observed_structure_factors, run_mpf
 from kaisetsu.refine.project import Project
+
+
+class _MEMCancelled(Exception):
+    pass
 
 
 class _MEMWorker(QObject):
@@ -53,6 +58,20 @@ class _MEMWorker(QObject):
         self.mpf_cycles = mpf_cycles
         self.two_channel = two_channel
         self.group_overlaps = group_overlaps
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel
+
+    def _emit(self, message: str) -> None:
+        """途中経過を出す。中止が要求されていればここで止める(外側反復・MPF サイクルの区切り)。"""
+        self.progress.emit(message)
+        if self._cancel:
+            raise _MEMCancelled()
 
     def run(self) -> None:
         try:
@@ -60,7 +79,7 @@ class _MEMWorker(QObject):
             if self.mpf_cycles > 0:
                 res = run_mpf(
                     proj, self.hist, self.phase, grid=self.grid, n_cycles=self.mpf_cycles,
-                    progress=self.progress.emit, group_overlaps=self.group_overlaps,
+                    progress=self._emit, group_overlaps=self.group_overlaps,
                 )  # fmt: skip
                 mem = res.final
                 self.finished.emit(True, f"MPF 完了: Rwp {100 * res.rwp_history[-1]:.3f}%", mem)
@@ -88,7 +107,7 @@ class _MEMWorker(QObject):
                 )  # fmt: skip
                 mem = run_mem(
                     inp,
-                    progress=lambda i, lam, c: self.progress.emit(
+                    progress=lambda i, lam, c: self._emit(
                         f"  外側反復 {i}: λ = {lam:.3g}  C = {c:.3f}"
                     ),
                 )
@@ -98,9 +117,11 @@ class _MEMWorker(QObject):
                 mem = mem_from_project(
                     proj, self.hist, self.phase, self.grid, two_channel=self.two_channel,
                     group_overlaps=self.group_overlaps,
-                    progress=lambda i, lam, c: self.progress.emit(f"  外側反復 {i}: λ = {lam:.3g}  C = {c:.3f}"),
+                    progress=lambda i, lam, c: self._emit(f"  外側反復 {i}: λ = {lam:.3g}  C = {c:.3f}"),
                 )  # fmt: skip
             self.finished.emit(True, mem.message, mem)
+        except _MEMCancelled:
+            self.finished.emit(False, "中止しました", None)
         except Exception as exc:
             self.finished.emit(False, f"エラー: {exc}\n{traceback.format_exc(limit=3)}", None)
 
@@ -159,6 +180,7 @@ class MEMDialog(QDialog):
         self.result: MEMResult | None = None
         self._thread: QThread | None = None
         self._worker: _MEMWorker | None = None
+        self._close_when_done = False
         self.setWindowTitle("MEM 電子密度 / 核密度")
         self.resize(1000, 700)
         root = QHBoxLayout(self)
@@ -207,9 +229,16 @@ class MEMDialog(QDialog):
         self.mpf.setToolTip("0 なら MEM のみ。1 以上で MEM ↔ パターンフィッティングを往復(MPF)")
         cf.addRow("MPF のサイクル数", self.mpf)
         left.addWidget(cond)
+        run_row = QHBoxLayout()
         self.run_btn = QPushButton("MEM を実行")
         self.run_btn.clicked.connect(self.run)
-        left.addWidget(self.run_btn)
+        self.cancel_btn = QPushButton("中止")
+        self.cancel_btn.setToolTip("外側反復(MPF ならサイクル)の区切りで止めます")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self.cancel)
+        run_row.addWidget(self.run_btn, 1)
+        run_row.addWidget(self.cancel_btn)
+        left.addLayout(run_row)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
@@ -255,8 +284,11 @@ class MEMDialog(QDialog):
             n += n % 2  # 偶数に
             sb.setValue(max(8, min(n, 512)))
 
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
+
     def run(self) -> None:
-        if self._thread is not None and self._thread.isRunning():
+        if self.is_running():
             return
         grid = tuple(int(sb.value()) for sb in self.grid)
         self._worker = _MEMWorker(
@@ -272,12 +304,25 @@ class MEMDialog(QDialog):
         self._worker.finished.connect(self._done)
         self._worker.finished.connect(self._thread.quit)
         self.run_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
         self.log.appendPlainText(f"MEM 開始: 格子 {grid}")
         self._thread.start()
 
+    def cancel(self) -> None:
+        """中止を要求する(次の外側反復の区切りで止まる)。"""
+        if self._worker is None or not self.is_running():
+            return
+        if not self._worker.cancelled:
+            self._worker.cancel()
+            self.log.appendPlainText("中止を要求しました(次の反復の区切りで止まります)")
+        self.cancel_btn.setEnabled(False)
+
     def _done(self, ok: bool, message: str, result: object) -> None:
         self.run_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
         self.log.appendPlainText(message)
+        if self._close_when_done:
+            QTimer.singleShot(0, self._finish_close)
         if not ok or not isinstance(result, MEMResult):
             return
         self.result = result
@@ -315,10 +360,33 @@ class MEMDialog(QDialog):
         remember_dir(path)
         self.log.appendPlainText(f"書き出しました: {Path(path).name}")
 
-    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if self._thread is not None and self._thread.isRunning():
+    def reject(self) -> None:
+        """閉じる・Esc・×。実行中なら中止を要求し、ワーカーが終わってから閉じる。
+
+        閉じるボタンは reject に繋がっていて closeEvent を通らないので、以前は実行中のワーカーを
+        残したままダイアログだけが隠れ、メインウィンドウ側の再計算と並行に走っていた
+        (レビュー 2026-10-17 GUI #4)。
+        """
+        if self.is_running():
+            if self._worker is not None and not self._worker.cancelled:
+                ans = QMessageBox.question(
+                    self, self.windowTitle(), "MEM の実行中です。中止して閉じますか?"
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    return
+                self.cancel()
+            self._close_when_done = True
+            self.log.appendPlainText("中止を待っています…")
+            return
+        super().reject()
+
+    def accept(self) -> None:
+        self.reject()
+
+    def _finish_close(self) -> None:
+        if self._thread is not None:
             self._thread.wait(10000)
-        event.accept()
+        super().reject()
 
 
 __all__ = ["DensityView", "MEMDialog"]

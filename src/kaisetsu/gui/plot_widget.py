@@ -111,12 +111,16 @@ class _PatternViewBox(pg.ViewBox):
         super().__init__(*args, **kwargs)
         self._drag_region: Any = None
         self._exclude_drag = False
+        #: 偽なら Shift + ドラッグを受け付けない(精密化の実行中)
+        self.exclude_enabled = True
 
     def mouseDragEvent(self, ev: Any, axis: int | None = None) -> None:
         # 押した瞬間の Shift で決め、ドラッグの最後まで保つ(途中で Shift を離しても除外になる)
         if ev.isStart():
-            self._exclude_drag = ev.button() == Qt.MouseButton.LeftButton and bool(
-                ev.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            self._exclude_drag = (
+                self.exclude_enabled
+                and ev.button() == Qt.MouseButton.LeftButton
+                and bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             )
         if not self._exclude_drag:
             super().mouseDragEvent(ev, axis)
@@ -157,11 +161,14 @@ class _ExcludeRegion(pg.LinearRegionItem):
         # (pyqtgraph は絶対 z 値の降順で配る)。半透明なので曲線の上に描いても見える
         self.setZValue(10)
         self.setToolTip("除外領域: ドラッグで移動、端をドラッグで幅を変更、右クリックで削除")
+        #: 偽なら右クリックで削除できない(精密化の実行中)
+        self.remove_enabled = True
 
     def mouseClickEvent(self, ev: Any) -> None:
         if ev.button() == Qt.MouseButton.RightButton:
             ev.accept()
-            self.sigRemoveRequested.emit(self)
+            if self.remove_enabled:
+                self.sigRemoveRequested.emit(self)
             return
         super().mouseClickEvent(ev)
 
@@ -183,6 +190,7 @@ class PatternPlot(QWidget):
         vb.sigExcludeRequested.connect(self.excludeRequested)
         self._regions: list[_ExcludeRegion] = []
         self._range_shades: list[Any] = []
+        self._exclude_editable = True
         layout.addWidget(self.plot)
         self.plot.setLabel("bottom", "2θ (deg)")
         self.plot.setLabel("left", "強度 (counts)")
@@ -373,10 +381,29 @@ class PatternPlot(QWidget):
         self._regions = []
         for lo, hi in ranges:
             item = _ExcludeRegion(float(lo), float(hi))
+            item.setMovable(self._exclude_editable)
+            item.remove_enabled = self._exclude_editable
             item.sigRegionChangeFinished.connect(self._on_region_changed)
             item.sigRemoveRequested.connect(self._on_region_removed)
             self.plot.addItem(item, ignoreBounds=True)
             self._regions.append(item)
+
+    def set_exclude_editable(self, flag: bool) -> None:
+        """除外領域の操作(Shift + ドラッグで追加、帯の移動・削除)を受け付けるか。
+
+        精密化の実行中に除外領域を変えるとワーカーの配列の長さが変わって落ちるので、
+        実行中は偽にする(レビュー 2026-10-17 GUI #3)。
+        """
+        self._exclude_editable = bool(flag)
+        vb = self.plot.getViewBox()
+        if isinstance(vb, _PatternViewBox):
+            vb.exclude_enabled = self._exclude_editable
+        for item in self._regions:
+            item.setMovable(self._exclude_editable)
+            item.remove_enabled = self._exclude_editable
+
+    def exclude_editable(self) -> bool:
+        return self._exclude_editable
 
     def excluded(self) -> list[tuple[float, float]]:
         """帯の現在位置から除外領域の一覧を返す。"""

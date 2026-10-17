@@ -23,6 +23,9 @@ SUPPORTED_EXTENSIONS = (
 
 #: これより点数が少ないデータは、形式を読み違えている可能性が高い(GUI は読み込みを拒む)
 MIN_POINTS = 50
+#: 点数の少なさを疑う形式。ヘッダで点数が決まる形式(GSAS の BANK 行、Bruker、Rigaku、
+#: PANalytical、pdCIF)は読み違えようがないので対象にしない
+_AMBIGUOUS_FORMATS = ("xy", "rietan", "fullprof")
 
 
 def bank_count(path: str | Path) -> int:
@@ -34,7 +37,14 @@ def bank_count(path: str | Path) -> int:
 
 
 def too_few_points_message(data: PowderData, name: str) -> str | None:
-    """点数が極端に少ない(MIN_POINTS 未満)ときの日本語の説明。問題なければ None。"""
+    """点数が極端に少ない(MIN_POINTS 未満)ときの日本語の説明。問題なければ None。
+
+    テキスト形式(xy / RIETAN / FullProf)だけを疑う。GSAS や装置メーカーの形式は
+    ヘッダで点数が決まるので、小さなファイルでもそのまま通す。
+    """
+    fmt = str(data.metadata.get("format", "xy") or "xy").lower()
+    if not fmt.startswith(_AMBIGUOUS_FORMATS):
+        return None
     if len(data) >= MIN_POINTS:
         return None
     return (
